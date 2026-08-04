@@ -1,0 +1,28 @@
+# --------------------------------------------------------------------------
+# This repo is PUBLIC (free GitHub Pages requires it). Everything not ignored
+# here is world-readable. Keep reference material and personal files out.
+# --------------------------------------------------------------------------
+
+# Copyrighted reference material — do not redistribute
+*.pdf
+
+# Stray images in the project root (unreferenced by the app)
+/*.jpg
+/*.jpeg
+/*.png
+/*.heic
+
+# macOS
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# Node (not used at runtime, but keep it out if you ever add tooling)
+node_modules/
+npm-debug.log*
