@@ -303,11 +303,21 @@ export function sessionBriefing(resolved, state) {
     });
   }
 
-  if (resolved.dayDef.role === 'technique') {
+  // On the four-day this is a whole day; on the three-day the same sets are
+  // folded in ahead of the heavy work. Either way the lifter needs telling that
+  // these are not meant to progress.
+  const techSlots = resolved.slots.filter((s) => s.slot?.technique);
+  if (resolved.dayDef.role === 'technique' || techSlots.length) {
+    const wholeDay = resolved.dayDef.role === 'technique';
+    const named = techSlots.map((s) => s.exercise?.short).filter(Boolean).join(' and ');
     notes.push({
       kind: 'technique',
-      title: 'Technique day — stay four to six reps shy of failure',
-      text: 'RPE 5 is not a suggestion to be beaten. This day exists to build skill on the competition lifts without adding fatigue, and it is designed to stay submaximal indefinitely. If the loads here never climb, nothing is wrong.',
+      title: wholeDay
+        ? 'Technique day — stay four to six reps shy of failure'
+        : `Technique work first${named ? ` — ${named}` : ''} — stay four to six reps shy of failure`,
+      text: wholeDay
+        ? 'RPE 5 is not a suggestion to be beaten. This day exists to build skill on the competition lifts without adding fatigue, and it is designed to stay submaximal indefinitely. If the loads here never climb, nothing is wrong.'
+        : 'RPE 5 is not a suggestion to be beaten. These opening sets build skill on the competition lifts without adding fatigue, which is why they come before the heavy work rather than after it. They are designed to stay submaximal indefinitely — if the loads never climb, nothing is wrong, and coming up short here is never counted as a stall.',
     });
   }
 

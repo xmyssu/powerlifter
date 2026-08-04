@@ -5,7 +5,7 @@
 import { html, raw, esc, icon, $, $$, sheet, toast, confirmSheet, fmtDate, restoreSheet } from '../ui.js';
 import { PLATE_PRESETS, fmtLoadBare, plateLabel, minIncrement, e1RM, normalizeRPE, parseNum } from '../rpe.js';
 import { templateOf, buildProgram, volumeAudit, convertUnits } from '../program.js';
-import { EMPHASIS, TEMPLATES, INTERMEDIATE_PL, ADVANCED_ACCUMULATION, ADVANCED_INTENSIFICATION } from '../templates.js';
+import { EMPHASIS, TEMPLATES, INTERMEDIATE_PL, INTERMEDIATE_PL_3DAY, ADVANCED_ACCUMULATION, ADVANCED_INTENSIFICATION } from '../templates.js';
 import { optionsForSlot, SLOT_INFO, byId } from '../exercises.js';
 import { todayISO } from '../store.js';
 import { APP_VERSION, canInstall, promptInstall } from '../app.js';
@@ -280,7 +280,7 @@ function openEmphasis(ctx) {
 function openSwitch(ctx) {
   const st = ctx.state;
   const cur = st.program.templateId;
-  const choices = [INTERMEDIATE_PL, ADVANCED_ACCUMULATION, ADVANCED_INTENSIFICATION];
+  const choices = [INTERMEDIATE_PL, INTERMEDIATE_PL_3DAY, ADVANCED_ACCUMULATION, ADVANCED_INTENSIFICATION];
 
   sheet({
     title: 'Switch program',
@@ -291,11 +291,12 @@ function openSwitch(ctx) {
         ${choices.map((t) => `<button class="pick" data-t="${esc(t.id)}" aria-pressed="${cur === t.id}">
           <span class="pick__mark">${icon('check')}</span>
           <div class="pick__body">
-            <div class="pick__title">${esc(t.name)}</div>
+            <div class="pick__title">${esc(t.name)}${t.adapted ? ` <span class="pill pill--info">adapted</span>` : ''}</div>
             <div class="pick__sub">${esc(t.daysPerWeek)} days/week · ${esc(t.cycleWeeks)}-week cycle${t.character ? ` · ${esc(t.character.slice(0, 110))}…` : ''}</div>
           </div>
         </button>`).join('')}
       </div>
+      <p class="cite">The four-day program is the one the book prints, and the one to use if you can train four times a week. The three-day is an adaptation, not a printed template: it keeps every working set and the same weekly volume, but two of its days run to five exercises and the technique work loses its own dedicated day.</p>
       <p class="cite">The advanced blocks are meant to be sequenced: accumulation, then intensification, then a deload and either testing or a meet. Do not jump into intensification cold.</p>
     </div>`,
     onMount(root, close) {
@@ -317,6 +318,7 @@ function openSwitch(ctx) {
             });
             s.program.events.push({ date: todayISO(), kind: 'switched', from: old.templateId, to: id });
             s.profile.trainingAge = TEMPLATES[id].trainingAge || s.profile.trainingAge;
+            s.profile.daysPerWeek = TEMPLATES[id].daysPerWeek || s.profile.daysPerWeek;
           });
           close();
           toast(`${TEMPLATES[id].name} started.`, 'good');

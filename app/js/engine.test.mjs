@@ -23,8 +23,8 @@ const { buildProgram, resolveDay, startSession, completeSession, resolveAssessme
         slotE1RM, cyclePlan, convertUnits, slotHistory, templateOf } = await import('./program.js');
 const { pctOf1RM, e1RM, loadFor, plateBreakdown, roundToLoadable, plateLabel, minIncrement, convertLoad,
         loadBand, RPE_TOLERANCE } = await import('./rpe.js');
-const { assessDeload, INTERMEDIATE_PL } = await import('./templates.js');
-const { strengthTrend, trendSummary } = await import('./coach.js');
+const { assessDeload, INTERMEDIATE_PL, INTERMEDIATE_PL_3DAY } = await import('./templates.js');
+const { strengthTrend, trendSummary, sessionBriefing } = await import('./coach.js');
 
 let pass = 0, fail = 0;
 const problems = [];
@@ -746,6 +746,217 @@ hr('14. Load range');
   const d = resolveDay(store.getState(), { cycle: 1, week: 1, day: 1, phase: 'load' });
   const bad = d.slots.filter((s) => s.loadRange && (!s.reps || s.plannedLoad == null));
   eq(bad.length, 0, 'no range is invented for timed or load-less slots');
+}
+
+/* ======================================================================
+   15. Three-day schedule (an adaptation, not a printed template)
+   ====================================================================== */
+hr('15. Three-day schedule');
+
+// Structure: same work, three days.
+{
+  const four = INTERMEDIATE_PL, three = INTERMEDIATE_PL_3DAY;
+  eq(three.days.length, 3, 'three training days');
+  eq(three.daysPerWeek, 3, 'daysPerWeek says so too');
+  eq(three.cycleWeeks, four.cycleWeeks, 'same 3-week wave as the four-day');
+  eq(three.model, four.model, 'same wave model');
+  ok(three.adapted === true, 'flagged as an adaptation');
+  ok(!/p\. 263'$/.test(three.source || '') && /Adapted|Not a printed/.test(three.source),
+     'source does not claim to be a printed template');
+
+  const keysOf = (t) => t.days.flatMap((d) => d.slots.map((s) => s.key)).sort();
+  const fk = keysOf(four), tk = keysOf(three);
+  eq(tk.length, fk.length, 'no slot was dropped or invented');
+  eq(tk.join(','), fk.join(','), 'slot keys match the four-day exactly, so switching carries state');
+  eq(new Set(tk).size, tk.length, 'slot keys are unique within the template');
+
+  // Every slot's prescription is carried across untouched.
+  const flat = (t) => Object.fromEntries(t.days.flatMap((d) => d.slots.map((s) => [s.key, s])));
+  const f = flat(four), t3 = flat(three);
+  let drift = 0;
+  for (const k of fk) {
+    const a = f[k], b = t3[k];
+    if (a.sets !== b.sets || a.rpe !== b.rpe || a.repStep !== b.repStep || a.inc !== b.inc
+        || a.slotType !== b.slotType || a.role !== b.role || a.lift !== b.lift
+        || JSON.stringify(a.repRange) !== JSON.stringify(b.repRange)
+        || JSON.stringify(a.pctBand) !== JSON.stringify(b.pctBand)
+        || !!a.excludeFromTotals !== !!b.excludeFromTotals) drift++;
+  }
+  eq(drift, 0, 'every slot keeps its sets, reps, RPE, band and increment');
+
+  // The technique work must stay marked now that it has no day of its own.
+  const tech = three.days.flatMap((d) => d.slots).filter((s) => s.technique);
+  eq(tech.length, 3, 'the three technique slots are flagged');
+  ok(tech.every((s) => s.rpe === 5), 'and they are the RPE 5 sets');
+  ok(!three.days.some((d) => d.role === 'technique'), 'no day is a technique day any more');
+  // Skill work should come while fresh: each technique slot leads its day.
+  for (const d of three.days) {
+    if (d.slots.some((s) => s.technique)) {
+      ok(d.slots[0].technique, `day ${d.n} opens with its technique work`);
+    }
+  }
+}
+
+// Volume: identical to the four-day, and inside the book's target.
+{
+  store.resetAll();
+  store.update((s) => {
+    s.profile.units = 'kg'; s.profile.barWeight = 20;
+    s.profile.plates = [25, 20, 15, 10, 5, 2.5, 1.25];
+    s.maxes.squat = { value: 180, date: '2026-08-01', source: 'tested', reps: 3 };
+    s.maxes.bench = { value: 120, date: '2026-08-01', source: 'tested', reps: 3 };
+    s.maxes.deadlift = { value: 220, date: '2026-08-01', source: 'tested', reps: 3 };
+    s.program = buildProgram({ templateId: INTERMEDIATE_PL.id, startDate: '2026-08-03' });
+    s.onboarded = true;
+  });
+  const four = volumeAudit(store.getState());
+
+  store.update((s) => { s.program = buildProgram({ templateId: INTERMEDIATE_PL_3DAY.id, startDate: '2026-08-03' }); });
+  const three = volumeAudit(store.getState());
+
+  eq(three.total, four.total, 'same number of counted working sets');
+  eq(three.excluded, four.excluded, 'the leg curl is still excluded from totals');
+  eq(three.main, four.main, 'same main/variation set count');
+  eq(three.accessory, four.accessory, 'same accessory set count');
+  for (const k of Object.keys(four.cats)) {
+    eq(three.cats[k], four.cats[k], `${k}: same weekly sets as the four-day`);
+  }
+  for (const [k, v] of Object.entries(three.cats)) {
+    ok(v >= 13 && v <= 15, `${k} sits inside the book's 13-15 target`, `${v}`);
+  }
+}
+
+// It runs: a full three-week wave advances 3 days per week, then asks for the
+// assessment — exactly like the four-day, just with one fewer day.
+{
+  const seen = [];
+  for (let i = 0; i < 9; i++) {
+    const before = store.getState().program.cursor;
+    seen.push(`${before.week}.${before.day}`);
+    trainAsPrescribed();
+  }
+  eq(seen.join(' '), '1.1 1.2 1.3 2.1 2.2 2.3 3.1 3.2 3.3',
+     'nine sessions walk three days across three weeks');
+  ok(store.getState().program.pendingAssessment,
+     'after the last loading week it asks for the deload checklist');
+
+  store.update((s) => { res = resolveAssessment(s, {}); });
+  eq(res.action, 'proceed', 'a clean checklist proceeds into the next cycle');
+  eq(store.getState().program.cursor.day, 1, 'and the next cycle starts on day 1');
+}
+
+// The folded-in technique sets must never be read as a stall, even though they
+// no longer sit on a day whose role exempts them.
+{
+  store.resetAll();
+  store.update((s) => {
+    s.profile.units = 'kg'; s.profile.barWeight = 20;
+    s.profile.plates = [25, 20, 15, 10, 5, 2.5, 1.25];
+    s.maxes.squat = { value: 180, date: '2026-08-01', source: 'tested', reps: 3 };
+    s.maxes.bench = { value: 120, date: '2026-08-01', source: 'tested', reps: 3 };
+    s.maxes.deadlift = { value: 220, date: '2026-08-01', source: 'tested', reps: 3 };
+    s.program = buildProgram({ templateId: INTERMEDIATE_PL_3DAY.id, startDate: '2026-08-03' });
+    s.onboarded = true;
+  });
+
+  // Day 1 opens with deadlift technique triples. Come up short on purpose.
+  const r1 = trainAsPrescribed({ d2_dead: { reps: 1, load: 40 } });
+  eq(r1.notes.filter((n) => n.kind === 'stall').length, 0,
+     'a short technique deadlift on the volume day is not a stall');
+  eq(store.getState().program.slots.d2_dead.stalls, 0, 'and no stall is recorded');
+  ok(!store.getState().program.forcedDeload, 'and no deload is forced');
+
+  trainAsPrescribed();                                    // day 2, clean
+
+  // Day 3 opens with squat + bench technique, then the heavy deadlift.
+  const r3 = trainAsPrescribed({ d2_squat: { reps: 1, load: 40 }, d2_bench: { reps: 1, load: 40 } });
+  eq(r3.notes.filter((n) => n.kind === 'stall').length, 0,
+     'short technique squat/bench on a strength day is still not a stall');
+  eq(store.getState().program.slots.d2_squat.stalls, 0, 'no stall on the technique squat');
+  eq(store.getState().program.slots.d2_bench.stalls, 0, 'no stall on the technique bench');
+
+  // But the genuinely heavy work on the same day still stalls normally.
+  const r4 = trainAsPrescribed({ d4_dead: { reps: 1 } });  // week 2 day 1... walk to day 3
+  let guard = 0;
+  while (store.getState().program.cursor.day !== 3 && guard++ < 5) trainAsPrescribed();
+  const heavy = trainAsPrescribed({ d4_dead: { reps: 1 } });
+  ok(heavy.notes.some((n) => n.kind === 'stall') || store.getState().program.slots.d4_dead.stalls > 0,
+     'the heavy deadlift on that same day does still stall');
+}
+
+// Switching between the two schedules carries choices, anchors and history.
+{
+  store.resetAll();
+  store.update((s) => {
+    s.profile.units = 'kg'; s.profile.barWeight = 20;
+    s.profile.plates = [25, 20, 15, 10, 5, 2.5, 1.25];
+    s.maxes.squat = { value: 180, date: '2026-08-01', source: 'tested', reps: 3 };
+    s.maxes.bench = { value: 120, date: '2026-08-01', source: 'tested', reps: 3 };
+    s.maxes.deadlift = { value: 220, date: '2026-08-01', source: 'tested', reps: 3 };
+    s.program = buildProgram({ templateId: INTERMEDIATE_PL.id, startDate: '2026-08-03' });
+    s.onboarded = true;
+  });
+  [1, 2, 3, 4].forEach(() => trainAsPrescribed());   // one four-day week logged
+
+  const beforeChoices = { ...store.getState().program.choices };
+  const beforeHistory = slotHistory(store.getState(), 'd3_squat').length;
+  const beforeAnchor = store.getState().program.slots.d3_squat.week1Load;
+  ok(beforeHistory > 0 && beforeAnchor > 0, 'we have history and an anchor to carry');
+
+  store.update((s) => {
+    const old = s.program;
+    s.program = buildProgram({
+      templateId: INTERMEDIATE_PL_3DAY.id, emphasis: old.emphasis,
+      startDate: '2026-08-10', choices: old.choices,
+    });
+  });
+
+  const after = store.getState();
+  eq(templateOf(after.program).daysPerWeek, 3, 'now on the three-day');
+  let lost = 0;
+  for (const [k, v] of Object.entries(beforeChoices)) if (after.program.choices[k] !== v) lost++;
+  eq(lost, 0, 'every exercise choice survived the switch');
+  eq(slotHistory(after, 'd3_squat').length, beforeHistory, 'logged history is untouched');
+  ok(Object.keys(after.program.slots).length === Object.keys(beforeChoices).length
+     || Object.keys(after.program.slots).length > 0, 'slot state exists for the new template');
+
+  // And every slot still resolves to something trainable on the new schedule.
+  let unresolved = 0, days = 0;
+  for (let day = 1; day <= 3; day++) {
+    const d = resolveDay(after, { cycle: after.program.cursor.cycle, week: 1, day, phase: 'load' });
+    days++;
+    for (const s of d.slots) if (!s.exercise || !s.reps) unresolved++;
+  }
+  eq(days, 3, 'three days resolve');
+  eq(unresolved, 0, 'every slot on the three-day resolves to a real exercise and rep target');
+}
+
+// The coach must still explain the technique work now that it has no day.
+{
+  store.resetAll();
+  store.update((s) => {
+    s.profile.units = 'kg'; s.profile.barWeight = 20;
+    s.profile.plates = [25, 20, 15, 10, 5, 2.5, 1.25];
+    s.maxes.squat = { value: 180, date: '2026-08-01', source: 'tested', reps: 3 };
+    s.program = buildProgram({ templateId: INTERMEDIATE_PL_3DAY.id, startDate: '2026-08-03' });
+    s.onboarded = true;
+  });
+  const st3 = store.getState();
+  const d1 = sessionBriefing(resolveDay(st3, { cycle: 1, week: 1, day: 1, phase: 'load' }), st3);
+  const d2 = sessionBriefing(resolveDay(st3, { cycle: 1, week: 1, day: 2, phase: 'load' }), st3);
+  const d3 = sessionBriefing(resolveDay(st3, { cycle: 1, week: 1, day: 3, phase: 'load' }), st3);
+  ok(d1.notes.some((n) => n.kind === 'technique'), 'day 1 explains its technique deadlifts');
+  ok(!d2.notes.some((n) => n.kind === 'technique'), 'day 2 has no technique work, so no such note');
+  ok(d3.notes.some((n) => n.kind === 'technique'), 'day 3 explains its technique squat/bench');
+  ok(/never counted as a stall/.test(d3.notes.find((n) => n.kind === 'technique').text),
+     'and it says coming up short there is not a stall');
+
+  // The four-day keeps its original whole-day wording.
+  store.update((s) => { s.program = buildProgram({ templateId: INTERMEDIATE_PL.id, startDate: '2026-08-03' }); });
+  const st4 = store.getState();
+  const f2 = sessionBriefing(resolveDay(st4, { cycle: 1, week: 1, day: 2, phase: 'load' }), st4);
+  const tn = f2.notes.find((n) => n.kind === 'technique');
+  ok(tn && /^Technique day/.test(tn.title), 'the four-day still calls it a technique day');
 }
 
 /* ======================================================================

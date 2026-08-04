@@ -498,9 +498,11 @@ export function completeSession(state, sessionId) {
     }
 
     if (entryStalled(entry) && session.phase === 'load') {
-      // Day 2 is meant to stay submaximal forever — never counts as a stall.
+      // Technique work is meant to stay submaximal forever, so falling short of
+      // it is never a stall. On the 4-day that is a whole day; on the 3-day the
+      // same sets are folded into other days, so the slot flag has to count too.
       const isTechniqueDay = tpl.days.find((d) => d.n === session.day)?.role === 'technique';
-      if (!isTechniqueDay) {
+      if (!isTechniqueDay && !slot.technique) {
         if (!st.stalledThisCycle) {
           st.stalledThisCycle = true;
           st.stalledAtLoad = doneSets[0].load;

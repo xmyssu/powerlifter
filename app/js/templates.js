@@ -67,9 +67,13 @@ export const INTERMEDIATE_PL = {
       title: 'Competition big 3, low reps, deliberately easy',
       why: 'RPE 5 — four to six reps shy of failure. This day builds skill on the competition lifts without adding fatigue. It is meant to stay submaximal forever, so do not treat a lack of progress here as a stall.',
       slots: [
-        { key: 'd2_squat',   slotType: 'squat',        lift: 'squat',    role: 'main',      sets: 3, repRange: [1, 3], repStep: 1, pctBand: [80, 85], rpe: 5, inc: 'lower' },
-        { key: 'd2_bench',   slotType: 'bench',        lift: 'bench',    role: 'main',      sets: 3, repRange: [1, 3], repStep: 1, pctBand: [80, 85], rpe: 5, inc: 'other' },
-        { key: 'd2_dead',    slotType: 'deadlift',     lift: 'deadlift', role: 'main',      sets: 3, repRange: [1, 3], repStep: 1, pctBand: [80, 85], rpe: 5, inc: 'lower' },
+        // technique: true marks work that is meant to stay submaximal forever, so
+        // it never counts as a stall. On this template the day role says the same
+        // thing; the flag is what carries that meaning into schedules where the
+        // technique work is folded into other days.
+        { key: 'd2_squat',   slotType: 'squat',        lift: 'squat',    role: 'main',      sets: 3, repRange: [1, 3], repStep: 1, pctBand: [80, 85], rpe: 5, inc: 'lower', technique: true },
+        { key: 'd2_bench',   slotType: 'bench',        lift: 'bench',    role: 'main',      sets: 3, repRange: [1, 3], repStep: 1, pctBand: [80, 85], rpe: 5, inc: 'other', technique: true },
+        { key: 'd2_dead',    slotType: 'deadlift',     lift: 'deadlift', role: 'main',      sets: 3, repRange: [1, 3], repStep: 1, pctBand: [80, 85], rpe: 5, inc: 'lower', technique: true },
         { key: 'd2_verpush', slotType: 'verticalPush', lift: null,       role: 'accessory', sets: 3, repRange: [4, 6], repStep: 1, pctBand: null,     rpe: 8, inc: 'other' },
       ],
     },
@@ -98,6 +102,87 @@ export const INTERMEDIATE_PL = {
         { key: 'd4_bevar',   slotType: 'benchVariant',   lift: null,       role: 'variation', sets: 3, repRange: [6, 8],  repStep: 1, pctBand: null,         rpe: 8, inc: 'other' },
         { key: 'd4_dead',    slotType: 'deadlift',       lift: 'deadlift', role: 'main',      sets: 3, repRange: [3, 5],  repStep: 1, pctBand: [82.5, 87.5], rpe: 8, inc: 'lower' },
         { key: 'd4_horpull', slotType: 'horizontalPull2', lift: null,      role: 'accessory', sets: 3, repRange: [8, 12], repStep: 2, pctBand: null,         rpe: 8, inc: 'other' },
+      ],
+    },
+  ],
+};
+
+/* ==========================================================================
+   A three-day week.
+   --------------------------------------------------------------------------
+   NOT a printed template. The book gives the intermediate powerlifting program
+   as four days (p. 263); this rearranges that same work for someone who can
+   only train three times a week.
+
+   What is preserved: every working set. All fourteen slots survive with their
+   sets, rep waves, RPE targets, percentage bands and increments untouched, so
+   weekly volume stays at 15/15/15 per pattern — the same as the four-day, and
+   inside the book's 13-15 target (p. 208). Weekly frequency per lift is also
+   unchanged: squat 3x, bench 4x, deadlift 2x.
+
+   What it costs: the Technique day dissolves, so its skill work is spread over
+   the remaining days and two of them run to five exercises. The book keeps
+   technique work on its own day specifically so it happens fresh, which is the
+   one thing a three-day week cannot reproduce. Each day therefore leads with
+   its technique sets while the lifter is fresh, before the heavy work.
+
+   The slot keys deliberately match the four-day template's, so switching in
+   either direction carries exercise choices, load anchors and logged history
+   across intact.
+   ========================================================================== */
+export const INTERMEDIATE_PL_3DAY = {
+  id: 'intermediate-pl-3day',
+  name: 'Intermediate Powerlifting (3-day)',
+  source: 'Adapted from Helms — Muscle & Strength Pyramid: Training 2e, p. 263. Not a printed template.',
+  adapted: true,
+  trainingAge: 'intermediate',
+  daysPerWeek: 3,
+  cycleWeeks: 3,
+  model: 'wave',
+  loadMode: 'firstSetRPE',
+  allowDeloadWeek: true,
+  character: 'The same weekly volume as the four-day, compressed into three longer sessions. Technique work moves to the front of each day instead of having its own.',
+  scheduleNote: 'Spread the three days out — Monday/Wednesday/Friday or similar. Days 2 and 3 are both heavy, so avoid stacking them back to back.',
+  days: [
+    {
+      n: 1,
+      role: 'volume',
+      label: 'Volume',
+      title: 'Deadlift technique, then higher-rep squat and bench',
+      why: 'Deadlift triples at RPE 5 come first, while you are fresh — this is skill practice, not a test, and it is the deadlift exposure that the four-day puts on its own technique day. The rest is the volume work: moderate loads, RPE 7 on the first set, never close to failure.',
+      slots: [
+        { key: 'd2_dead',    slotType: 'deadlift',     lift: 'deadlift', role: 'main',      sets: 3, repRange: [1, 3], repStep: 1, pctBand: [80, 85],     rpe: 5, inc: 'lower', technique: true },
+        { key: 'd1_sqvar',   slotType: 'squatVariant', lift: null,       role: 'variation', sets: 3, repRange: [7, 9], repStep: 1, pctBand: null,         rpe: 7, inc: 'lower' },
+        { key: 'd1_bench',   slotType: 'bench',        lift: 'bench',    role: 'main',      sets: 3, repRange: [7, 9], repStep: 1, pctBand: [67.5, 72.5], rpe: 7, inc: 'other' },
+        { key: 'd1_verpull', slotType: 'verticalPull', lift: null,       role: 'accessory', sets: 3, repRange: [7, 9], repStep: 1, pctBand: null,         rpe: 8, inc: 'other' },
+      ],
+    },
+    {
+      n: 2,
+      role: 'strength',
+      label: 'Strength',
+      title: 'Squat + bench for strength',
+      why: 'RPE 8 on the first set — this is where you push. Pick the load so all three sets are completable. The vertical push moves here from the four-day\'s technique day.',
+      slots: [
+        { key: 'd3_squat',   slotType: 'squat',          lift: 'squat', role: 'main',      sets: 3, repRange: [3, 5],  repStep: 1, pctBand: [82.5, 87.5], rpe: 8, inc: 'lower' },
+        { key: 'd3_bench',   slotType: 'bench',          lift: 'bench', role: 'main',      sets: 3, repRange: [3, 5],  repStep: 1, pctBand: [82.5, 87.5], rpe: 8, inc: 'other' },
+        { key: 'd3_horpull', slotType: 'horizontalPull', lift: null,    role: 'accessory', sets: 3, repRange: [4, 6],  repStep: 1, pctBand: null,         rpe: 8, inc: 'other' },
+        { key: 'd2_verpush', slotType: 'verticalPush',   lift: null,    role: 'accessory', sets: 3, repRange: [4, 6],  repStep: 1, pctBand: null,         rpe: 8, inc: 'other' },
+        { key: 'd3_legcurl', slotType: 'legCurl',        lift: null,    role: 'isolation', sets: 3, repRange: [8, 12], repStep: 2, pctBand: null,         rpe: 8, inc: 'other', bookLiteralReps: 12, excludeFromTotals: true },
+      ],
+    },
+    {
+      n: 3,
+      role: 'strength',
+      label: 'Strength',
+      title: 'Squat + bench technique, then deadlift for strength',
+      why: 'The competition squat and bench singles at RPE 5 open the session as skill work — four to six reps shy of failure, and never a stall no matter what the loads look like. Then the heavy deadlift and your bench variation.',
+      slots: [
+        { key: 'd2_squat',   slotType: 'squat',           lift: 'squat',    role: 'main',      sets: 3, repRange: [1, 3],  repStep: 1, pctBand: [80, 85],     rpe: 5, inc: 'lower', technique: true },
+        { key: 'd2_bench',   slotType: 'bench',           lift: 'bench',    role: 'main',      sets: 3, repRange: [1, 3],  repStep: 1, pctBand: [80, 85],     rpe: 5, inc: 'other', technique: true },
+        { key: 'd4_dead',    slotType: 'deadlift',        lift: 'deadlift', role: 'main',      sets: 3, repRange: [3, 5],  repStep: 1, pctBand: [82.5, 87.5], rpe: 8, inc: 'lower' },
+        { key: 'd4_bevar',   slotType: 'benchVariant',    lift: null,       role: 'variation', sets: 3, repRange: [6, 8],  repStep: 1, pctBand: null,         rpe: 8, inc: 'other' },
+        { key: 'd4_horpull', slotType: 'horizontalPull2', lift: null,       role: 'accessory', sets: 3, repRange: [8, 12], repStep: 2, pctBand: null,         rpe: 8, inc: 'other' },
       ],
     },
   ],
@@ -293,6 +378,7 @@ export const ADVANCED_TAPER = {
 
 export const TEMPLATES = {
   [INTERMEDIATE_PL.id]: INTERMEDIATE_PL,
+  [INTERMEDIATE_PL_3DAY.id]: INTERMEDIATE_PL_3DAY,
   [ADVANCED_ACCUMULATION.id]: ADVANCED_ACCUMULATION,
   [ADVANCED_INTENSIFICATION.id]: ADVANCED_INTENSIFICATION,
   [ADVANCED_TAPER.id]: ADVANCED_TAPER,
