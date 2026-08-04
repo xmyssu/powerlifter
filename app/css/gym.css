@@ -52,6 +52,14 @@
 .rx__box--load { background: var(--accent-wash); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
 .rx__box--load .rx__v { color: var(--accent); }
 
+/* The load to aim for reads first; sets/reps/RPE become its caption. */
+.rx__v--hero { font-size: 2rem; line-height: 1.1; letter-spacing: -.03em; }
+.rx__v--hero small { font-size: .8125rem; font-weight: 600; color: var(--text-2); letter-spacing: 0; }
+.rx__sub {
+  margin-top: 3px; font-size: .8125rem; font-weight: 600;
+  color: var(--text-2); font-variant-numeric: tabular-nums;
+}
+
 /* plate breakdown */
 .plates { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-top: 6px; }
 .plate {

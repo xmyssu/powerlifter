@@ -82,6 +82,34 @@ export function repsAt(max, load, rpe) {
   return 20;
 }
 
+/** How far either side of the target RPE still counts as the prescribed set. */
+export const RPE_TOLERANCE = 0.5;
+
+/**
+ * The load window around `load` for the same reps when the RPE is allowed to
+ * move within [low, high] (default: target ± RPE_TOLERANCE).
+ *
+ * Deliberately scale-free: it works off the *ratio* of table percentages
+ * rather than off an estimated 1RM, so the window always brackets whatever
+ * load was prescribed — whether that came from the wave anchor, a percentage
+ * of a tested max, or inferred from logged RPE. Anchoring it on an e1RM
+ * instead would produce ranges that contradict the prescribed load.
+ *
+ * Returns {low, high} in the same units as `load`, or null if not computable.
+ */
+export function loadBand(load, reps, centerRPE, { low, high, tolerance = RPE_TOLERANCE } = {}) {
+  const l = Number(load);
+  if (!Number.isFinite(l) || l <= 0 || centerRPE == null) return null;
+  const base = pctOf1RM(reps, centerRPE);
+  if (!base) return null;
+  const loPct = pctOf1RM(reps, low ?? centerRPE - tolerance);
+  const hiPct = pctOf1RM(reps, high ?? centerRPE + tolerance);
+  if (!loPct || !hiPct) return null;
+  const a = (l * loPct) / base;
+  const b = (l * hiPct) / base;
+  return { low: Math.min(a, b), high: Math.max(a, b) };
+}
+
 /* ---- load rounding ---------------------------------------------------- */
 
 /**

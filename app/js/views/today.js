@@ -156,6 +156,8 @@ function slotRow(s, i, units, st) {
     : `<b>${s.sets} × ${s.reps}</b>` + (s.targetRPE != null ? ` @ RPE <b>${fmtRPE(s.targetRPE)}</b>` : s.rpeRange ? ` @ RPE <b>${s.rpeRange[0]}-${s.rpeRange[1]}</b>` : '');
   const load = s.plannedLoad;
   const pb = load ? plateBreakdown(load, { barWeight: st.profile.barWeight, plates: st.profile.plates }) : null;
+  const range = s.loadRange;
+  const showRange = !!range && !range.exact;
 
   return `<div class="ex">
     <div class="ex__head">
@@ -167,8 +169,8 @@ function slotRow(s, i, units, st) {
       </div>
       <div style="text-align:right;flex:0 0 auto">
         ${load
-          ? `<div class="mono" style="font-size:1.25rem;font-weight:700;letter-spacing:-.02em">${fmtLoadBare(load)}</div>
-             <div class="tiny dim">${esc(units)}${pb && !pb.ok ? ' ≈' : ''}</div>`
+          ? `<div class="mono" style="font-size:${showRange ? '1.05' : '1.25'}rem;font-weight:700;letter-spacing:-.02em;white-space:nowrap">${showRange ? `${fmtLoadBare(range.low)}–${fmtLoadBare(range.high)}` : fmtLoadBare(load)}</div>
+             <div class="tiny dim">${esc(units)}${!showRange && pb && !pb.ok ? ' ≈' : ''}</div>`
           : `<span class="pill pill--warn">by feel</span>`}
       </div>
     </div>

@@ -12,7 +12,7 @@
 
 import { TEMPLATES, INTERMEDIATE_PL, EMPHASIS, incrementFor, assessDeload } from './templates.js';
 import { SLOT_DEFAULTS, byId } from './exercises.js';
-import { e1RM, loadFor, roundToLoadable, pctOf1RM, normalizeRPE, convertLoad, PLATE_PRESETS, KG_PER_LB } from './rpe.js';
+import { e1RM, loadFor, roundToLoadable, pctOf1RM, normalizeRPE, convertLoad, loadBand, RPE_TOLERANCE, PLATE_PRESETS, KG_PER_LB } from './rpe.js';
 import { todayISO, uid } from './store.js';
 
 /* ---- construction ----------------------------------------------------- */
@@ -266,6 +266,8 @@ export function resolveDay(state, { cycle, week, day, phase } = {}) {
 
     // --- load --------------------------------------------------------
     const plan = plannedLoad({ state, program, slot, week, isDeload, inc, pct, reps, targetRPE, rpeRange });
+    const planned = plan.load == null ? null : roundToLoadable(plan.load, loadOpts);
+    const loadRange = bandFor(planned, reps, targetRPE, rpeRange, loadOpts);
 
     return {
       index: i,
@@ -282,7 +284,8 @@ export function resolveDay(state, { cycle, week, day, phase } = {}) {
       pct,
       timed: !!slot.timed,
       prescription: slot.prescription || null,
-      plannedLoad: plan.load == null ? null : roundToLoadable(plan.load, loadOpts),
+      plannedLoad: planned,
+      loadRange,
       loadSource: plan.source,
       loadNote: plan.note,
       rpeCheckLoad: plan.rpeCheck == null ? null : roundToLoadable(plan.rpeCheck, loadOpts),
@@ -375,6 +378,35 @@ function plannedLoad({ state, program, slot, week, isDeload, inc, pct, reps, tar
     rpeCheck: null,
     lastTime: last,
   };
+}
+
+/**
+ * The loadable weight window to aim for — an objective target for lifters who
+ * would rather not stake the session on an RPE call made mid-set.
+ *
+ * Both ends are rounded onto the lifter's own plate grid, so every number in a
+ * displayed range is a weight that can literally be loaded. Because rounding is
+ * monotonic and the band is built around `load`, the prescribed load always
+ * falls inside the window.
+ *
+ * A program-declared rpeRange is used as-is; a single target RPE gets
+ * ± RPE_TOLERANCE. `exact` means the window came out narrower than the smallest
+ * available plate jump, so there is only one weight to aim for.
+ */
+function bandFor(load, reps, targetRPE, rpeRange, loadOpts) {
+  if (load == null || !reps) return null;
+  const center = rpeRange ? (rpeRange[0] + rpeRange[1]) / 2 : targetRPE;
+  if (center == null) return null;
+
+  const band = loadBand(load, reps, center, rpeRange
+    ? { low: rpeRange[0], high: rpeRange[1] }
+    : { tolerance: RPE_TOLERANCE });
+  if (!band) return null;
+
+  const low = roundToLoadable(band.low, loadOpts);
+  const high = roundToLoadable(band.high, loadOpts);
+  if (low == null || high == null) return null;
+  return { low: Math.min(low, high), high: Math.max(low, high), exact: low === high };
 }
 
 function dayLabel(tpl, dayDef, { week, cycle, phase }) {

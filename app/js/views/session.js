@@ -124,19 +124,32 @@ function exerciseCard(entry, resolved, i, st, ses) {
 }
 
 function rxStrip(entry, slot, st) {
+  const units = st.profile.units;
   const pb = entry.plannedLoad ? plateBreakdown(entry.plannedLoad, { barWeight: st.profile.barWeight, plates: st.profile.plates }) : null;
+  const range = slot?.loadRange || null;
+
+  // The weight to aim for leads; the RPE it encodes drops to the caption. The
+  // RPE is still what gets logged — it is what keeps these ranges honest.
+  const hero = range
+    ? (range.exact ? fmtLoadBare(range.low) : `${fmtLoadBare(range.low)} – ${fmtLoadBare(range.high)}`)
+    : entry.plannedLoad ? fmtLoadBare(entry.plannedLoad) : null;
+
+  const rpeStr = entry.targetRPE != null ? `RPE ${fmtRPE(entry.targetRPE)}`
+    : entry.rpeRange ? `RPE ${entry.rpeRange[0]}–${entry.rpeRange[1]}` : null;
+  const caption = [
+    `${entry.targetSets}×${entry.targetReps ?? '—'}`,
+    rpeStr,
+    slot?.pct != null ? `${slot.pct}% ref` : null,
+  ].filter(Boolean).join(' · ');
+
   return `<div class="rx">
-    <div class="rx__box">
-      <span class="rx__k">Target</span>
-      <span class="rx__v">${entry.targetSets}×${entry.targetReps ?? '—'}</span>
+    <div class="rx__box rx__box--load">
+      <span class="rx__k">${range && !range.exact ? 'Aim for' : 'Target load'}</span>
+      <span class="rx__v rx__v--hero">${hero ? `${hero} <small>${esc(units)}</small>` : '<small>work up by feel</small>'}</span>
+      <span class="rx__sub">${esc(caption)}</span>
     </div>
-    <div class="rx__box">
-      <span class="rx__k">RPE</span>
-      <span class="rx__v">${entry.targetRPE != null ? fmtRPE(entry.targetRPE) : entry.rpeRange ? `${entry.rpeRange[0]}–${entry.rpeRange[1]}` : '—'}</span>
-    </div>
-    ${slot?.pct != null ? `<div class="rx__box"><span class="rx__k">Ref</span><span class="rx__v">${slot.pct}<small>%</small></span></div>` : ''}
   </div>
-  ${pb ? plateStrip(pb, st.profile.units) : ''}`;
+  ${pb ? plateStrip(pb, units) : ''}`;
 }
 
 function plateStrip(pb, units) {

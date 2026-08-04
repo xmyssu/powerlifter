@@ -21,7 +21,8 @@ const store = await import('./store.js');
 const { buildProgram, resolveDay, startSession, completeSession, resolveAssessment,
         repsForWeek, pctForWeek, loadingWeeks, graduationCheck, volumeAudit,
         slotE1RM, cyclePlan, convertUnits, slotHistory, templateOf } = await import('./program.js');
-const { pctOf1RM, e1RM, loadFor, plateBreakdown, roundToLoadable, plateLabel, minIncrement, convertLoad } = await import('./rpe.js');
+const { pctOf1RM, e1RM, loadFor, plateBreakdown, roundToLoadable, plateLabel, minIncrement, convertLoad,
+        loadBand, RPE_TOLERANCE } = await import('./rpe.js');
 const { assessDeload, INTERMEDIATE_PL } = await import('./templates.js');
 const { strengthTrend, trendSummary } = await import('./coach.js');
 
@@ -640,6 +641,112 @@ near(convertLoad(220.462, 'lb', 'kg'), 100, 'convertLoad lb -> kg', 0.01);
 eq(convertLoad(100, 'kg', 'kg'), 100, 'convertLoad is identity within a unit');
 eq(convertLoad(null, 'kg', 'lb'), null, 'convertLoad passes null through');
 eq(convertLoad(100, undefined, 'lb'), 100, 'convertLoad with an unknown source unit does not guess');
+
+/* ======================================================================
+   14. Load range ("aim for") — the objective alternative to calling an RPE
+   ====================================================================== */
+hr('14. Load range');
+
+// The band is scale-free: it is the ratio of table percentages, so it brackets
+// whatever load is passed in regardless of where that load came from.
+{
+  eq(RPE_TOLERANCE, 0.5, 'the default window is half an RPE point either side');
+  const b = loadBand(100, 5, 8);
+  ok(b.low < 100 && b.high > 100, 'the band brackets the prescribed load');
+  near(b.low, (100 * pctOf1RM(5, 7.5)) / pctOf1RM(5, 8), 'low end is the RPE 7.5 load');
+  near(b.high, (100 * pctOf1RM(5, 8.5)) / pctOf1RM(5, 8), 'high end is the RPE 8.5 load');
+
+  // ±0.5 RPE is roughly ±3% of the load, so the window stays tight.
+  ok(b.high - b.low < 100 * 0.09, 'a ±0.5 RPE window is under 9% wide', `${(b.high - b.low).toFixed(2)}`);
+
+  const wide = loadBand(100, 5, 8, { tolerance: 1 });
+  ok(wide.high - wide.low > b.high - b.low, '±1 RPE is wider than ±0.5');
+
+  // An explicit RPE window is honoured rather than replaced by the tolerance.
+  const explicit = loadBand(100, 5, 7.5, { low: 7, high: 8 });
+  near(explicit.low, (100 * pctOf1RM(5, 7)) / pctOf1RM(5, 7.5), 'explicit low end respected');
+  near(explicit.high, (100 * pctOf1RM(5, 8)) / pctOf1RM(5, 7.5), 'explicit high end respected');
+
+  // Scaling the input load scales the window with it.
+  const doubled = loadBand(200, 5, 8);
+  near(doubled.low / b.low, 2, 'the band scales linearly with load');
+
+  eq(loadBand(null, 5, 8), null, 'no load, no band');
+  eq(loadBand(100, 5, null), null, 'no RPE, no band');
+  eq(loadBand(0, 5, 8), null, 'a zero load has no meaningful band');
+
+  // At the top of the scale there is no headroom above RPE 10.
+  const capped = loadBand(100, 5, 10);
+  near(capped.high, 100, 'RPE 10 has nothing above it, so the band tops out at the load');
+}
+
+// End to end: every range in a resolved day sits on the real plate grid and
+// contains the prescribed load.
+{
+  store.resetAll();
+  store.update((s) => {
+    s.profile.units = 'kg';
+    s.profile.barWeight = 20;
+    s.profile.plates = [25, 20, 15, 10, 5, 2.5, 1.25];
+    s.maxes.squat = { value: 180, date: '2026-08-01', source: 'tested', reps: 3 };
+    s.maxes.bench = { value: 120, date: '2026-08-01', source: 'tested', reps: 3 };
+    s.maxes.deadlift = { value: 220, date: '2026-08-01', source: 'tested', reps: 3 };
+    s.program = buildProgram({ templateId: INTERMEDIATE_PL.id, startDate: '2026-08-03' });
+    s.onboarded = true;
+  });
+
+  const step = minIncrement([25, 20, 15, 10, 5, 2.5, 1.25]);
+  let checked = 0, offGrid = 0, notBracketing = 0, inverted = 0;
+
+  for (let week = 1; week <= 3; week++) {
+    for (let day = 1; day <= 4; day++) {
+      const d = resolveDay(store.getState(), { cycle: 1, week, day, phase: 'load' });
+      for (const slot of d.slots) {
+        if (!slot.loadRange) continue;
+        checked++;
+        const { low, high } = slot.loadRange;
+        // Prescribed loads must be loadable — estimates are exempt, ranges are not.
+        for (const v of [low, high]) {
+          if (roundToLoadable(v, { barWeight: 20, plates: [25, 20, 15, 10, 5, 2.5, 1.25] }) !== v) offGrid++;
+        }
+        if (low > high) inverted++;
+        if (slot.plannedLoad != null && (slot.plannedLoad < low || slot.plannedLoad > high)) notBracketing++;
+      }
+    }
+  }
+
+  ok(checked > 20, 'resolved a useful number of ranges across the wave', `${checked}`);
+  eq(offGrid, 0, 'every range endpoint is a loadable weight');
+  eq(inverted, 0, 'no range comes out backwards');
+  eq(notBracketing, 0, 'the prescribed load always falls inside its range');
+  ok(step === 2.5, 'plate grid step is as expected for this profile', `${step}`);
+}
+
+// A range narrower than the plate resolution collapses to a single weight
+// rather than printing a bogus "30 – 30".
+{
+  store.update((s) => {
+    s.profile.plates = [25, 20, 15, 10];   // coarsest grid: 20kg jumps
+    s.profile.microplates = false;
+  });
+  const d = resolveDay(store.getState(), { cycle: 1, week: 1, day: 1, phase: 'load' });
+  const collapsed = d.slots.filter((s) => s.loadRange?.exact);
+  ok(collapsed.every((s) => s.loadRange.low === s.loadRange.high),
+     'an exact range really has equal ends');
+  ok(d.slots.filter((s) => s.loadRange).length > 0, 'coarse plates still produce ranges');
+}
+
+// Timed and rep-less slots have nothing to compute a range from.
+{
+  store.resetAll();
+  store.update((s) => {
+    s.program = buildProgram({ templateId: INTERMEDIATE_PL.id, startDate: '2026-08-03' });
+    s.onboarded = true;
+  });
+  const d = resolveDay(store.getState(), { cycle: 1, week: 1, day: 1, phase: 'load' });
+  const bad = d.slots.filter((s) => s.loadRange && (!s.reps || s.plannedLoad == null));
+  eq(bad.length, 0, 'no range is invented for timed or load-less slots');
+}
 
 /* ======================================================================
    done
