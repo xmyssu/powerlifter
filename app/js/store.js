@@ -57,6 +57,23 @@ export function defaultState() {
     readiness: [],          // [{date, sleep, stress, soreness, motivation, score}]
     bodyweightLog: [],      // [{date, value}]
 
+    /**
+     * Cloud sync (sync.js). `token` is the only secret the device holds and it
+     * is stripped from every export, so it never travels with a backup.
+     */
+    sync: {
+      enabled: false,
+      endpoint: '',           // Apps Script web app /exec URL
+      token: '',
+      queue: [],              // session ids waiting to be pushed
+      syncing: false,
+      lastSyncAt: null,
+      lastError: null,
+      failures: 0,
+      nextAttemptAt: null,
+      lastResult: null,       // {sessions, sets, discord, sheetUrl}
+    },
+
     settings: {
       restTimerAuto: true,
       restBeep: true,
@@ -105,9 +122,12 @@ function migrate(state) {
 function reconcile(saved) {
   const base = defaultState();
   const out = { ...base, ...saved };
-  for (const k of ['profile', 'settings', 'meta', 'maxes']) {
+  for (const k of ['profile', 'settings', 'meta', 'maxes', 'sync']) {
     out[k] = { ...base[k], ...(saved[k] || {}) };
   }
+  // A restored snapshot carries an empty queue and a stale in-flight flag.
+  if (!Array.isArray(out.sync.queue)) out.sync.queue = [];
+  out.sync.syncing = false;
   for (const lift of ['squat', 'bench', 'deadlift']) {
     out.maxes[lift] = { ...base.maxes[lift], ...((saved.maxes || {})[lift] || {}) };
   }
@@ -195,7 +215,12 @@ export function resetAll() {
 /* ---- backup / restore ------------------------------------------------- */
 
 export function exportJSON() {
-  return JSON.stringify({ ...state, exportedAt: new Date().toISOString() }, null, 2);
+  // The sync token is deliberately left out: a backup file gets mailed to
+  // yourself, dropped in cloud storage and handed over for debugging, and none
+  // of that should hand over write access to your sheet. The endpoint stays so
+  // a restore only needs the token retyped.
+  const out = { ...state, sync: { ...state.sync, token: '', queue: [] }, exportedAt: new Date().toISOString() };
+  return JSON.stringify(out, null, 2);
 }
 
 export function exportFilename() {

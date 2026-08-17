@@ -30,6 +30,9 @@ jobs:
       - name: Run engine tests
         run: node --test app/js/engine.test.mjs
 
+      - name: Run sync tests
+        run: node --test app/js/sync.test.mjs
+
       # enablement creates the Pages site on first run. Without it this step
       # 404s on a repo where Pages has never been turned on in Settings.
       - uses: actions/configure-pages@v5

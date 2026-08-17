@@ -15,6 +15,7 @@ import { RPE_SCALE, REST_GUIDE } from '../templates.js';
 import { sessionBriefing } from '../coach.js';
 import { optionsForSlot, SLOT_INFO, byId } from '../exercises.js';
 import * as timer from '../timer.js';
+import * as sync from '../sync.js';
 
 let expanded = null;      // slotKey of the open exercise card
 let unsubTimer = null;
@@ -574,6 +575,12 @@ async function finish(ctx) {
 
   timer.stop();
   expanded = null;
+
+  // Queue then fire and forget: the summary sheet must appear instantly whether
+  // or not there is signal in the gym, and the queue survives a closed app.
+  sync.enqueue(ses.id);
+  sync.flush({ reason: 'session-finish' });
+
   // Re-read from the store: `ses` is the pre-completion copy, so it has no
   // endedAt and its unlogged sets have not been dropped yet.
   showSummary(ctx, ses.id, notes);

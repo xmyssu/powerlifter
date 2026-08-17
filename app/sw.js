@@ -6,7 +6,7 @@
    VERSION whenever the assets change.
    ========================================================================== */
 
-const VERSION = 'v12';
+const VERSION = 'v13';
 const CACHE = `powerlifter-${VERSION}`;
 
 const ASSETS = [
@@ -23,6 +23,7 @@ const ASSETS = [
   './js/exercises.js',
   './js/coach.js',
   './js/timer.js',
+  './js/sync.js',
   './js/ui.js',
   './js/views/onboarding.js',
   './js/views/today.js',

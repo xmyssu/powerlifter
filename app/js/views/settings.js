@@ -8,6 +8,7 @@ import { templateOf, buildProgram, volumeAudit, convertUnits } from '../program.
 import { EMPHASIS, TEMPLATES, INTERMEDIATE_PL, INTERMEDIATE_PL_3DAY, ADVANCED_ACCUMULATION, ADVANCED_INTENSIFICATION } from '../templates.js';
 import { optionsForSlot, SLOT_INFO, byId } from '../exercises.js';
 import { todayISO } from '../store.js';
+import * as sync from '../sync.js';
 import { APP_VERSION, canInstall, promptInstall } from '../app.js';
 
 const LIFTS = [
@@ -112,13 +113,21 @@ function view(ctx) {
       <div class="stack-sm">
         <div class="eyebrow">Your data</div>
         <div class="banner">
-          Everything lives on this device only. There is no account and no server, which means
-          nobody else can see it — and also that nothing recovers it if you clear your browser data.
-          Export a backup now and then.
+          ${raw(st.sync.enabled
+            ? `Your history lives on this device and in your own sheet. The file export below is still
+               the one copy that needs nothing else to be readable — worth taking now and then.`
+            : `Everything lives on this device only. There is no account and no server, which means
+               nobody else can see it — and also that nothing recovers it if you clear your browser data.
+               Export a backup now and then, or set up cloud sync below.`)}
         </div>
         <button class="btn btn--ghost btn--block" data-act="export">${raw(icon('download'))} Export backup</button>
         <button class="btn btn--ghost btn--block" data-act="import">${raw(icon('upload'))} Restore from backup</button>
         ${raw(st.settings.lastBackupAt ? `<p class="cite">Last export ${esc(fmtDate(st.settings.lastBackupAt.slice(0, 10)))}.</p>` : '')}
+      </div>
+
+      <div class="stack-sm">
+        <div class="eyebrow">Cloud sync</div>
+        <div class="card" data-syncpanel>${raw(syncCard(st))}</div>
       </div>
 
       <div class="stack-sm">
@@ -392,6 +401,160 @@ function openMaxes(ctx) {
   });
 }
 
+/* ---- cloud sync -------------------------------------------------------- */
+
+/**
+ * Rendered on its own so the status line can repaint on every sync event
+ * without redrawing the whole settings screen (and stealing input focus).
+ */
+function syncCard(st) {
+  const c = st.sync;
+  const pending = c.queue.length;
+
+  if (!c.enabled) {
+    return `<div class="stack-sm">
+      <p class="small muted">Push every finished session to your own Google Sheet — a table you can
+      chart, plus a full backup that restores this app onto a new phone. Optionally posts each
+      session to a Discord channel.</p>
+      <button class="btn btn--primary btn--block" data-act="syncsetup">Set up cloud sync</button>
+      <p class="cite">You will need the web app URL and token from the sheet's script. Setup notes are
+      in <span class="mono">server/appsscript/README.md</span>.</p>
+    </div>`;
+  }
+
+  const status = c.syncing ? { tone: null, text: 'Syncing…' }
+    : pending && c.lastError ? { tone: 'bad', text: `${pending} waiting — ${c.lastError}` }
+    : pending ? { tone: 'warn', text: `${pending} session${pending === 1 ? '' : 's'} waiting to upload` }
+    : c.lastError ? { tone: 'bad', text: c.lastError }
+    : c.lastSyncAt ? { tone: 'good', text: `Synced ${relTime(c.lastSyncAt)}` }
+    : { tone: 'warn', text: 'Never synced yet' };
+
+  return `<div class="stack-sm">
+    <div class="kv">
+      <span class="kv__k grow">Status</span>
+      <span class="kv__v" style="${status.tone ? `color:var(--${status.tone});` : ''}text-align:right;max-width:60%">${esc(status.text)}</span>
+    </div>
+    ${c.lastResult?.sheetUrl ? `<a class="btn btn--ghost btn--block" href="${esc(c.lastResult.sheetUrl)}" target="_blank" rel="noopener">${icon('progress')} Open the sheet</a>` : ''}
+    <button class="btn btn--ghost btn--block" data-act="syncnow" ${c.syncing ? 'disabled' : ''}>${icon('upload')} ${pending ? `Sync ${pending} now` : 'Re-sync everything'}</button>
+    <button class="btn btn--ghost btn--block" data-act="syncrestore">${icon('download')} Restore from the sheet</button>
+    <button class="btn btn--ghost btn--block" data-act="syncsetup">Change URL or token</button>
+    <p class="cite">Sessions upload when you finish one, and any that were queued go up next time you
+    open the app with signal. Logging never waits for the network.</p>
+  </div>`;
+}
+
+function relTime(iso) {
+  const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins} min ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return fmtDate(iso.slice(0, 10));
+}
+
+function openSyncSetup(ctx) {
+  const c = ctx.state.sync;
+  sheet({
+    title: 'Cloud sync',
+    body: `<div class="stack">
+      <p class="small muted">Both of these come from the Apps Script you deployed on your sheet.
+      Setup notes live in <span class="mono">server/appsscript/README.md</span>.</p>
+      <div class="field">
+        <div class="field__label">Web app URL</div>
+        <input class="input mono" data-endpoint type="url" inputmode="url" autocapitalize="off"
+          spellcheck="false" placeholder="https://script.google.com/macros/s/…/exec"
+          value="${esc(c.endpoint || '')}">
+        <div class="field__hint">Must end in <span class="mono">/exec</span>.</div>
+      </div>
+      <div class="field">
+        <div class="field__label">Token</div>
+        <input class="input mono" data-token type="text" autocapitalize="off" spellcheck="false"
+          placeholder="the SYNC_TOKEN script property" value="${esc(c.token || '')}">
+        <div class="field__hint">Stays on this device. It is stripped out of every backup file.</div>
+      </div>
+      <div data-result></div>
+      <button class="btn btn--ghost btn--block" data-test>Test the connection</button>
+      <button class="btn btn--primary btn--block" data-save>${c.enabled ? 'Save' : 'Turn on sync'}</button>
+      ${c.enabled ? '<button class="btn btn--danger btn--block" data-off>Turn sync off</button>' : ''}
+    </div>`,
+    onMount(root, close) {
+      const endpointEl = $('[data-endpoint]', root);
+      const tokenEl = $('[data-token]', root);
+      const resultEl = $('[data-result]', root);
+      const show = (kind, text) => {
+        resultEl.innerHTML = `<div class="insight insight--${kind}"><div>${esc(text)}</div></div>`;
+      };
+      const read = () => ({ endpoint: endpointEl.value, token: tokenEl.value });
+
+      $('[data-test]', root).onclick = async (ev) => {
+        const btn = ev.currentTarget;
+        sync.configure(read());
+        btn.disabled = true; btn.textContent = 'Testing…';
+        const res = await sync.test();
+        btn.disabled = false; btn.textContent = 'Test the connection';
+        if (!res.ok) { show('warn', res.error); return; }
+        show('good', `Connected. Discord webhook ${res.discord ? 'is configured' : 'is not set — sessions will sync but not post'}.`);
+      };
+
+      $('[data-save]', root).onclick = () => {
+        const { endpoint, token } = read();
+        if (!/^https:\/\/script\.google\.com\/.*\/exec$/.test(endpoint.trim())) {
+          show('warn', 'That does not look like an Apps Script web app URL ending in /exec.');
+          return;
+        }
+        if (!token.trim()) { show('warn', 'The token cannot be empty.'); return; }
+        const first = !ctx.state.sync.enabled;
+        sync.configure({ endpoint, token, enabled: true });
+        const n = first ? sync.enqueueAll() : ctx.state.sync.queue.length;
+        close();
+        ctx.refresh();
+        toast(first && n ? `Sync on — uploading ${n} session${n === 1 ? '' : 's'}.` : 'Sync settings saved.', 'good');
+        sync.flush({ force: true, reason: 'configured' });
+      };
+
+      $('[data-off]', root)?.addEventListener('click', () => {
+        sync.configure({ enabled: false });
+        close();
+        ctx.refresh();
+        toast('Sync off. Nothing new will be uploaded.');
+      });
+    },
+  });
+}
+
+async function doSyncNow(ctx) {
+  if (!sync.pendingCount()) sync.enqueueAll();
+  toast('Syncing…');
+  const res = await sync.flush({ force: true, reason: 'manual' });
+  if (res.ok) toast(`Synced ${res.pushed ?? 0} session${res.pushed === 1 ? '' : 's'}.`, 'good');
+  else if (res.skipped === 'offline') toast('No connection — it will go up automatically.', 'warn', 4000);
+  else toast(res.error || 'Sync failed.', 'bad', 5000);
+}
+
+async function doSyncRestore(ctx) {
+  toast('Fetching the latest snapshot…');
+  const got = await sync.pullLatest();
+  if (!got.ok) { toast(got.error, 'bad', 5000); return; }
+
+  const yes = await confirmSheet({
+    title: 'Restore from the sheet?',
+    message: `The snapshot holds ${got.sessions ?? '?'} session${got.sessions === 1 ? '' : 's'}`
+      + `${got.savedAt ? `, saved ${relTime(got.savedAt)}` : ''}. This replaces everything currently `
+      + 'in the app — program, history and settings.',
+    confirmLabel: 'Restore', danger: true,
+  });
+  if (!yes) return;
+
+  // The snapshot deliberately carries no token, so hold onto the credentials
+  // that just fetched it rather than making the lifter retype them.
+  const { endpoint, token } = ctx.state.sync;
+  const res = ctx.store.importJSON(got.text);
+  if (!res.ok) { toast(res.error, 'bad', 5000); return; }
+  sync.configure({ endpoint, token, enabled: true });
+  toast(`Restored ${res.summary.sessions} session${res.summary.sessions === 1 ? '' : 's'}.`, 'good');
+  ctx.go('today');
+}
+
 /* ---- backup ----------------------------------------------------------- */
 
 function doExport(ctx) {
@@ -417,6 +580,8 @@ function doImport(ctx) {
 }
 
 /* ---- mount ----------------------------------------------------------- */
+
+let unsubSync = null;
 
 function mount(root, ctx) {
   const st = ctx.state;
@@ -462,6 +627,9 @@ function mount(root, ctx) {
     maxes: () => openMaxes(ctx),
     export: () => doExport(ctx),
     import: () => doImport(ctx),
+    syncsetup: () => openSyncSetup(ctx),
+    syncnow: () => doSyncNow(ctx),
+    syncrestore: () => doSyncRestore(ctx),
     install: async () => { await promptInstall(); ctx.refresh(); },
     reset: async () => {
       const yes = await confirmSheet({
@@ -481,7 +649,20 @@ function mount(root, ctx) {
       location.reload();
     },
   };
-  $$('[data-act]', root).forEach((b) => b.onclick = () => acts[b.dataset.act]?.());
+  const bindActs = (scope) => $$('[data-act]', scope).forEach((b) => b.onclick = () => acts[b.dataset.act]?.());
+  bindActs(root);
+
+  // The sync panel repaints on its own so a status change mid-upload does not
+  // redraw the whole screen — which would drop focus out of any open input.
+  unsubSync?.();
+  const panel = $('[data-syncpanel]', root);
+  if (panel) {
+    unsubSync = sync.subscribe(() => {
+      if (!panel.isConnected) { unsubSync?.(); unsubSync = null; return; }
+      panel.innerHTML = syncCard(ctx.state);
+      bindActs(panel);
+    });
+  }
 }
 
 export default { id: 'settings', render: view, mount };

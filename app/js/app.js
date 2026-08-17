@@ -5,6 +5,7 @@
 import * as store from './store.js';
 import { $, icon, render, toast, esc } from './ui.js';
 import * as timer from './timer.js';
+import * as sync from './sync.js';
 
 import onboarding from './views/onboarding.js';
 import today from './views/today.js';
@@ -160,6 +161,7 @@ timer.setPrefs({
 });
 
 store.requestPersistence();
+sync.watch();
 
 if (!location.hash) location.hash = '#/today';
 draw();
