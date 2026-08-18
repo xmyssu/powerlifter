@@ -435,6 +435,7 @@ function syncCard(st) {
       <span class="kv__v" style="${status.tone ? `color:var(--${status.tone});` : ''}text-align:right;max-width:60%">${esc(status.text)}</span>
     </div>
     ${c.lastResult?.sheetUrl ? `<a class="btn btn--ghost btn--block" href="${esc(c.lastResult.sheetUrl)}" target="_blank" rel="noopener">${icon('progress')} Open the sheet</a>` : ''}
+    <a class="btn btn--ghost btn--block" href="dash.html" target="_blank" rel="noopener">${icon('trend')} Open the public dashboard</a>
     <button class="btn btn--ghost btn--block" data-act="syncnow" ${c.syncing ? 'disabled' : ''}>${icon('upload')} ${pending ? `Sync ${pending} now` : 'Re-sync everything'}</button>
     <button class="btn btn--ghost btn--block" data-act="syncrestore">${icon('download')} Restore from the sheet</button>
     <button class="btn btn--ghost btn--block" data-act="syncsetup">Change URL or token</button>
@@ -493,7 +494,8 @@ function openSyncSetup(ctx) {
         const res = await sync.test();
         btn.disabled = false; btn.textContent = 'Test the connection';
         if (!res.ok) { show('warn', res.error); return; }
-        show('good', `Connected. Discord webhook ${res.discord ? 'is configured' : 'is not set — sessions will sync but not post'}.`);
+        show('good', `Connected. Discord ${res.discord ? 'is set up' : 'is not set up yet'}; `
+          + `public dashboard ${res.publish ? 'is set up' : 'is not set up yet'}.`);
       };
 
       $('[data-save]', root).onclick = () => {

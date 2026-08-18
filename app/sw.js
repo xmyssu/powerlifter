@@ -6,7 +6,7 @@
    VERSION whenever the assets change.
    ========================================================================== */
 
-const VERSION = 'v13';
+const VERSION = 'v14';
 const CACHE = `powerlifter-${VERSION}`;
 
 const ASSETS = [
@@ -62,6 +62,24 @@ self.addEventListener('fetch', (e) => {
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
   if (url.origin !== location.origin) return;
+
+  // The public dashboard and its data are network-first: the entire point of
+  // that page is to show the current numbers, and a cache-first hit would show
+  // last week's. Falls back to cache so it still opens on a dead connection.
+  if (url.pathname.endsWith('/dash.html') || url.pathname.includes('/data/')) {
+    e.respondWith(
+      fetch(req)
+        .then((res) => {
+          if (res && res.ok) {
+            const copy = res.clone();
+            caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
+          }
+          return res;
+        })
+        .catch(() => caches.match(req))
+    );
+    return;
+  }
 
   // Navigations: serve the shell so a cold offline launch works.
   if (req.mode === 'navigate') {

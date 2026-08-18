@@ -9,6 +9,9 @@
         phone restores exactly. `latest.json` is the one the app reads back.
      3. Posts one embed per finished session to a Discord webhook, exactly
         once per session, no matter how many times the app resends.
+     4. Commits the app's curated public projection to GitHub, which is what the
+        public dashboard reads. Opt-in: skipped unless GITHUB_TOKEN and
+        GITHUB_REPO are set.
 
    Everything is upsert-by-key, so a resync is always safe: rows get rewritten
    in place rather than duplicated.
@@ -81,6 +84,7 @@ function ping_() {
     sheetUrl: ss.getUrl(),
     sheetName: ss.getName(),
     discordConfigured: !!prop('DISCORD_WEBHOOK_URL'),
+    publishConfigured: !!(prop('GITHUB_TOKEN') && prop('GITHUB_REPO')),
     snapshots: countSnapshots_(),
   };
 }
@@ -124,6 +128,7 @@ function push_(body) {
 
     var snapshot = body.snapshot ? saveSnapshot_(body.snapshot, body.sessions || []) : null;
     var posted = postToDiscord_(body.discord || []);
+    var published = publishPublic_(body.public);
 
     return {
       sets: counts.sets,
@@ -133,6 +138,7 @@ function push_(body) {
       maxes: counts.maxes,
       discord: posted,
       snapshot: snapshot,
+      published: published,
       sheetUrl: SpreadsheetApp.getActiveSpreadsheet().getUrl(),
     };
   } finally {
@@ -285,6 +291,97 @@ function pull_() {
   var sessions = null;
   try { sessions = (JSON.parse(text).sessions || []).length; } catch (e) { /* report null */ }
   return { snapshot: text, savedAt: f.getLastUpdated().toISOString(), sessions: sessions };
+}
+
+/* ---- publishing the public dashboard file ------------------------------- */
+
+/**
+ * Commit the curated public projection into the GitHub repo, which redeploys
+ * Pages and updates the public dashboard.
+ *
+ * The app builds the projection (js/sync.js `publicSnapshot`) so that what is
+ * public is decided by an allowlist with tests around it, not by whatever this
+ * script happens to read off the sheet. This function is a dumb pipe: it does
+ * not inspect or add to the payload, it just commits the bytes it was handed.
+ *
+ * Needs two script properties. Skips silently if either is missing, so the
+ * dashboard is opt-in on top of a working sync rather than a prerequisite:
+ *   GITHUB_TOKEN — a fine-grained PAT with Contents: read+write on this one repo
+ *   GITHUB_REPO  — "owner/name", e.g. "xmyssu/powerlifter"
+ */
+var PUBLIC_PATH = 'app/data/stats.json';
+
+function publishPublic_(publicData) {
+  var token = prop('GITHUB_TOKEN');
+  var repo = prop('GITHUB_REPO');
+  if (!token || !repo || !publicData) return null;
+
+  var api = 'https://api.github.com/repos/' + repo + '/contents/' + PUBLIC_PATH;
+  var headers = {
+    Authorization: 'Bearer ' + token,
+    Accept: 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+  };
+
+  var body = JSON.stringify(publicData, null, 1);
+
+  // The API needs the blob's current sha to replace it, and omitting the sha on
+  // an existing path is a 422 rather than an overwrite.
+  var sha = null;
+  try {
+    var head = UrlFetchApp.fetch(api + '?ref=main', {
+      method: 'get', headers: headers, muteHttpExceptions: true,
+    });
+    if (head.getResponseCode() === 200) {
+      var existing = JSON.parse(head.getContentText());
+      sha = existing.sha;
+      // Nothing changed since the last push, so skip the commit entirely and
+      // save the repo a no-op Pages rebuild.
+      if (existing.content && sameContent_(existing.content, body)) {
+        return { skipped: 'unchanged' };
+      }
+    }
+  } catch (err) {
+    // No sha means we attempt a create; a real conflict surfaces below.
+  }
+
+  var payload = {
+    message: 'Update public stats',
+    content: Utilities.base64Encode(body, Utilities.Charset.UTF_8),
+    branch: 'main',
+  };
+  if (sha) payload.sha = sha;
+
+  var res = UrlFetchApp.fetch(api, {
+    method: 'put',
+    headers: headers,
+    contentType: 'application/json',
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true,
+  });
+  var code = res.getResponseCode();
+  if (code >= 200 && code < 300) {
+    return { committed: true, bytes: body.length };
+  }
+  // Reported, never thrown: the sheet write already succeeded, and a broken
+  // token must not make the phone think its workout failed to sync.
+  return { error: 'GitHub returned ' + code, detail: res.getContentText().slice(0, 200) };
+}
+
+/** Compare the API's base64 blob against what we are about to write. */
+function sameContent_(base64FromApi, text) {
+  try {
+    var current = Utilities.newBlob(Utilities.base64Decode(base64FromApi.replace(/\n/g, ''))).getDataAsString();
+    // The generated timestamp changes every push, so comparing raw text would
+    // never match. Ignore it and compare the data that actually matters.
+    return strip_(current) === strip_(text);
+  } catch (err) {
+    return false;
+  }
+}
+
+function strip_(text) {
+  return text.replace(/"generatedAt"\s*:\s*"[^"]*",?/, '');
 }
 
 /* ---- Discord ----------------------------------------------------------- */

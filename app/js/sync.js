@@ -19,6 +19,7 @@
 import * as store from './store.js';
 import { convertLoad, e1RM, fmtLoadBare, fmtRPE } from './rpe.js';
 import { templateOf, slotHistory } from './program.js';
+import { strengthTrend } from './coach.js';
 import { nameOf } from './exercises.js';
 
 /** Bumped when the payload shape changes in a way the script must know about. */
@@ -196,7 +197,7 @@ export async function test() {
   try {
     const res = await post({ app: 'powerlifter', v: PROTOCOL, kind: 'ping', token: config().token });
     patch({ lastError: null, failures: 0, nextAttemptAt: null, lastResult: { ...config().lastResult, sheetUrl: res.sheetUrl || null } });
-    return { ok: true, sheetUrl: res.sheetUrl || null, discord: !!res.discordConfigured };
+    return { ok: true, sheetUrl: res.sheetUrl || null, discord: !!res.discordConfigured, publish: !!res.publishConfigured };
   } catch (err) {
     patch({ lastError: String(err.message || err) });
     return { ok: false, error: String(err.message || err) };
@@ -249,6 +250,7 @@ function buildPayload(st, ids, reason) {
       reps: st.maxes[lift]?.reps ?? null,
     })).filter((m) => m.value != null),
     discord: sessions.map((ses) => discordCard(st, ses)),
+    public: publicSnapshot(st),
     snapshot: snapshotJSON(),
   };
 }
@@ -309,13 +311,29 @@ function setRows(st, ses) {
   return rows;
 }
 
+/**
+ * Elapsed time, or nothing.
+ *
+ * Forgetting to tap Finish until the next day is a real and unremarkable thing
+ * to do, and it produces a "session" of 600-odd minutes. Left alone that number
+ * lands in the public dashboard as fact and wrecks the axis of anything plotting
+ * duration, so past the point where it stops being a workout we report nothing
+ * rather than something false.
+ */
+const MAX_SESSION_MINUTES = 480;
+
+function durationMinutes(ses) {
+  if (!ses.startedAt || !ses.endedAt) return null;
+  const mins = Math.round((new Date(ses.endedAt) - new Date(ses.startedAt)) / 60000);
+  if (!(mins >= 0) || mins > MAX_SESSION_MINUTES) return null;
+  return mins;
+}
+
 function stats(st, ses) {
   const unit = ses.units || st.profile.units;
   const sets = ses.entries.flatMap((e) => (e.sets || []).filter((s) => s.done));
   const scored = sets.filter((s) => s.rpe != null);
   const tonnage = sets.reduce((n, s) => n + (s.load || 0) * (s.reps || 0), 0);
-  const seconds = ses.startedAt && ses.endedAt
-    ? Math.round((new Date(ses.endedAt) - new Date(ses.startedAt)) / 1000) : null;
   return {
     unit,
     sets: sets.length,
@@ -323,7 +341,7 @@ function stats(st, ses) {
     tonnage: Math.round(tonnage),
     tonnageKg: Math.round(convertLoad(tonnage, unit, 'kg')),
     avgRPE: scored.length ? round3(scored.reduce((n, s) => n + s.rpe, 0) / scored.length) : null,
-    minutes: seconds == null ? null : Math.round(seconds / 60),
+    minutes: durationMinutes(ses),
   };
 }
 
@@ -404,6 +422,189 @@ function discordCard(st, ses) {
     lines,
     prs: prsFor(st, ses),
     notes: ses.notes || '',
+  };
+}
+
+/* ---- the public projection --------------------------------------------- */
+
+/**
+ * What the world is allowed to see.
+ *
+ * This is an allowlist, not a redaction pass, and that direction is the whole
+ * point: a field only becomes public because it is named here. Adding something
+ * to the log can never quietly widen what is published, and the tests assert the
+ * excluded fields by name so a future edit that leaks one fails CI.
+ *
+ * Out, deliberately: session and exercise notes (free text, unpredictable),
+ * readiness check-ins (sleep, stress, soreness — health data), the session
+ * difficulty rating, and everything in `profile` except a first name.
+ *
+ * Every number is kilos. A lifter who logs one lift in pounds still gets one
+ * continuous axis, and the dashboard converts for display if asked.
+ */
+export function publicSnapshot(st) {
+  const done = st.sessions.filter((s) => s.status === 'done').sort(byDate);
+  const from = st.profile.units;
+  const kg = (v) => (v == null ? null : round1(convertLoad(v, from, 'kg')));
+
+  return {
+    v: 1,
+    generatedAt: new Date().toISOString(),
+    athlete: { firstName: (st.profile.name || '').trim().split(/\s+/)[0] || null },
+    unit: 'kg',
+    displayUnit: from,
+    totals: totals(st, done),
+    lifts: LIFTS.map((l) => liftBlock(st, l, kg)),
+    prs: prTable(st, done),
+    lastSession: done.length ? sessionDetail(st, done[done.length - 1]) : null,
+    sessions: done.map((ses) => sessionSummary(st, ses)),
+    bodyweight: (st.bodyweightLog || []).slice().sort(byDate).map((b) => ({ date: b.date, kg: kg(b.value) })),
+  };
+}
+
+const LIFTS = [
+  { lift: 'squat', label: 'Squat' },
+  { lift: 'bench', label: 'Bench press' },
+  { lift: 'deadlift', label: 'Deadlift' },
+];
+
+const byDate = (a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
+const round1 = (n) => Math.round(n * 10) / 10;
+
+function totals(st, done) {
+  let sets = 0, reps = 0, tonnage = 0;
+  for (const ses of done) {
+    const u = ses.units || st.profile.units;
+    for (const e of ses.entries) {
+      for (const s of e.sets) {
+        if (!s.done) continue;
+        sets += 1;
+        reps += s.reps || 0;
+        tonnage += convertLoad(s.load || 0, u, 'kg') * (s.reps || 0);
+      }
+    }
+  }
+  return {
+    sessions: done.length,
+    sets,
+    reps,
+    tonnage: Math.round(tonnage),
+    firstDate: done.length ? done[0].date : null,
+    lastDate: done.length ? done[done.length - 1].date : null,
+  };
+}
+
+/**
+ * A lift's headline number and its history.
+ *
+ * `soft` and `deload` ride along per point because the app refuses to treat all
+ * estimates alike — one from a set of nine, or from a deliberately light deload
+ * week, is not evidence of peak capability. The dashboard renders those points
+ * differently rather than letting them bend the line.
+ */
+function liftBlock(st, { lift, label }, kg) {
+  const raw = strengthTrend(st, lift);
+  const trend = raw.map((p) => ({
+    date: p.date,
+    value: kg(p.value),
+    deload: !!p.deload,
+    soft: !!p.estimatedFromHighReps,
+  }));
+
+  // The headline is the best hard estimate, on the same terms the app's own
+  // Progress tab uses: nothing from a deload, nothing from a high-rep set.
+  const hard = trend.filter((p) => !p.deload && !p.soft);
+  const best = hard.length ? hard.reduce((a, b) => (b.value > a.value ? b : a)) : null;
+  const tested = st.maxes[lift] || {};
+
+  return {
+    lift,
+    label,
+    e1rm: best ? best.value : null,
+    e1rmDate: best ? best.date : null,
+    tested: tested.value != null ? kg(tested.value) : null,
+    testedDate: tested.date || null,
+    change28: change(hard, 28),
+    trend,
+  };
+}
+
+/** Movement in the last N days, against the best estimate before that window. */
+function change(points, days) {
+  if (points.length < 2) return null;
+  const cutoff = new Date(Date.now() - days * 864e5).toISOString().slice(0, 10);
+  const recent = points.filter((p) => p.date >= cutoff);
+  const older = points.filter((p) => p.date < cutoff);
+  if (!recent.length || !older.length) return null;
+  const now = Math.max(...recent.map((p) => p.value));
+  const was = Math.max(...older.map((p) => p.value));
+  return round1(now - was);
+}
+
+/** Best estimate per exercise, and the day it happened. */
+function prTable(st, done) {
+  const best = new Map();
+  for (const ses of done) {
+    const u = ses.units || st.profile.units;
+    for (const e of ses.entries) {
+      for (const s of e.sets) {
+        if (!s.done || !(s.load > 0) || !(s.reps > 0) || s.rpe == null) continue;
+        // Above six reps the estimate is not trustworthy enough to call a record.
+        if (s.reps > 6) continue;
+        const est = e1RM(convertLoad(s.load, u, 'kg'), s.reps, s.rpe);
+        if (!(est > 0)) continue;
+        const cur = best.get(e.exerciseId);
+        if (!cur || est > cur.e1rm) {
+          best.set(e.exerciseId, {
+            exercise: nameOf(e.exerciseId),
+            e1rm: round1(est),
+            date: ses.date,
+            load: round1(convertLoad(s.load, u, 'kg')),
+            reps: s.reps,
+            rpe: s.rpe,
+          });
+        }
+      }
+    }
+  }
+  return [...best.values()].sort((a, b) => b.e1rm - a.e1rm);
+}
+
+function sessionSummary(st, ses) {
+  const u = ses.units || st.profile.units;
+  const logged = ses.entries.flatMap((e) => e.sets.filter((s) => s.done).map((s) => ({ s, e })));
+  const scored = logged.filter((x) => x.s.rpe != null);
+  const targeted = logged.filter((x) => x.e.targetRPE != null);
+  return {
+    date: ses.date,
+    label: labelFor(st, ses),
+    cycle: ses.cycle, week: ses.week, day: ses.day, phase: ses.phase,
+    sets: logged.length,
+    reps: logged.reduce((n, x) => n + (x.s.reps || 0), 0),
+    tonnage: Math.round(logged.reduce((n, x) => n + convertLoad(x.s.load || 0, u, 'kg') * (x.s.reps || 0), 0)),
+    avgRPE: scored.length ? round1(scored.reduce((n, x) => n + x.s.rpe, 0) / scored.length) : null,
+    // Paired with avgRPE this answers a question the raw numbers cannot: are you
+    // actually hitting the prescribed effort, or drifting above or below it?
+    avgTargetRPE: targeted.length ? round1(targeted.reduce((n, x) => n + x.e.targetRPE, 0) / targeted.length) : null,
+    minutes: durationMinutes(ses),
+  };
+}
+
+function sessionDetail(st, ses) {
+  const u = ses.units || st.profile.units;
+  return {
+    ...sessionSummary(st, ses),
+    unit: u,
+    lifts: ses.entries.map((e) => {
+      const done = e.sets.filter((s) => s.done);
+      if (!done.length) return null;
+      return {
+        exercise: nameOf(e.exerciseId),
+        detail: done.map((s) => `${fmtLoadBare(s.load)}×${s.reps ?? '?'}${s.rpe != null ? `@${fmtRPE(s.rpe)}` : ''}`).join(', '),
+        topKg: round1(Math.max(...done.map((s) => convertLoad(s.load || 0, u, 'kg')))),
+      };
+    }).filter(Boolean),
+    prs: prsFor(st, ses).map((p) => ({ exercise: p.exercise, gain: p.gain, e1rm: p.e1rm })),
   };
 }
 

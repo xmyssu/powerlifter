@@ -1,0 +1,53 @@
+{
+ "v": 1,
+ "generatedAt": null,
+ "athlete": {
+  "firstName": null
+ },
+ "unit": "kg",
+ "displayUnit": "kg",
+ "totals": {
+  "sessions": 0,
+  "sets": 0,
+  "reps": 0,
+  "tonnage": 0,
+  "firstDate": null,
+  "lastDate": null
+ },
+ "lifts": [
+  {
+   "lift": "squat",
+   "label": "Squat",
+   "e1rm": null,
+   "e1rmDate": null,
+   "tested": null,
+   "testedDate": null,
+   "change28": null,
+   "trend": []
+  },
+  {
+   "lift": "bench",
+   "label": "Bench press",
+   "e1rm": null,
+   "e1rmDate": null,
+   "tested": null,
+   "testedDate": null,
+   "change28": null,
+   "trend": []
+  },
+  {
+   "lift": "deadlift",
+   "label": "Deadlift",
+   "e1rm": null,
+   "e1rmDate": null,
+   "tested": null,
+   "testedDate": null,
+   "change28": null,
+   "trend": []
+  }
+ ],
+ "prs": [],
+ "lastSession": null,
+ "sessions": [],
+ "bodyweight": []
+}

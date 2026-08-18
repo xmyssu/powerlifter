@@ -86,6 +86,7 @@ function seed(sessions) {
   store.replaceState({
     ...base,
     onboarded: true,
+    profile: { ...base.profile, name: 'Daniel Orlov', units: 'kg', bodyweight: 84 },
     program: { templateId: 'intermediatePL', slots: {}, choices: {}, cursor: { cycle: 1, week: 2, day: 1, phase: 'load' } },
     maxes: {
       squat: { value: 170, date: '2026-08-01', source: 'estimate', reps: 5 },
@@ -353,6 +354,124 @@ hr('9. Backfill suppression');
   ok(!isFresh({ endedAt: 'not a date' }), 'so is an unparseable one');
   ok(isFresh({ endedAt: null, date: new Date().toISOString().slice(0, 10) }),
      'falling back to the date when endedAt is missing');
+}
+
+
+/* ======================================================================
+   10. The public projection — an allowlist, not a redaction
+   ====================================================================== */
+hr('10. What the public dashboard is allowed to see');
+{
+  seed([session('ses_old', '2026-08-10', 140), session('ses_new', '2026-08-15', 147.5)]);
+  sync.enqueueAll();
+  await sync.flush({ force: true });
+
+  const pub = sent.body.public;
+  const wire = JSON.stringify(pub);
+  ok(!!pub, 'a public projection rides along with every push');
+
+  // --- the things that must never get out -------------------------------
+  // Canaries planted in the fixture: a session note, an exercise note, a
+  // readiness score and a full surname. If any of these appear the allowlist
+  // has sprung a leak, and it will have sprung it into a public URL.
+  ok(!/Slept badly/.test(wire), 'session notes never reach the public file');
+  ok(!/brace harder/.test(wire), 'nor do per-exercise notes');
+  ok(!/"notes"/.test(wire), 'there is no notes field at all');
+  ok(!/"readiness"/.test(wire), 'readiness check-ins are absent entirely');
+  ok(!/"sleep"|"stress"|"soreness"|"motivation"/.test(wire), 'and so is every readiness component');
+  ok(!/"sessionRPE"/.test(wire), 'the session difficulty rating stays private');
+  ok(!/Orlov/.test(wire), 'the surname never leaves the device');
+  ok(!/"token"|supersecret|\/exec/.test(wire), 'no credentials or endpoints');
+  ok(!/"queue"|"lastError"|"endpoint"/.test(wire), 'and none of the sync plumbing');
+  eq(pub.athlete.firstName, 'Daniel', 'just a first name');
+
+  // --- the things that must be there ------------------------------------
+  eq(pub.unit, 'kg', 'everything is stated in kilos');
+  eq(pub.totals.sessions, 2, 'the totals count sessions');
+  eq(pub.totals.sets, 8, 'and logged sets only');
+  ok(pub.totals.tonnage > 0, 'and total tonnage');
+  eq(pub.totals.firstDate, '2026-08-10', 'with the date the log starts');
+
+  eq(pub.lifts.length, 3, 'all three competition lifts get a block');
+  const squat = pub.lifts.find((l) => l.lift === 'squat');
+  ok(squat.e1rm > 0, 'squat has a headline estimated max', squat.e1rm);
+  eq(squat.trend.length, 2, 'with one trend point per session');
+  ok(squat.trend.every((p) => typeof p.value === 'number' && 'deload' in p && 'soft' in p),
+     'and each point says whether it is trustworthy');
+  eq(squat.tested, 170, 'the tested max comes along for reference');
+
+  ok(pub.prs.length > 0, 'there is a PR table');
+  ok(pub.prs.every((p, i, a) => i === 0 || a[i - 1].e1rm >= p.e1rm), 'sorted strongest first');
+  ok(pub.prs.every((p) => p.exercise && p.date && p.reps && p.load > 0), 'each row is complete');
+  ok(pub.prs.some((p) => p.exercise === 'Low-Bar Back Squat'), 'named by exercise, not id');
+
+  eq(pub.lastSession.date, '2026-08-15', 'the last session is the most recent one');
+  eq(pub.lastSession.lifts.length, 2, 'with a line per exercise worked');
+  ok(/147\.5×5@8/.test(pub.lastSession.lifts[0].detail), 'showing loads, reps and RPE');
+  eq(pub.sessions.length, 2, 'and every session gets a summary row');
+  ok(pub.sessions[0].date < pub.sessions[1].date, 'in chronological order');
+  ok(pub.sessions[1].avgRPE > 0 && pub.sessions[1].avgTargetRPE > 0,
+     'each carrying actual and prescribed RPE, so calibration is chartable');
+
+  eq(pub.bodyweight.length, 1, 'bodyweight is included, as chosen');
+  eq(pub.bodyweight[0].kg, 84.2, 'in kilos');
+}
+
+/* ======================================================================
+   11. Pounds must not leak into a kilo file
+   ====================================================================== */
+hr('11. The public file is kilos, whatever you lifted in');
+{
+  seed([session('ses_lb', '2026-08-16', 315, 'lb')]);
+  store.update((s) => { s.profile.units = 'lb'; });
+  sync.enqueueAll();
+  await sync.flush({ force: true });
+
+  const pub = sent.body.public;
+  eq(pub.unit, 'kg', 'still declares kilos');
+  eq(pub.displayUnit, 'lb', 'while recording what the lifter thinks in');
+  const squat = pub.lifts.find((l) => l.lift === 'squat');
+  ok(squat.e1rm > 150 && squat.e1rm < 200,
+     'a 315lb triple reads as a ~175kg estimate, not a 385 one', squat.e1rm);
+  const top = pub.lastSession.lifts[0].topKg;
+  eq(top, 142.9, 'top set converted to kilos, rounded for display');
+  near(pub.bodyweight[0].kg, 38.2, 'bodyweight converted too', 0.2);
+  ok(pub.prs.every((p) => p.load < 200), 'PR loads are kilos, not raw pounds');
+}
+
+
+/* ======================================================================
+   12. A forgotten Finish tap must not become a 10-hour workout
+   ====================================================================== */
+hr('12. Session duration sanity');
+{
+  const late = session('ses_late', '2026-08-15', 140);
+  // Started in the evening, finished the following afternoon — the lifter went
+  // home and tapped Finish the next day. Real, and common enough to matter.
+  late.endedAt = '2026-08-16T14:00:00.000Z';
+  seed([late]);
+  sync.enqueueAll();
+  await sync.flush({ force: true });
+
+  eq(sent.body.sessions[0].minutes, null, 'an implausible duration is reported as unknown, not as fact');
+  eq(sent.body.public.sessions[0].minutes, null, 'and the public dashboard never sees it either');
+  eq(sent.body.discord[0].minutes, null, 'nor does Discord');
+  ok(sent.body.sessions[0].sets > 0, 'while everything else about the session is kept');
+
+  // The boundary either side, so the clamp is not silently swallowing real ones.
+  const long = session('ses_long', '2026-08-15', 140);
+  long.endedAt = new Date(new Date(long.startedAt).getTime() + 470 * 60e3).toISOString();
+  seed([long]);
+  sync.enqueueAll();
+  await sync.flush({ force: true });
+  eq(sent.body.sessions[0].minutes, 470, 'a genuinely long session is still reported');
+
+  const backwards = session('ses_back', '2026-08-15', 140);
+  backwards.endedAt = '2026-08-14T10:00:00.000Z';
+  seed([backwards]);
+  sync.enqueueAll();
+  await sync.flush({ force: true });
+  eq(sent.body.sessions[0].minutes, null, 'and a negative one is dropped rather than shown');
 }
 
 /* ======================================================================

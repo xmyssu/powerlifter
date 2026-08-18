@@ -94,6 +94,59 @@ without training, log a session today — even a single set — and it'll post. 
 you'd rather see an old one, clear that session's `discordPostedAt` cell and
 temporarily raise `FRESH_HOURS` at the top of `Code.gs` (then redeploy).
 
+
+## 6. The public dashboard (optional)
+
+A page anyone can open — `https://<your-github-user>.github.io/powerlifter/dash.html` —
+showing estimated maxes, trends, volume, consistency and PRs. It updates itself
+after every sync.
+
+**What is on it, and what is not.** The app builds a curated file
+(`publicSnapshot` in `app/js/sync.js`) containing only: lifts, loads, reps, RPE,
+dates, estimated maxes, PRs and bodyweight. Deliberately excluded — and asserted
+by name in `sync.test.mjs`, so a future change that leaks one fails CI:
+
+- session notes and per-exercise notes (free text)
+- readiness check-ins (sleep, stress, soreness, motivation)
+- the session difficulty rating
+- your surname — only a first name is published
+
+It is an allowlist, so a new field added to the log never becomes public by
+accident. Everything is in kilograms; the page has a kg/lb toggle.
+
+**Bear in mind it is genuinely public.** Search engines index it and archive
+sites cache it, so removing it later does not reliably un-publish it.
+
+### Setup
+
+1. Make a fine-grained personal access token:
+   [github.com/settings/personal-access-tokens/new](https://github.com/settings/personal-access-tokens/new)
+   - Repository access: **Only select repositories** → your `powerlifter` repo
+   - Permissions → Repository permissions → **Contents: Read and write**
+   - Nothing else. Set an expiry you are happy to renew.
+2. In Apps Script: **Project Settings › Script properties**, add both:
+   - `GITHUB_TOKEN` — the token you just made
+   - `GITHUB_REPO` — `owner/name`, e.g. `xmyssu/powerlifter`
+3. Save. No redeploy needed.
+
+Sync once, and the script commits `app/data/stats.json`, which redeploys Pages.
+The dashboard is live about 40 seconds later. **Settings › Cloud sync › Test the
+connection** confirms whether publishing is configured.
+
+Leave those two properties unset and nothing is published — the dashboard is
+opt-in on top of a working sync, and the committed `stats.json` stays an empty
+placeholder.
+
+### Notes
+
+- Each sync is one commit and one Pages rebuild. At four workouts a week that is
+  nothing; the script also skips the commit entirely when the data has not
+  changed, so a re-sync does not churn the repo.
+- If the token expires, syncing still works — only publishing stops. The push
+  reports the failure rather than failing the workout.
+- To stop publishing, delete `GITHUB_TOKEN`. To take the dashboard down, delete
+  `app/dash.html` and `app/data/stats.json` from the repo.
+
 ---
 
 ## What lands where
