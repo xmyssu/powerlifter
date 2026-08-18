@@ -1,6 +1,6 @@
 {
  "v": 1,
- "generatedAt": "2026-08-18T16:24:38.863Z",
+ "generatedAt": "2026-08-18T18:06:47.456Z",
  "athlete": {
   "firstName": null
  },
@@ -9,8 +9,8 @@
  "totals": {
   "sessions": 8,
   "sets": 84,
-  "reps": 543,
-  "tonnage": 41649,
+  "reps": 513,
+  "tonnage": 40209,
   "firstDate": "2026-08-05",
   "lastDate": "2026-08-17"
  },
@@ -264,8 +264,8 @@
    "day": 3,
    "phase": "load",
    "sets": 12,
-   "reps": 116,
-   "tonnage": 7806,
+   "reps": 86,
+   "tonnage": 6366,
    "avgRPE": 8,
    "avgTargetRPE": 8,
    "minutes": 97
