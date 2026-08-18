@@ -761,9 +761,25 @@ function render() {
           <span class="lift__name">Estimated total</span></div>
         <div class="lift__val">${fmt(totalE1rm, 0)}<small>${unit}</small></div>
         <div class="delta delta--flat"><span>squat + bench + deadlift</span></div>
-        <div class="lift__foot">${t.sessions} sessions over ${weeks} weeks ·
-          ${fmtInt(t.tonnage)} ${unit} lifted in total · ${t.reps.toLocaleString()} reps.</div>
+        <div class="lift__foot">The three competition lifts added together.</div>
       </div>
+    </div>
+
+    <div class="eyebrow">All time</div>
+    <div class="card">
+      <div class="stats">
+        <div><div class="stat__k">Sessions</div><div class="stat__v">${t.sessions.toLocaleString()}</div>
+          <div class="stat__s">over ${weeks} week${weeks === 1 ? '' : 's'}</div></div>
+        <div><div class="stat__k">Volume</div><div class="stat__v">${fmtInt(t.tonnage)}</div>
+          <div class="stat__s">${unit} lifted</div></div>
+        <div><div class="stat__k">Sets</div><div class="stat__v">${t.sets.toLocaleString()}</div>
+          <div class="stat__s">${t.reps.toLocaleString()} reps</div></div>
+        <div><div class="stat__k">Since</div><div class="stat__v" style="font-size:1.05rem">${esc(fmtDate(t.firstDate, { day: 'numeric', month: 'short', year: 'numeric' }))}</div>
+          <div class="stat__s">first logged session</div></div>
+      </div>
+      <p class="note">Volume is every logged set's weight multiplied by its reps, added up —
+        the standard measure of training work. It reaches the tens of tonnes quickly, which is
+        normal and not a typo.</p>
     </div>
 
     <div class="eyebrow">Last session</div>
