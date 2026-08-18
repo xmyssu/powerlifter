@@ -7,11 +7,12 @@
    explicit that estimates from high-rep sets are not trustworthy.
    ========================================================================== */
 
-import { html, raw, esc, icon, $, $$, sheet, fmtDate, sparkline, toast } from '../ui.js';
-import { fmtLoadBare, fmtRPE, e1RM, pctOf1RM, convertLoad } from '../rpe.js';
+import { html, raw, esc, icon, $, $$, sheet, fmtDate, sparkline, toast, confirmSheet } from '../ui.js';
+import { fmtLoadBare, fmtRPE, e1RM, pctOf1RM, convertLoad, parseNum, normalizeRPE, RPE_MIN, RPE_MAX } from '../rpe.js';
 import { strengthTrend, trendSummary } from '../coach.js';
 import { volumeAudit, templateOf, slotHistory, loadingWeeks } from '../program.js';
 import { byId } from '../exercises.js';
+import * as sync from '../sync.js';
 
 const LIFTS = [
   { key: 'squat', label: 'Squat' },
@@ -181,7 +182,7 @@ function historyTab(st) {
         <div class="hist__date">${esc(fmtDate(s.date))}</div>
         <div class="hist__body">
           <div class="hist__t">${esc(s.phase === 'deload' ? 'Deload' : `Cycle ${s.cycle} · Week ${s.week}`)} · Day ${s.day}${day ? ` · ${esc(day.label)}` : ''}</div>
-          <div class="hist__s">${sets.length} sets · ${Math.round(tonnage).toLocaleString()} ${esc(units)}</div>
+          <div class="hist__s">${sets.length} sets · ${Math.round(tonnage).toLocaleString()} ${esc(units)}${s.corrections?.length ? ' · corrected' : ''}</div>
         </div>
         ${icon('chevron', 'dim')}
       </button>`;
@@ -220,10 +221,180 @@ function openSession(ctx, id) {
           ${e.note ? `<p class="cite" style="margin-top:6px">${esc(e.note)}</p>` : ''}
         </div>`).join('')}
       ${ses.notes ? `<div class="card card--flat"><div class="eyebrow" style="margin-bottom:4px">Notes</div><div class="small">${esc(ses.notes)}</div></div>` : ''}
+      ${ses.corrections?.length ? `<div class="insight insight--warn">
+        <div class="insight__icon">${icon('warn')}</div>
+        <div><div class="insight__t">${ses.corrections.length} ${ses.corrections.length === 1 ? 'entry has' : 'entries have'} been corrected</div>
+        <div class="insight__b">${ses.corrections.slice(-6).map((c) =>
+          `${esc(byId(ses.entries.find((e) => e.slotKey === c.slotKey)?.exerciseId)?.short || c.slotKey)} set ${c.setIndex + 1}: `
+          + `${esc(c.field === 'load' ? 'weight' : c.field)} ${esc(String(c.from ?? '—'))} → ${esc(String(c.to ?? '—'))}`).join('<br>')}</div></div>
+      </div>` : ''}
+      <button class="btn btn--ghost btn--block" data-correct="${esc(ses.id)}">Correct a mis-typed entry</button>
     </div>`,
+    onMount(root, close) {
+      const btn = $('[data-correct]', root);
+      if (btn) btn.onclick = () => { close(); openCorrect(ctx, ses.id); };
+    },
   });
 }
 
+/* ---- correcting a logged entry ---------------------------------------- */
+
+/**
+ * Editing history is deliberately awkward.
+ *
+ * The log is evidence: it is what every load suggestion from here on is derived
+ * from, and a lifter who can casually round yesterday's numbers up is keeping a
+ * diary, not a training record. But typos are real — a rep count typed into the
+ * weight field survives forever and quietly bends every chart — and refusing to
+ * fix them is its own kind of dishonesty.
+ *
+ * So: reachable only from inside a session's own detail sheet, behind a
+ * confirmation that says what it does not fix, and every change is recorded on
+ * the session and shown afterwards. Nothing is edited invisibly.
+ */
+async function openCorrect(ctx, id) {
+  const st = ctx.state;
+  const ses = st.sessions.find((s) => s.id === id);
+  if (!ses) return;
+
+  const yes = await confirmSheet({
+    title: 'Correct a mistake?',
+    message: 'This is for fixing a genuine slip — a rep count typed into the weight box, '
+      + 'a load off by a decimal place. It is not for improving what happened.\n\n'
+      + 'Two things it will not do: it will not undo progression the app has already '
+      + 'worked out from these numbers, and it will not un-send anything already posted. '
+      + 'Every change is recorded on the session.',
+    confirmLabel: 'Let me correct it',
+  });
+  if (!yes) return;
+
+  const units = ses.units || st.profile.units;
+  const rows = [];
+  for (const e of ses.entries) {
+    e.sets.forEach((s, i) => { if (s.done) rows.push({ slotKey: e.slotKey, i, set: s, entry: e }); });
+  }
+
+  sheet({
+    title: `Correct — ${fmtDate(ses.date)}`,
+    body: `<div class="stack">
+      <div class="banner">Change only what was mis-typed. Leave everything else alone.</div>
+      ${ses.entries.map((e) => {
+        const done = e.sets.map((s, i) => ({ s, i })).filter((x) => x.s.done);
+        if (!done.length) return '';
+        return `<div>
+          <div class="row-between" style="margin-bottom:6px">
+            <b class="small">${esc(byId(e.exerciseId)?.short || e.slotKey)}</b>
+            <span class="tiny dim">target ${e.targetSets}×${e.targetReps ?? '—'}${e.targetRPE != null ? ` @ ${fmtRPE(e.targetRPE)}` : ''}</span>
+          </div>
+          <div class="stack-sm">
+            <div class="row" style="gap:8px;align-items:center">
+              <span style="width:18px;flex:0 0 auto"></span>
+              <span class="tiny dim" style="flex:1 1 0">${esc(units)}</span>
+              <span class="tiny dim" style="flex:1 1 0">reps</span>
+              <span class="tiny dim" style="flex:1 1 0">RPE</span>
+            </div>
+            ${done.map(({ s, i }) => `<div class="row" style="gap:8px;align-items:center">
+              <span class="dim mono tiny" style="width:18px;flex:0 0 auto">${i + 1}</span>
+              <input class="input input--num" style="flex:1 1 0" inputmode="decimal" value="${s.load ?? ''}"
+                aria-label="Set ${i + 1} weight in ${esc(units)}"
+                data-edit="load" data-slot="${esc(e.slotKey)}" data-i="${i}"
+                data-focus-key="l${esc(e.slotKey)}${i}">
+              <input class="input input--num" style="flex:1 1 0" inputmode="numeric" value="${s.reps ?? ''}"
+                aria-label="Set ${i + 1} reps"
+                data-edit="reps" data-slot="${esc(e.slotKey)}" data-i="${i}"
+                data-focus-key="r${esc(e.slotKey)}${i}">
+              <input class="input input--num" style="flex:1 1 0" inputmode="decimal" value="${s.rpe ?? ''}"
+                aria-label="Set ${i + 1} RPE"
+                data-edit="rpe" data-slot="${esc(e.slotKey)}" data-i="${i}"
+                data-focus-key="p${esc(e.slotKey)}${i}">
+            </div>`).join('')}
+          </div>
+        </div>`;
+      }).join('')}
+      <div data-err></div>
+      <button class="btn btn--primary btn--block" data-save>Save corrections</button>
+    </div>`,
+    onMount(root, close) {
+      const errEl = $('[data-err]', root);
+
+      $('[data-save]', root).onclick = () => {
+        const changes = [];
+        const problems = [];
+
+        for (const el of $$('[data-edit]', root)) {
+          const { edit, slot, i } = el.dataset;
+          const entry = ses.entries.find((e) => e.slotKey === slot);
+          const set = entry?.sets[+i];
+          if (!set) continue;
+
+          const raw = el.value.trim();
+          const stored = set[edit] ?? null;
+
+          // Only look at fields that were actually touched. Validating every box
+          // meant one pre-existing out-of-range value blocked the whole save —
+          // and those exist: technique days are prescribed at RPE 5, below the
+          // picker's own floor. Correcting a weight must not require first
+          // arguing with a number you never typed.
+          if (raw === (stored == null ? '' : String(stored))) continue;
+
+          let next = raw === '' ? null : parseNum(raw);
+          const label = `${byId(entry.exerciseId)?.short || slot} set ${+i + 1}`;
+
+          if (edit === 'rpe') {
+            // Range-check before normalising, not after: normalizeRPE clamps, so
+            // a fat-fingered 88 would silently land as a legitimate-looking 10.
+            // In a dialog whose entire job is fixing typos, that is the one
+            // behaviour we cannot have.
+            if (next != null) {
+              if (next < RPE_MIN || next > RPE_MAX) {
+                problems.push(`${label}: RPE must be between ${RPE_MIN} and ${RPE_MAX}.`);
+                continue;
+              }
+              next = normalizeRPE(next);
+            }
+          } else if (next == null || !(next > 0)) {
+            problems.push(`${label}: ${edit === 'load' ? 'weight' : 'reps'} must be a number above zero.`);
+            continue;
+          } else if (edit === 'reps' && !Number.isInteger(next)) {
+            problems.push(`${label}: reps must be a whole number.`);
+            continue;
+          }
+
+          if (stored !== next) changes.push({ slotKey: slot, i: +i, field: edit, from: stored, to: next, label });
+        }
+
+        if (problems.length) {
+          errEl.innerHTML = `<div class="insight insight--bad"><div>${problems.map(esc).join('<br>')}</div></div>`;
+          return;
+        }
+        if (!changes.length) { close(); toast('Nothing changed.'); return; }
+
+        ctx.store.update((s) => {
+          const target = s.sessions.find((x) => x.id === id);
+          if (!target) return;
+          for (const c of changes) {
+            const entry = target.entries.find((e) => e.slotKey === c.slotKey);
+            if (entry?.sets[c.i]) entry.sets[c.i][c.field] = c.to;
+          }
+          // The audit trail rides with the session, so it is in every backup and
+          // every snapshot — a correction can always be traced back.
+          target.corrections = [
+            ...(target.corrections || []),
+            ...changes.map((c) => ({ at: new Date().toISOString(), slotKey: c.slotKey, setIndex: c.i, field: c.field, from: c.from, to: c.to })),
+          ];
+        });
+
+        // The sheet, the dashboard and the estimates all key off this session, so
+        // push it again — upsert by key means the old rows are overwritten.
+        sync.enqueue(id);
+        sync.flush({ reason: 'correction' });
+
+        close();
+        toast(`${changes.length} ${changes.length === 1 ? 'entry' : 'entries'} corrected.`, 'good');
+      };
+    },
+  });
+}
 /* ---- volume ---------------------------------------------------------- */
 
 function volumeTab(st) {
