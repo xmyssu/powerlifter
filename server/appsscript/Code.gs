@@ -22,6 +22,9 @@
    Web app, execute as *me*, access *anyone*.
    ========================================================================== */
 
+/** Bump when Code.gs changes, so ping and diagnosePublish can report it. */
+var SCRIPT_VERSION = 2;
+
 var SNAPSHOT_FOLDER = 'Powerlifter snapshots';
 var SNAPSHOTS_TO_KEEP = 60;
 
@@ -85,6 +88,7 @@ function ping_() {
     sheetName: ss.getName(),
     discordConfigured: !!prop('DISCORD_WEBHOOK_URL'),
     publishConfigured: !!(prop('GITHUB_TOKEN') && prop('GITHUB_REPO')),
+    scriptVersion: SCRIPT_VERSION,
     snapshots: countSnapshots_(),
   };
 }
@@ -505,3 +509,104 @@ function embed_(card) {
 function fmtNum_(n) { return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
 function round1_(n) { return Math.round(n * 10) / 10; }
 function clip_(s, max) { return s.length > max ? s.slice(0, max - 1) + '…' : s; }
+
+/* ---- diagnostics ------------------------------------------------------- */
+
+/**
+ * Run this from the Apps Script editor (pick `diagnosePublish` in the function
+ * dropdown, press Run, read the Execution log) to check the dashboard wiring
+ * without doing a workout.
+ *
+ * It answers the three questions separately, because "no data on the page" has
+ * three different causes and they need different fixes: is this script the
+ * current version, is the GitHub token valid, and has the app sent anything yet.
+ */
+function diagnosePublish() {
+  var token = prop('GITHUB_TOKEN');
+  var repo = prop('GITHUB_REPO');
+  var lines = [];
+
+  lines.push('This script version: ' + SCRIPT_VERSION + ' (publishing code present)');
+  lines.push('SYNC_TOKEN set: ' + (prop('SYNC_TOKEN') ? 'yes' : 'NO — sync itself will not work'));
+  lines.push('DISCORD_WEBHOOK_URL set: ' + (prop('DISCORD_WEBHOOK_URL') ? 'yes' : 'no (optional)'));
+  lines.push('GITHUB_REPO: ' + (repo || 'NOT SET'));
+  lines.push('GITHUB_TOKEN: ' + (token ? 'set, ' + token.length + ' chars, starts "' + token.slice(0, 4) + '"' : 'NOT SET'));
+
+  if (!token || !repo) {
+    lines.push('');
+    lines.push('=> Set both properties, then run this again.');
+    Logger.log(lines.join('\n'));
+    return lines.join('\n');
+  }
+
+  if (repo.indexOf('/') === -1) {
+    lines.push('=> GITHUB_REPO must be "owner/name", e.g. xmyssu/powerlifter');
+  }
+
+  var api = 'https://api.github.com/repos/' + repo + '/contents/' + PUBLIC_PATH + '?ref=main';
+  var res = UrlFetchApp.fetch(api, {
+    method: 'get',
+    headers: {
+      Authorization: 'Bearer ' + token,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+    },
+    muteHttpExceptions: true,
+  });
+  var code = res.getResponseCode();
+  lines.push('');
+  lines.push('GitHub API GET ' + PUBLIC_PATH + ' -> HTTP ' + code);
+
+  var scopes = res.getHeaders()['x-oauth-scopes'] || res.getHeaders()['X-OAuth-Scopes'];
+  if (scopes !== undefined) lines.push('token scopes: ' + (scopes || '(none — fine-grained token)'));
+
+  if (code === 200) {
+    var info = JSON.parse(res.getContentText());
+    lines.push('found the file, ' + info.size + ' bytes, sha ' + String(info.sha).slice(0, 8));
+    lines.push('');
+    lines.push('=> Read access works. Testing write access with a real commit...');
+
+    var current = Utilities.newBlob(Utilities.base64Decode(String(info.content).replace(/\n/g, ''))).getDataAsString();
+    var probe = UrlFetchApp.fetch('https://api.github.com/repos/' + repo + '/contents/' + PUBLIC_PATH, {
+      method: 'put',
+      headers: {
+        Authorization: 'Bearer ' + token,
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+      contentType: 'application/json',
+      // Rewrites the file with exactly what is already there, so a successful
+      // probe changes nothing except proving the token can commit.
+      payload: JSON.stringify({
+        message: 'Verify dashboard publishing',
+        content: Utilities.base64Encode(current, Utilities.Charset.UTF_8),
+        sha: info.sha,
+        branch: 'main',
+      }),
+      muteHttpExceptions: true,
+    });
+    var pcode = probe.getResponseCode();
+    lines.push('GitHub API PUT -> HTTP ' + pcode);
+    if (pcode >= 200 && pcode < 300) {
+      lines.push('=> WRITE ACCESS WORKS. Publishing is correctly configured.');
+      lines.push('   The dashboard fills in the next time the app syncs a session.');
+    } else if (pcode === 403 || pcode === 404) {
+      lines.push('=> The token can read but not write. Give it Contents: Read and WRITE');
+      lines.push('   (fine-grained), or the public_repo scope (classic).');
+      lines.push('   ' + probe.getContentText().slice(0, 200));
+    } else {
+      lines.push('=> ' + probe.getContentText().slice(0, 300));
+    }
+  } else if (code === 404) {
+    lines.push('=> Either the repo name is wrong, the token cannot see this repo,');
+    lines.push('   or app/data/stats.json is missing from the default branch.');
+  } else if (code === 401) {
+    lines.push('=> The token is rejected. It may be expired, revoked, or mistyped');
+    lines.push('   (watch for a trailing space or a truncated paste).');
+  } else {
+    lines.push('=> ' + res.getContentText().slice(0, 300));
+  }
+
+  Logger.log(lines.join('\n'));
+  return lines.join('\n');
+}

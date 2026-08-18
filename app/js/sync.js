@@ -25,6 +25,16 @@ import { nameOf } from './exercises.js';
 /** Bumped when the payload shape changes in a way the script must know about. */
 export const PROTOCOL = 1;
 
+/**
+ * The Code.gs version this build expects.
+ *
+ * The script lives in a Google Apps Script editor, so updating the app does not
+ * update it — they drift, silently, and the symptom is a feature that does
+ * nothing rather than an error. The connection test compares this against what
+ * the script reports so a stale paste is diagnosable instead of mysterious.
+ */
+export const EXPECTED_SCRIPT_VERSION = 2;
+
 const TIMEOUT_MS = 25000;
 const MAX_BACKOFF_MS = 30 * 60 * 1000;
 
@@ -197,7 +207,14 @@ export async function test() {
   try {
     const res = await post({ app: 'powerlifter', v: PROTOCOL, kind: 'ping', token: config().token });
     patch({ lastError: null, failures: 0, nextAttemptAt: null, lastResult: { ...config().lastResult, sheetUrl: res.sheetUrl || null } });
-    return { ok: true, sheetUrl: res.sheetUrl || null, discord: !!res.discordConfigured, publish: !!res.publishConfigured };
+    return {
+      ok: true,
+      sheetUrl: res.sheetUrl || null,
+      discord: !!res.discordConfigured,
+      publish: !!res.publishConfigured,
+      scriptVersion: res.scriptVersion || 1,
+      stale: (res.scriptVersion || 1) < EXPECTED_SCRIPT_VERSION,
+    };
   } catch (err) {
     patch({ lastError: String(err.message || err) });
     return { ok: false, error: String(err.message || err) };

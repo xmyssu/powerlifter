@@ -474,6 +474,44 @@ hr('12. Session duration sanity');
   eq(sent.body.sessions[0].minutes, null, 'and a negative one is dropped rather than shown');
 }
 
+
+/* ======================================================================
+   13. Version skew between the app and the Apps Script
+   ====================================================================== */
+hr('13. Stale-script detection');
+{
+  seed([session('ses_new', '2026-08-15', 147.5)]);
+
+  reply = { ok: true, sheetUrl: 'https://sheet/FAKE', discordConfigured: true, publishConfigured: true, scriptVersion: sync.EXPECTED_SCRIPT_VERSION };
+  let res = await sync.test();
+  ok(res.ok && !res.stale, 'a current script is not flagged');
+  ok(res.publish, 'and reports that publishing is configured');
+
+  reply = { ok: true, sheetUrl: 'https://sheet/FAKE', scriptVersion: sync.EXPECTED_SCRIPT_VERSION - 1 };
+  res = await sync.test();
+  ok(res.stale, 'an older script IS flagged, so a stale paste is diagnosable');
+
+  // The first release did not report a version at all; absence means ancient.
+  reply = { ok: true, sheetUrl: 'https://sheet/FAKE' };
+  res = await sync.test();
+  eq(res.scriptVersion, 1, 'a script that reports no version is treated as v1');
+  ok(res.stale, 'and therefore as stale');
+
+  reply = { ok: true, sets: 8, sessions: 2, discord: 1, sheetUrl: 'https://sheet/FAKE' };
+}
+
+/* ---- the Code.gs in this repo must match what the app expects ---------- */
+{
+  const { readFileSync } = await import('node:fs');
+  const gs = readFileSync(new URL('../../server/appsscript/Code.gs', import.meta.url), 'utf8');
+  const m = gs.match(/var SCRIPT_VERSION = (\d+);/);
+  ok(!!m, 'Code.gs declares a SCRIPT_VERSION');
+  eq(+m[1], sync.EXPECTED_SCRIPT_VERSION,
+     'and it matches the app — bump both together, or the app will call a fresh paste stale');
+  ok(/function publishPublic_/.test(gs), 'Code.gs still contains the publishing step');
+  ok(/function diagnosePublish/.test(gs), 'and the diagnostic the setup notes point at');
+}
+
 /* ======================================================================
    done
    ====================================================================== */

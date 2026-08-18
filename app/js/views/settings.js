@@ -494,6 +494,15 @@ function openSyncSetup(ctx) {
         const res = await sync.test();
         btn.disabled = false; btn.textContent = 'Test the connection';
         if (!res.ok) { show('warn', res.error); return; }
+        if (res.stale) {
+          // The commonest confusing state: the app was updated, the script in the
+          // Apps Script editor was not, so newer features quietly do nothing.
+          show('warn', `Connected, but the sheet is running an older version of the script `
+            + `(v${res.scriptVersion}; this app expects v${sync.EXPECTED_SCRIPT_VERSION}). `
+            + `Re-paste Code.gs in the Apps Script editor and redeploy, or newer features `
+            + `will silently do nothing.`);
+          return;
+        }
         show('good', `Connected. Discord ${res.discord ? 'is set up' : 'is not set up yet'}; `
           + `public dashboard ${res.publish ? 'is set up' : 'is not set up yet'}.`);
       };

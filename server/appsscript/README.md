@@ -193,11 +193,32 @@ you like without touching any code.
 | Rows sync but Discord is silent | `DISCORD_WEBHOOK_URL` isn't set, or that session's `discordPostedAt` already says `backfill` or a timestamp. |
 | Sessions stuck in "waiting to upload" | Failures back off up to 30 minutes. **Sync now** forces an immediate retry and shows the real error. |
 
-### After editing `Code.gs`
+### Keeping `Code.gs` in step with the app
 
-Changes don't go live until you redeploy: **Deploy › Manage deployments** ›
-pencil icon › **Version: New version** › **Deploy**. The URL stays the same, so
-you don't need to touch the app.
+**This is the one that catches people.** The script lives in Google's editor, not
+in the app, so updating the app does *not* update it. When they drift, new
+features quietly do nothing instead of erroring.
+
+After any change to `Code.gs` in this repo:
+
+1. Copy the whole file again into the Apps Script editor, replacing what's there.
+2. **Deploy › Manage deployments** › pencil icon › **Version: New version** ›
+   **Deploy**. The URL does not change, so the app needs no edit.
+
+**Settings › Cloud sync › Test the connection** compares versions and warns you
+if the sheet is running an older script than the app expects. `SCRIPT_VERSION` at
+the top of `Code.gs` is what it checks.
+
+### Nothing appears on the dashboard
+
+Run **`diagnosePublish`** from the Apps Script editor: pick it in the function
+dropdown, press **Run**, and read the Execution log. It checks the properties,
+then proves read and write access against the GitHub API with a real commit that
+changes nothing. That separates a bad token from a stale script from an app that
+has not synced yet — three causes with the same symptom.
+
+Remember publishing only happens on a **push**, so after fixing anything, finish
+a session or use **Re-sync everything**.
 
 ## Cost and limits
 
