@@ -1,18 +1,18 @@
 {
  "v": 1,
- "generatedAt": "2026-08-18T18:06:47.456Z",
+ "generatedAt": "2026-08-19T05:48:21.261Z",
  "athlete": {
   "firstName": null
  },
  "unit": "kg",
  "displayUnit": "kg",
  "totals": {
-  "sessions": 8,
-  "sets": 84,
-  "reps": 513,
-  "tonnage": 40209,
+  "sessions": 9,
+  "sets": 93,
+  "reps": 576,
+  "tonnage": 45406,
   "firstDate": "2026-08-05",
-  "lastDate": "2026-08-17"
+  "lastDate": "2026-08-18"
  },
  "lifts": [
   {
@@ -94,6 +94,12 @@
      "value": 95.6,
      "deload": false,
      "soft": false
+    },
+    {
+     "date": "2026-08-18",
+     "value": 94.7,
+     "deload": false,
+     "soft": true
     }
    ]
   },
@@ -184,48 +190,37 @@
   }
  ],
  "lastSession": {
-  "date": "2026-08-17",
-  "label": "C1 W2 · Day 4 · Strength",
+  "date": "2026-08-18",
+  "label": "C1 W3 · Day 1 · Volume",
   "cycle": 1,
-  "week": 2,
-  "day": 4,
+  "week": 3,
+  "day": 1,
   "phase": "load",
   "sets": 9,
   "reps": 63,
-  "tonnage": 5643,
-  "avgRPE": 8,
-  "avgTargetRPE": 8,
-  "minutes": 66,
+  "tonnage": 5198,
+  "avgRPE": 7.3,
+  "avgTargetRPE": 7.3,
+  "minutes": null,
   "unit": "kg",
   "lifts": [
    {
-    "exercise": "Close-Grip Bench Press",
-    "detail": "72.5×7@8, 72.5×7@8.5, 72.5×7@8.5",
-    "topKg": 72.5
+    "exercise": "Explosive / Speed Squat",
+    "detail": "97.5×7@7, 97.5×7@7, 97.5×7@7",
+    "topKg": 97.5
    },
    {
-    "exercise": "Deadlift",
-    "detail": "150×4@8, 150×4@8, 150×4@8",
-    "topKg": 150
+    "exercise": "Bench Press",
+    "detail": "70×7@7, 70×7@7, 70×7@7",
+    "topKg": 70
    },
    {
-    "exercise": "Cable Row",
-    "detail": "72×10@6, 80×10@8, 80×10@9",
+    "exercise": "Lat Pulldown",
+    "detail": "80×7@7.5, 80×7@8, 80×7@8",
     "topKg": 80
    }
   ],
-  "prs": [
-   {
-    "exercise": "Close-Grip Bench Press",
-    "gain": 1.935,
-    "e1rm": 95.144
-   },
-   {
-    "exercise": "Deadlift",
-    "gain": 3.502,
-    "e1rm": 179.211
-   }
-  ]
+  "prs": []
  },
  "sessions": [
   {
@@ -339,6 +334,20 @@
    "avgRPE": 8,
    "avgTargetRPE": 8,
    "minutes": 66
+  },
+  {
+   "date": "2026-08-18",
+   "label": "C1 W3 · Day 1 · Volume",
+   "cycle": 1,
+   "week": 3,
+   "day": 1,
+   "phase": "load",
+   "sets": 9,
+   "reps": 63,
+   "tonnage": 5198,
+   "avgRPE": 7.3,
+   "avgTargetRPE": 7.3,
+   "minutes": null
   }
  ],
  "bodyweight": [
