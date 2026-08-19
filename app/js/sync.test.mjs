@@ -20,6 +20,12 @@ globalThis.localStorage = {
 };
 globalThis.document = { dispatchEvent() {}, addEventListener() {}, visibilityState: 'visible' };
 globalThis.window = { addEventListener() {} };
+// The Discord card links to the dashboard, derived from the page URL rather than
+// configured, so the module needs a location to derive it from.
+Object.defineProperty(globalThis, 'location', {
+  value: { href: 'https://xmyssu.github.io/powerlifter/#/today', origin: 'https://xmyssu.github.io' },
+  writable: true, configurable: true,
+});
 globalThis.CustomEvent = class { constructor(t, o) { this.type = t; Object.assign(this, o); } };
 // node defines navigator as getter-only, so replace the property outright.
 Object.defineProperty(globalThis, 'navigator', {
@@ -79,6 +85,14 @@ function session(id, date, load, units = 'kg') {
     ],
     sessionRPE: 4, notes: 'Slept badly, still moved fine.', readiness: null,
   };
+}
+
+/** The same session, but every prescribed set logged at the prescribed reps. */
+function cleanSession(id, date, load, units = 'kg') {
+  const ses = session(id, date, load, units);
+  ses.entries[0].sets = ses.entries[0].sets.map((x) => ({ ...x, reps: 5 }));
+  ses.entries[1].sets = ses.entries[1].sets.map((x) => ({ ...x, reps: 6, rpe: 7.5, done: true }));
+  return ses;
 }
 
 function seed(sessions) {
@@ -510,6 +524,146 @@ hr('13. Stale-script detection');
      'and it matches the app — bump both together, or the app will call a fresh paste stale');
   ok(/function publishPublic_/.test(gs), 'Code.gs still contains the publishing step');
   ok(/function diagnosePublish/.test(gs), 'and the diagnostic the setup notes point at');
+}
+
+
+/* ======================================================================
+   14. The Discord card: marks, sparklines, stalls, corrections
+   ====================================================================== */
+hr('14. Discord card');
+{
+  seed([session('ses_a', '2026-08-03', 140), session('ses_b', '2026-08-10', 145), session('ses_c', '2026-08-15', 147.5)]);
+  sync.enqueueAll();
+  await sync.flush({ force: true });
+
+  const card = sent.body.discord.find((d) => d.sessionId === 'ses_c');
+  ok(!!card.url && /dash\.html$/.test(card.url), 'the card links to the dashboard', card.url);
+  // Three squat sets prescribed at 8 and one logged bench set at 7.5:
+  // (8·3 + 7.5·1) / 4 = 7.875. Weighted by set, not by exercise.
+  eq(card.avgTargetRPE, 7.875, 'it carries the prescribed RPE beside the actual one');
+
+  // Coloured squares tie the message to the dashboard's series colours.
+  const squat = card.lines.find((l) => /Squat/.test(l.exercise));
+  eq(squat.mark, '🟧', 'the squat line is marked with the dashboard orange');
+  eq(card.lines.find((l) => /Bench/.test(l.exercise)).mark, '🟦', 'bench with the blue');
+  ok(card.lines.every((l) => 'mark' in l), 'every line has a mark field, blank for accessories');
+
+  const spark = card.sparks.find((s) => s.lift === 'squat');
+  ok(!!spark, 'a sparkline is built for the squat');
+  eq(spark.spark.length, 3, 'one block per session in the window');
+  ok(/^[▁▂▃▄▅▆▇█]+$/.test(spark.spark), 'made of block characters only', spark.spark);
+  eq(spark.spark[0], '▁', 'the oldest of a rising series is the lowest block');
+  eq(spark.spark[spark.spark.length - 1], '█', 'and the newest is the highest');
+  ok(spark.change > 0, 'the change over the window is positive', spark.change);
+  eq(spark.mark, '🟧', 'and it is marked to match');
+
+  eq(card.correctedAt, null, 'an untouched session reports no correction');
+
+  // The standing fixture deliberately drops a rep on the last squat set and
+  // leaves a bench set unlogged, so it SHOULD read as short of the prescription.
+  ok(card.stalled.length > 0, 'the fixture, which drops a rep, reads as short');
+
+  seed([cleanSession('ses_ok', '2026-08-15', 147.5)]);
+  sync.enqueueAll();
+  await sync.flush({ force: true });
+  eq(sent.body.discord[0].stalled.length, 0, 'a session that meets its prescription is not flagged');
+}
+
+/* ---- a session that fell short is flagged, unless it was technique work --- */
+{
+  const short = session('ses_short', '2026-08-15', 147.5);
+  // Prescribed 5 reps, only got 3 on the last set: the book's definition of
+  // coming up short.
+  short.entries[0].sets[2].reps = 3;
+  seed([short]);
+  sync.enqueueAll();
+  await sync.flush({ force: true });
+  const card = sent.body.discord[0];
+  ok(card.stalled.length > 0, 'falling short of the prescription is flagged', JSON.stringify(card.stalled));
+  ok(/Squat/.test(card.stalled[0]), 'naming the lift', card.stalled[0]);
+
+  // The same shortfall on a deload must not be flagged — deloads are light by design.
+  const dl = session('ses_dl', '2026-08-15', 100);
+  dl.phase = 'deload';
+  dl.entries[0].sets[2].reps = 3;
+  seed([dl]);
+  sync.enqueueAll();
+  await sync.flush({ force: true });
+  eq(sent.body.discord[0].stalled.length, 0, 'coming up short on a deload is not a stall');
+  ok(sent.body.discord[0].deload, 'and the card says it was a deload');
+}
+
+/* ---- a corrected session tells the script to rewrite its message -------- */
+{
+  seed([session('ses_fix', '2026-08-15', 147.5)]);
+  store.update((s) => {
+    s.sessions[0].corrections = [{ at: '2026-08-16T09:00:00.000Z', slotKey: 'd3_squat', setIndex: 0, field: 'load', from: 1475, to: 147.5 }];
+    s.sync.queue = ['ses_fix'];
+  });
+  await sync.flush({ force: true });
+  eq(sent.body.discord[0].correctedAt, '2026-08-16T09:00:00.000Z',
+     'the card carries when it was corrected, so the posted message can be re-rendered');
+}
+
+/* ======================================================================
+   15. The weekly rollup
+   ====================================================================== */
+hr('15. Weekly rollup');
+{
+  // Two full weeks, ending in the week before the current one.
+  const thisMonday = (() => {
+    const d = new Date(); d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+    return d;
+  })();
+  // Local components, not toISOString: the rollup buckets by local dates, and a
+  // UTC conversion moved every session one day and broke the week boundary.
+  const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const day = (offset) => iso(new Date(thisMonday.getTime() + offset * 864e5));
+
+  const built = [];
+  for (const [i, off] of [-14, -12, -10, -8, -7, -5, -3, -1].entries()) {
+    built.push(session(`w_${i}`, day(off), 140 + i * 2.5));
+  }
+  seed(built);
+  sync.enqueueAll();
+  await sync.flush({ force: true });
+
+  const w = sent.body.weekly;
+  ok(!!w, 'a rollup is included');
+  eq(w.weekKey, day(-7), 'it covers the week that just finished, not the current one');
+  eq(w.sessions, 4, 'counting that week\'s sessions only');
+  ok(w.planned > 0, 'against how many the program prescribes', w.planned);
+  ok(w.tonnage > 0, 'with the week\'s tonnage in kg');
+  ok(w.prevTonnage > 0, 'and the previous week\'s, so the delta is computable');
+  // Up to six weeks, but never a week from before the log existed — an empty
+  // week rendered as the lowest block reads as a very light week, which is a lie.
+  eq(w.volumeSpark.length, w.volumeWeeks, 'the spark has one block per week reported');
+  eq(w.volumeWeeks, 2, 'and only the two weeks this fixture could have trained in');
+  ok(w.volumeWeeks <= 6, 'capped at six weeks of context');
+  ok(w.avgRPE > 0 && w.avgTargetRPE > 0, 'actual and prescribed RPE for the week');
+  // Only lifts with a trend appear; the fixture never deadlifts.
+  eq(w.maxes.length, 2, 'where each competition lift with history stands');
+  ok(!w.maxes.some((m) => m.lift === 'deadlift'), 'a lift never trained is omitted rather than shown as zero');
+  ok(w.maxes.every((m) => m.value > 0 && m.mark), 'each with a value and a mark');
+  ok(!!w.url, 'linking to the dashboard');
+  ok(!w.deloadWeek, 'not flagged as a deload');
+
+  // Nothing to report when the previous week was empty.
+  seed([session('only_now', day(1), 140)]);
+  sync.enqueueAll();
+  await sync.flush({ force: true });
+  eq(sent.body.weekly, null, 'a week with no sessions produces no rollup');
+}
+
+/* ---- the rollup must not leak private fields either -------------------- */
+{
+  seed([session('w1', '2026-08-03', 140), session('w2', '2026-08-10', 145)]);
+  sync.enqueueAll();
+  await sync.flush({ force: true });
+  const wire = JSON.stringify(sent.body.weekly);
+  ok(!/Slept badly/.test(wire), 'no session notes in the rollup');
+  ok(!/"readiness"/.test(wire), 'no readiness data');
 }
 
 /* ======================================================================

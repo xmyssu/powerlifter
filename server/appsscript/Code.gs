@@ -23,7 +23,10 @@
    ========================================================================== */
 
 /** Bump when Code.gs changes, so ping and diagnosePublish can report it. */
-var SCRIPT_VERSION = 2;
+var SCRIPT_VERSION = 3;
+
+/** Columns the script maintains itself; a push must never overwrite them. */
+var SCRIPT_OWNED = ['discordPostedAt', 'discordMessageId', 'discordHash'];
 
 var SNAPSHOT_FOLDER = 'Powerlifter snapshots';
 var SNAPSHOTS_TO_KEEP = 60;
@@ -108,7 +111,7 @@ var SCHEMA = {
     cols: ['key', 'date', 'label', 'templateId', 'cycle', 'week', 'day', 'phase',
       'exercises', 'sets', 'reps', 'tonnage', 'unit', 'tonnageKg', 'avgRPE',
       'sessionRPE', 'minutes', 'readiness', 'bodyweight', 'startedAt', 'endedAt',
-      'notes', 'discordPostedAt'],
+      'notes', 'discordPostedAt', 'discordMessageId', 'discordHash'],
   },
   readiness: { key: 'date', cols: ['date', 'sleep', 'stress', 'soreness', 'motivation', 'score'] },
   bodyweight: { key: 'date', cols: ['date', 'value', 'unit'] },
@@ -133,6 +136,7 @@ function push_(body) {
     var snapshot = body.snapshot ? saveSnapshot_(body.snapshot, body.sessions || []) : null;
     var posted = postToDiscord_(body.discord || []);
     var published = publishPublic_(body.public);
+    var weekly = postWeekly_(body.weekly);
 
     return {
       sets: counts.sets,
@@ -141,6 +145,7 @@ function push_(body) {
       bodyweight: counts.bodyweight,
       maxes: counts.maxes,
       discord: posted,
+      weekly: weekly,
       snapshot: snapshot,
       published: published,
       sheetUrl: SpreadsheetApp.getActiveSpreadsheet().getUrl(),
@@ -209,10 +214,14 @@ function upsert_(name, rows) {
     }
     var at = index[String(row[schema.key])];
     if (at) {
-      // `discordPostedAt` is the script's own bookkeeping, not the app's —
-      // never let a resend wipe it, or the session gets posted twice.
-      if (name === 'sessions' && map.discordPostedAt !== undefined) {
-        line[map.discordPostedAt] = sh.getRange(at, map.discordPostedAt + 1).getValue();
+      // These columns are the script's own bookkeeping, not the app's — never
+      // let a resend wipe them, or a session gets posted to Discord twice and
+      // loses the message id that makes a later correction editable.
+      if (name === 'sessions') {
+        for (var o = 0; o < SCRIPT_OWNED.length; o++) {
+          var oc = map[SCRIPT_OWNED[o]];
+          if (oc !== undefined) line[oc] = sh.getRange(at, oc + 1).getValue();
+        }
       }
       sh.getRange(at, 1, 1, width).setValues([line]);
     } else {
@@ -390,26 +399,59 @@ function strip_(text) {
 
 /* ---- Discord ----------------------------------------------------------- */
 
-var ACCENT = 0xE8552D;
-var ACCENT_PR = 0xF2B01E;
+var ACCENT     = 0xE8552D;   // ordinary session
+var ACCENT_PR  = 0xF2B01E;   // an estimated max went up
+var ACCENT_DL  = 0x4DA3FF;   // deload week — light on purpose
+var ACCENT_ST  = 0xFFC53D;   // something fell short of what was prescribed
 
 /** A session older than this is history being backfilled, not news. */
 var FRESH_HOURS = 24;
 /** Belt and braces against Discord's rate limit if something goes wrong above. */
 var MAX_POSTS_PER_PUSH = 4;
+var MAX_EDITS_PER_PUSH = 4;
+
+/** The webhook URL with any query string stripped, ready to build endpoints on. */
+function webhookBase_() {
+  var url = prop('DISCORD_WEBHOOK_URL');
+  if (!url) return '';
+  return url.split('?')[0].replace(/\/+$/, '');
+}
+
+function hash_(text) {
+  var bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, text, Utilities.Charset.UTF_8);
+  var out = '';
+  for (var i = 0; i < bytes.length; i++) {
+    var b = (bytes[i] + 256) % 256;
+    out += (b < 16 ? '0' : '') + b.toString(16);
+  }
+  return out;
+}
+
+/** The app's own icon, derived from the dashboard URL rather than configured. */
+function avatarFor_(url) {
+  if (!url) return null;
+  return url.replace(/dash\.html.*$/, 'icons/icon-192.png');
+}
+
+function webhookPayload_(embed, url) {
+  var body = { username: 'Powerlifter', embeds: [embed] };
+  var avatar = avatarFor_(url);
+  if (avatar) body.avatar_url = avatar;
+  return body;
+}
 
 /**
  * One embed per session, at most once, and only for sessions that just happened.
  *
- * Two things have to be true here. Switching sync on uploads your entire back
- * catalogue in one push, and restoring onto a new phone does it again — neither
- * should replay months of workouts into the channel. So old sessions are stamped
- * as backfill without being sent, and the `discordPostedAt` stamp then keeps
- * every session to one post forever after.
+ * Three things have to hold. Switching sync on uploads the entire back
+ * catalogue, and restoring onto a new phone does it again — neither should
+ * replay months of workouts. Each session gets one message, forever. And when a
+ * mis-typed entry is corrected, the message already in the channel has to be
+ * rewritten rather than left standing as the wrong record.
  */
 function postToDiscord_(cards) {
-  var url = prop('DISCORD_WEBHOOK_URL');
-  if (!url || !cards.length) return 0;
+  var base = webhookBase_();
+  if (!base || !cards.length) return 0;
 
   var sh = tab_('sessions');
   var map = headerMap_(sh);
@@ -420,36 +462,68 @@ function postToDiscord_(cards) {
   if (last > 1) {
     var vals = sh.getRange(2, 1, last - 1, sh.getLastColumn()).getValues();
     for (var i = 0; i < vals.length; i++) {
-      rowOf[String(vals[i][map.key])] = { row: i + 2, posted: vals[i][map.discordPostedAt] };
+      rowOf[String(vals[i][map.key])] = {
+        row: i + 2,
+        posted: vals[i][map.discordPostedAt],
+        msgId: map.discordMessageId === undefined ? '' : vals[i][map.discordMessageId],
+        hash: map.discordHash === undefined ? '' : vals[i][map.discordHash],
+      };
     }
   }
 
-  var stamp = function (found, value) {
-    if (found) sh.getRange(found.row, map.discordPostedAt + 1).setValue(value);
+  var setCell = function (found, col, value) {
+    if (found && map[col] !== undefined) sh.getRange(found.row, map[col] + 1).setValue(value);
   };
 
-  var sent = 0;
+  var sent = 0, edited = 0;
   for (var c = 0; c < cards.length; c++) {
     var card = cards[c];
     var found = rowOf[String(card.sessionId)];
-    if (found && found.posted) continue;
+    var embed = embed_(card);
+    var digest = hash_(JSON.stringify(embed));
+
+    // Already in the channel: rewrite it only if what it should say has changed.
+    if (found && found.posted) {
+      if (found.posted === 'backfill' || !found.msgId) continue;
+      if (String(found.hash) === digest || edited >= MAX_EDITS_PER_PUSH) continue;
+      try {
+        var patch = UrlFetchApp.fetch(base + '/messages/' + found.msgId, {
+          method: 'patch',
+          contentType: 'application/json',
+          payload: JSON.stringify({ embeds: [embed] }),
+          muteHttpExceptions: true,
+        });
+        if (patch.getResponseCode() < 300) {
+          edited++;
+          setCell(found, 'discordHash', digest);
+        }
+      } catch (err) { /* the rows are already right; the message is cosmetic */ }
+      continue;
+    }
 
     if (!isFresh_(card) || sent >= MAX_POSTS_PER_PUSH) {
-      stamp(found, 'backfill');
+      setCell(found, 'discordPostedAt', 'backfill');
       continue;
     }
 
     try {
-      var res = UrlFetchApp.fetch(url, {
+      // wait=true makes Discord return the created message, which is the only
+      // way to get an id we can edit later.
+      var res = UrlFetchApp.fetch(base + '?wait=true', {
         method: 'post',
         contentType: 'application/json',
-        payload: JSON.stringify({ embeds: [embed_(card)] }),
+        payload: JSON.stringify(webhookPayload_(embed, card.url)),
         muteHttpExceptions: true,
       });
       var code = res.getResponseCode();
       if (code >= 200 && code < 300) {
         sent++;
-        stamp(found, new Date().toISOString());
+        setCell(found, 'discordPostedAt', new Date().toISOString());
+        setCell(found, 'discordHash', digest);
+        try {
+          var body = JSON.parse(res.getContentText());
+          if (body && body.id) setCell(found, 'discordMessageId', String(body.id));
+        } catch (e) { /* posted fine; just cannot edit it later */ }
       }
       // A non-2xx leaves the stamp empty on purpose, so the next push retries.
     } catch (err) {
@@ -457,7 +531,7 @@ function postToDiscord_(cards) {
       // and the notification is the disposable half of this request.
     }
   }
-  return sent;
+  return sent + edited;
 }
 
 /** Did this session finish recently enough to be worth a notification? */
@@ -469,44 +543,192 @@ function isFresh_(card) {
   return (new Date().getTime() - t) < FRESH_HOURS * 3600 * 1000;
 }
 
+/**
+ * The weekly summary, posted at most once per week.
+ *
+ * The app works out which week has just closed and what happened in it; this
+ * only decides whether that week has already been reported, keyed on the week's
+ * Monday. So it survives a re-sync, a restore, and syncing twice in a day.
+ */
+function postWeekly_(weekly) {
+  var base = webhookBase_();
+  if (!base || !weekly || !weekly.weekKey) return false;
+
+  var props = PropertiesService.getScriptProperties();
+  if (props.getProperty('LAST_WEEKLY_POSTED') === weekly.weekKey) return false;
+
+  try {
+    var res = UrlFetchApp.fetch(base, {
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify(webhookPayload_(weeklyEmbed_(weekly), weekly.url)),
+      muteHttpExceptions: true,
+    });
+    if (res.getResponseCode() < 300) {
+      // Only recorded on success, so a failed week is retried next sync.
+      props.setProperty('LAST_WEEKLY_POSTED', weekly.weekKey);
+      return true;
+    }
+  } catch (err) { /* cosmetic */ }
+  return false;
+}
+
+/* ---- embeds ------------------------------------------------------------ */
+
+// A zero-width space: Discord requires a non-empty name/value, and this is the
+// conventional way to spend a grid cell on nothing.
+var BLANK = '\u200b';
+
+/** Discord lays inline fields out three to a row; pad so none is left stranded. */
+function packInline_(fields) {
+  var out = fields.slice();
+  while (out.length % 3 !== 0) out.push({ name: BLANK, value: BLANK, inline: true });
+  return out;
+}
+
 function embed_(card) {
   var u = card.unit || 'kg';
-  var fields = [];
+  var inline = [];
 
-  fields.push({ name: 'Volume', value: fmtNum_(card.tonnage) + ' ' + u, inline: true });
-  fields.push({ name: 'Sets', value: String(card.sets) + ' · ' + String(card.reps) + ' reps', inline: true });
+  inline.push({ name: 'Volume', value: fmtNum_(card.tonnage) + ' ' + u, inline: true });
+  inline.push({ name: 'Sets', value: String(card.sets) + ' · ' + String(card.reps) + ' reps', inline: true });
+  if (card.minutes) inline.push({ name: 'Time', value: card.minutes + ' min', inline: true });
   if (card.avgRPE !== null && card.avgRPE !== undefined) {
-    fields.push({ name: 'Avg RPE', value: String(round1_(card.avgRPE)), inline: true });
+    inline.push({ name: 'Avg RPE', value: oneDp_(card.avgRPE), inline: true });
   }
-  if (card.minutes) fields.push({ name: 'Time', value: card.minutes + ' min', inline: true });
-  if (card.sessionRPE) fields.push({ name: 'Felt like', value: card.sessionRPE + '/5', inline: true });
+  if (card.avgTargetRPE !== null && card.avgTargetRPE !== undefined) {
+    inline.push({ name: 'Prescribed', value: oneDp_(card.avgTargetRPE), inline: true });
+  }
+  if (card.sessionRPE) inline.push({ name: 'Felt like', value: card.sessionRPE + '/5', inline: true });
 
-  if (card.prs && card.prs.length) {
+  var fields = packInline_(inline);
+
+  if (card.sparks && card.sparks.length) {
     fields.push({
-      name: '🏆 Estimated max up',
-      value: card.prs.map(function (p) {
-        return '**' + p.exercise + '** +' + round1_(p.gain) + ' ' + (p.unit || u) + ' → ' + round1_(p.e1rm);
+      name: 'Estimated max',
+      value: card.sparks.map(function (s) {
+        var delta = s.change > 0 ? ' (+' + oneDp_(s.change) + ')' : s.change < 0 ? ' (' + oneDp_(s.change) + ')' : '';
+        return (s.mark ? s.mark + ' ' : '') + '**' + s.label + '**  `' + s.spark + '`  '
+          + oneDp_(s.current) + ' kg' + delta;
       }).join('\n'),
       inline: false,
     });
   }
 
+  if (card.prs && card.prs.length) {
+    fields.push({
+      name: '🏆 New best',
+      value: card.prs.map(function (p) {
+        return '**' + p.exercise + '** +' + oneDp_(p.gain) + ' ' + (p.unit || u) + ' → ' + oneDp_(p.e1rm);
+      }).join('\n'),
+      inline: false,
+    });
+  }
+
+  if (card.stalled && card.stalled.length) {
+    fields.push({
+      name: '⚠️ Short of the prescription',
+      // Says only what is true. Whether this becomes a recorded stall and forces
+      // a deload depends on the cycle's history, which this message cannot see,
+      // so it must not promise that the program will act.
+      value: card.stalled.join(', '),
+      inline: false,
+    });
+  }
+
   var work = (card.lines || []).map(function (l) {
-    return '**' + l.exercise + '**\n' + l.detail + (l.note ? '\n_' + l.note + '_' : '');
+    return (l.mark ? l.mark + ' ' : '') + '**' + l.exercise + '**\n' + l.detail + (l.note ? '\n_' + l.note + '_' : '');
   }).join('\n');
   if (work) fields.push({ name: 'The work', value: clip_(work, 1024), inline: false });
 
+  var footer = card.date + ' · loads in ' + u;
+  if (card.correctedAt) footer += ' · corrected';
+
   return {
-    title: card.title || 'Session logged',
+    title: (card.deload ? 'Deload · ' : '') + (card.title || 'Session logged'),
+    url: card.url || undefined,
     description: card.notes ? clip_(card.notes, 400) : undefined,
-    color: card.prs && card.prs.length ? ACCENT_PR : ACCENT,
-    timestamp: new Date().toISOString(),
-    footer: { text: card.date + ' · loads in ' + u },
+    color: card.prs && card.prs.length ? ACCENT_PR
+      : card.stalled && card.stalled.length ? ACCENT_ST
+      : card.deload ? ACCENT_DL
+      : ACCENT,
+    timestamp: card.endedAt || new Date().toISOString(),
+    footer: { text: footer },
+    fields: fields,
+  };
+}
+
+function weeklyEmbed_(w) {
+  var inline = [];
+  inline.push({
+    name: 'Sessions',
+    value: String(w.sessions) + (w.planned ? ' of ' + w.planned : ''),
+    inline: true,
+  });
+
+  var vol = fmtNum_(w.tonnage) + ' kg';
+  if (w.prevTonnage) {
+    var d = w.tonnage - w.prevTonnage;
+    var pct = Math.round((d / w.prevTonnage) * 100);
+    vol += '\n' + (d >= 0 ? '+' : '−') + fmtNum_(Math.abs(d)) + ' (' + (d >= 0 ? '+' : '−') + Math.abs(pct) + '%)';
+  }
+  inline.push({ name: 'Volume', value: vol, inline: true });
+  inline.push({ name: 'Sets', value: String(w.sets) + ' · ' + String(w.reps) + ' reps', inline: true });
+
+  if (w.avgRPE !== null && w.avgRPE !== undefined) {
+    var rpe = oneDp_(w.avgRPE);
+    if (w.avgTargetRPE !== null && w.avgTargetRPE !== undefined) {
+      var gap = w.avgRPE - w.avgTargetRPE;
+      rpe += '\nvs ' + oneDp_(w.avgTargetRPE) + ' planned';
+      inline.push({ name: 'Avg RPE', value: rpe, inline: true });
+      inline.push({
+        name: 'Calibration',
+        value: Math.abs(gap) < 0.25 ? 'on target'
+          : gap > 0 ? oneDp_(gap) + ' harder than planned'
+          : oneDp_(Math.abs(gap)) + ' easier than planned',
+        inline: true,
+      });
+    } else {
+      inline.push({ name: 'Avg RPE', value: rpe, inline: true });
+    }
+  }
+
+  var fields = packInline_(inline);
+
+  if (w.volumeSpark) {
+    fields.push({
+      name: 'Volume, last ' + (w.volumeWeeks || 6) + ' weeks',
+      value: '`' + w.volumeSpark + '`',
+      inline: false,
+    });
+  }
+
+  if (w.maxes && w.maxes.length) {
+    fields.push({
+      name: 'Where the lifts stand',
+      value: w.maxes.map(function (m) {
+        var ch = m.change === null || m.change === undefined ? ''
+          : m.change > 0 ? '  (+' + oneDp_(m.change) + ')'
+          : m.change < 0 ? '  (' + oneDp_(m.change) + ')'
+          : '  (level)';
+        return m.mark + ' **' + m.label + '** ' + oneDp_(m.value) + ' kg' + ch;
+      }).join('\n'),
+      inline: false,
+    });
+  }
+
+  return {
+    title: 'Week of ' + w.weekKey + (w.deloadWeek ? ' · deload' : ''),
+    url: w.url || undefined,
+    color: w.deloadWeek ? ACCENT_DL : ACCENT,
+    timestamp: new Date(w.weekEnd + 'T12:00:00Z').toISOString(),
+    footer: { text: w.label + ' · estimated maxes in kg' },
     fields: fields,
   };
 }
 
 function fmtNum_(n) { return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
+function oneDp_(n) { return (Math.round(n * 10) / 10).toFixed(1); }
 function round1_(n) { return Math.round(n * 10) / 10; }
 function clip_(s, max) { return s.length > max ? s.slice(0, max - 1) + '…' : s; }
 

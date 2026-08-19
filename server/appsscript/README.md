@@ -80,6 +80,26 @@ doesn't show up in your member list as an app.
 
 Treat that URL like a password. Anyone holding it can post into your channel.
 
+### What lands in the channel
+
+- **One embed per finished session**: volume, sets, time, your average RPE beside
+  the prescribed one, a text sparkline of the estimated max for each competition
+  lift you trained, any new bests, anything that fell short of the prescription,
+  and every set. The title links to your dashboard.
+- **Colour tells you the shape of it at a glance**: gold for a new estimated max,
+  amber when something came up short, blue for a deload, orange otherwise.
+- **A weekly summary**, once per week: sessions hit against planned, volume with
+  the change on the week before, RPE against what was prescribed, volume as
+  blocks over the last few weeks, and where each lift stands. It arrives on the
+  first sync after a week closes — usually your first session of the new week —
+  rather than on a timer, because an Apps Script trigger is one more thing that
+  can quietly stop. `LAST_WEEKLY_POSTED` in the script properties is what keeps
+  it to once per week.
+- **Corrections rewrite the original message.** Fix a mis-typed entry in the app
+  and the message already in the channel is edited in place, so the channel never
+  keeps a number you have since fixed. That needs the `discordMessageId` and
+  `discordHash` columns in the `sessions` tab, which the script adds by itself.
+
 Two guards keep the channel readable, and they're worth knowing about because
 they also explain the silences:
 

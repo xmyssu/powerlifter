@@ -17,8 +17,9 @@
    ========================================================================== */
 
 import * as store from './store.js';
+import { todayISO } from './store.js';
 import { convertLoad, e1RM, fmtLoadBare, fmtRPE } from './rpe.js';
-import { templateOf, slotHistory } from './program.js';
+import { templateOf, slotHistory, entryStalled } from './program.js';
 import { strengthTrend } from './coach.js';
 import { nameOf } from './exercises.js';
 
@@ -33,7 +34,7 @@ export const PROTOCOL = 1;
  * nothing rather than an error. The connection test compares this against what
  * the script reports so a stale paste is diagnosable instead of mysterious.
  */
-export const EXPECTED_SCRIPT_VERSION = 2;
+export const EXPECTED_SCRIPT_VERSION = 3;
 
 const TIMEOUT_MS = 25000;
 const MAX_BACKOFF_MS = 30 * 60 * 1000;
@@ -267,6 +268,7 @@ function buildPayload(st, ids, reason) {
       reps: st.maxes[lift]?.reps ?? null,
     })).filter((m) => m.value != null),
     discord: sessions.map((ses) => discordCard(st, ses)),
+    weekly: weeklyRollup(st),
     public: publicSnapshot(st),
     snapshot: snapshotJSON(),
   };
@@ -350,6 +352,10 @@ function stats(st, ses) {
   const unit = ses.units || st.profile.units;
   const sets = ses.entries.flatMap((e) => (e.sets || []).filter((s) => s.done));
   const scored = sets.filter((s) => s.rpe != null);
+  // Paired with avgRPE this is the only thing that answers "did I actually work
+  // at the prescribed effort", which is the question the plan cares about.
+  const targeted = ses.entries.flatMap((e) =>
+    (e.sets || []).filter((x) => x.done && e.targetRPE != null).map(() => e.targetRPE));
   const tonnage = sets.reduce((n, s) => n + (s.load || 0) * (s.reps || 0), 0);
   return {
     unit,
@@ -358,6 +364,7 @@ function stats(st, ses) {
     tonnage: Math.round(tonnage),
     tonnageKg: Math.round(convertLoad(tonnage, unit, 'kg')),
     avgRPE: scored.length ? round3(scored.reduce((n, s) => n + s.rpe, 0) / scored.length) : null,
+    avgTargetRPE: targeted.length ? round3(targeted.reduce((n, v) => n + v, 0) / targeted.length) : null,
     minutes: durationMinutes(ses),
   };
 }
@@ -412,33 +419,233 @@ function prsFor(st, ses) {
   return out;
 }
 
+/* ---- what Discord gets ------------------------------------------------- */
+
+/** Eight steps is enough to read a direction at a glance in a chat message. */
+const SPARK_CHARS = '▁▂▃▄▅▆▇█';
+
+/**
+ * A trend as text.
+ *
+ * Discord cannot render a chart without either a bot or handing the numbers to
+ * a third-party image service, and neither is worth it for a glance. Block
+ * characters render identically on every client and phone, and carry the one
+ * thing that matters here: which way the line is going.
+ *
+ * Scaled to the series' own min/max, so it shows shape rather than absolute
+ * height — the number beside it supplies the magnitude.
+ */
+export function sparkline(values) {
+  const clean = values.filter((v) => typeof v === 'number' && isFinite(v));
+  if (clean.length < 2) return '';
+  const lo = Math.min(...clean);
+  const hi = Math.max(...clean);
+  if (hi === lo) return SPARK_CHARS[3].repeat(clean.length);
+  return clean
+    .map((v) => SPARK_CHARS[Math.round(((v - lo) / (hi - lo)) * (SPARK_CHARS.length - 1))])
+    .join('');
+}
+
+/** Where the public dashboard lives, derived rather than configured. */
+function dashboardURL() {
+  try {
+    return new URL('dash.html', String(location.href).split('#')[0]).href;
+  } catch (e) {
+    return null;
+  }
+}
+
+/** Squares matching the dashboard's series colours, so the two surfaces agree. */
+const LIFT_MARK = { squat: '🟧', bench: '🟦', deadlift: '🟪' };
+
+function slotDefsOf(st, ses) {
+  const tpl = templateOf({ templateId: ses.templateId });
+  const out = {};
+  for (const d of tpl.days || []) {
+    for (const sl of d.slots || []) out[sl.key] = { ...sl, dayRole: d.role };
+  }
+  return out;
+}
+
+/**
+ * Which slots fell short of what was prescribed.
+ *
+ * Mirrors the exclusions completeSession applies: technique work is meant to
+ * stay submaximal, so coming up short of it is never a stall and must not
+ * colour the message as though something went wrong.
+ */
+function stalledSlots(st, ses) {
+  if (ses.phase !== 'load') return [];
+  const defs = slotDefsOf(st, ses);
+  const out = [];
+  for (const e of ses.entries) {
+    const def = defs[e.slotKey];
+    if (!def || def.technique || def.dayRole === 'technique') continue;
+    if (entryStalled(e)) out.push(nameOf(e.exerciseId));
+  }
+  return out;
+}
+
+/** Recent estimated-max history for the competition lifts worked this session. */
+function sparksFor(st, ses) {
+  const defs = slotDefsOf(st, ses);
+  const lifts = [...new Set(ses.entries.map((e) => defs[e.slotKey]?.lift).filter(Boolean))];
+  const from = st.profile.units;
+  const out = [];
+  for (const lift of lifts) {
+    // Deloads and high-rep estimates are plotted on the dashboard but never
+    // drive a headline, and a sparkline is a headline.
+    const pts = strengthTrend(st, lift).filter((p) => !p.deload && !p.estimatedFromHighReps);
+    if (pts.length < 2) continue;
+    const recent = pts.slice(-8);
+    out.push({
+      lift,
+      label: { squat: 'Squat', bench: 'Bench', deadlift: 'Deadlift' }[lift] || lift,
+      mark: LIFT_MARK[lift] || '',
+      spark: sparkline(recent.map((p) => p.value)),
+      current: round3(convertLoad(recent[recent.length - 1].value, from, 'kg')),
+      change: round3(convertLoad(recent[recent.length - 1].value - recent[0].value, from, 'kg')),
+      sessions: recent.length,
+    });
+  }
+  return out;
+}
+
 /** What Discord should say. Formatted here, where the domain vocabulary lives. */
 function discordCard(st, ses) {
   const s = stats(st, ses);
+  const defs = slotDefsOf(st, ses);
   const lines = ses.entries.map((e) => {
     const done = (e.sets || []).filter((x) => x.done);
     if (!done.length) return null;
     const detail = done.map((x) => `${fmtLoadBare(x.load)}×${x.reps ?? '?'}${x.rpe != null ? `@${fmtRPE(x.rpe)}` : ''}`).join(', ');
-    return { exercise: nameOf(e.exerciseId), detail, note: e.note || '' };
+    const lift = defs[e.slotKey]?.lift;
+    return { exercise: nameOf(e.exerciseId), detail, note: e.note || '', mark: LIFT_MARK[lift] || '' };
   }).filter(Boolean);
+
+  const corrections = ses.corrections || [];
 
   return {
     sessionId: ses.id,
     date: ses.date,
-    // The script uses this to tell a session that just happened from history
-    // being backfilled, so switching sync on does not replay months to Discord.
     endedAt: ses.endedAt || null,
     title: labelFor(st, ses),
+    url: dashboardURL(),
     unit: s.unit,
     sets: s.sets,
     reps: s.reps,
     tonnage: s.tonnage,
     avgRPE: s.avgRPE,
+    avgTargetRPE: s.avgTargetRPE,
     sessionRPE: ses.sessionRPE ?? null,
     minutes: s.minutes,
+    deload: ses.phase === 'deload',
+    stalled: stalledSlots(st, ses),
     lines,
+    sparks: sparksFor(st, ses),
     prs: prsFor(st, ses),
     notes: ses.notes || '',
+    // Lets the script re-render an already-posted message once a typo is fixed,
+    // instead of leaving the wrong numbers in the channel forever.
+    correctedAt: corrections.length ? corrections[corrections.length - 1].at : null,
+  };
+}
+
+/* ---- the weekly rollup ------------------------------------------------- */
+
+const MONDAY = (iso) => {
+  const d = new Date(`${iso}T00:00:00`);
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+};
+
+const addDays = (iso, n) => {
+  const d = new Date(`${iso}T00:00:00`);
+  d.setDate(d.getDate() + n);
+  const p = (x) => String(x).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+};
+
+/**
+ * A summary of the most recently *completed* week.
+ *
+ * Deliberately not driven by a Sunday timer: an Apps Script trigger is another
+ * moving part that can silently stop, and a missed Sunday means a week that is
+ * never summarised. This rides along with whatever the next sync happens to be
+ * — in practice the first session of the new week — and the script posts it at
+ * most once per week key.
+ */
+function weeklyRollup(st) {
+  const done = st.sessions.filter((x) => x.status === 'done');
+  if (!done.length) return null;
+
+  const thisMonday = MONDAY(todayISO());
+  const weekKey = addDays(thisMonday, -7);          // the week just finished
+  const weekEnd = addDays(weekKey, 6);
+  const prevKey = addDays(weekKey, -7);
+
+  const inWeek = (ses, key) => ses.date >= key && ses.date <= addDays(key, 6);
+  const week = done.filter((x) => inWeek(x, weekKey));
+  if (!week.length) return null;                    // nothing to report
+
+  const prev = done.filter((x) => inWeek(x, prevKey));
+  const sum = (list) => list.reduce((n, ses) => n + stats(st, ses).tonnage, 0);
+
+  const scored = week.flatMap((ses) =>
+    ses.entries.flatMap((e) => (e.sets || []).filter((x) => x.done && x.rpe != null).map((x) => ({ x, e }))));
+  const targeted = scored.filter((r) => r.e.targetRPE != null);
+
+  const tpl = templateOf(st.program);
+  const planned = (tpl.days || []).filter((d) => !d.off && !d.meet).length || null;
+
+  // Up to six weeks of volume as bars, so the week lands in context rather than
+  // alone — but only weeks that could have contained training. A week from
+  // before the log started is not a light week, and rendering it as the lowest
+  // block says exactly that.
+  const firstWeek = MONDAY(done.reduce((a, x) => (x.date < a ? x.date : a), done[0].date));
+  const bars = [];
+  for (let i = 5; i >= 0; i--) {
+    const k = addDays(weekKey, -7 * i);
+    if (k < firstWeek) continue;
+    bars.push(sum(done.filter((x) => inWeek(x, k))));
+  }
+
+  const from = st.profile.units;
+  const kg = (v) => round3(convertLoad(v, from, 'kg'));
+  const maxes = [];
+  for (const lift of ['squat', 'bench', 'deadlift']) {
+    const pts = strengthTrend(st, lift).filter((p) => !p.deload && !p.estimatedFromHighReps);
+    const upto = (d) => { const f = pts.filter((p) => p.date <= d); return f.length ? Math.max(...f.map((p) => p.value)) : null; };
+    const now = upto(weekEnd);
+    const before = upto(addDays(weekKey, -1));
+    if (now == null) continue;
+    maxes.push({
+      lift,
+      label: { squat: 'Squat', bench: 'Bench', deadlift: 'Deadlift' }[lift],
+      mark: LIFT_MARK[lift],
+      value: kg(now),
+      change: before == null ? null : kg(now - before),
+    });
+  }
+
+  return {
+    weekKey,
+    weekEnd,
+    label: `${weekKey} → ${weekEnd}`,
+    sessions: week.length,
+    planned,
+    sets: week.reduce((n, ses) => n + stats(st, ses).sets, 0),
+    reps: week.reduce((n, ses) => n + stats(st, ses).reps, 0),
+    tonnage: Math.round(kg(sum(week))),
+    prevTonnage: prev.length ? Math.round(kg(sum(prev))) : null,
+    avgRPE: scored.length ? round3(scored.reduce((n, r) => n + r.x.rpe, 0) / scored.length) : null,
+    avgTargetRPE: targeted.length ? round3(targeted.reduce((n, r) => n + r.e.targetRPE, 0) / targeted.length) : null,
+    deloadWeek: week.every((x) => x.phase === 'deload'),
+    volumeSpark: sparkline(bars),
+    volumeWeeks: bars.length,
+    maxes,
+    url: dashboardURL(),
   };
 }
 
