@@ -1,18 +1,18 @@
 {
  "v": 1,
- "generatedAt": "2026-08-30T08:23:34.374Z",
+ "generatedAt": "2026-08-31T10:41:29.114Z",
  "athlete": {
   "firstName": null
  },
  "unit": "kg",
  "displayUnit": "kg",
  "totals": {
-  "sessions": 13,
-  "sets": 132,
-  "reps": 743,
-  "tonnage": 58753,
+  "sessions": 14,
+  "sets": 140,
+  "reps": 757,
+  "tonnage": 59533,
   "firstDate": "2026-08-05",
-  "lastDate": "2026-08-30"
+  "lastDate": "2026-08-31"
  },
  "lifts": [
   {
@@ -58,6 +58,12 @@
      "date": "2026-08-22",
      "value": 156.4,
      "deload": false,
+     "soft": false
+    },
+    {
+     "date": "2026-08-31",
+     "value": 141.2,
+     "deload": true,
      "soft": false
     }
    ]
@@ -130,6 +136,12 @@
      "value": 99,
      "deload": true,
      "soft": true
+    },
+    {
+     "date": "2026-08-31",
+     "value": 94.1,
+     "deload": true,
+     "soft": false
     }
    ]
   },
@@ -176,6 +188,12 @@
      "date": "2026-08-26",
      "value": 179.6,
      "deload": false,
+     "soft": false
+    },
+    {
+     "date": "2026-08-31",
+     "value": 176.5,
+     "deload": true,
      "soft": false
     }
    ]
@@ -240,34 +258,39 @@
   }
  ],
  "lastSession": {
-  "date": "2026-08-30",
-  "label": "Deload · Day 1 · Volume",
+  "date": "2026-08-31",
+  "label": "Deload · Day 2 · Technique",
   "cycle": 1,
   "week": 4,
-  "day": 1,
+  "day": 2,
   "phase": "deload",
-  "sets": 6,
-  "reps": 42,
-  "tonnage": 3129,
-  "avgRPE": 6.3,
-  "avgTargetRPE": 7.3,
-  "minutes": 32,
+  "sets": 8,
+  "reps": 14,
+  "tonnage": 780,
+  "avgRPE": 5.8,
+  "avgTargetRPE": 5.8,
+  "minutes": 50,
   "unit": "kg",
   "lifts": [
    {
-    "exercise": "Explosive / Speed Squat",
-    "detail": "80×7@6, 80×7@6",
-    "topKg": 80
+    "exercise": "Low-Bar Back Squat",
+    "detail": "120×1@5, 120×1@5",
+    "topKg": 120
    },
    {
     "exercise": "Bench Press",
-    "detail": "65×7@6, 70×7@6",
-    "topKg": 70
+    "detail": "80×1@5, 80×1@5",
+    "topKg": 80
    },
    {
-    "exercise": "Lat Pulldown",
-    "detail": "72×7@6, 80×7@8",
-    "topKg": 80
+    "exercise": "Deadlift",
+    "detail": "150×1@5, 150×1@5",
+    "topKg": 150
+   },
+   {
+    "exercise": "Dips",
+    "detail": "10×4@8, 10×4@8",
+    "topKg": 10
    }
   ],
   "prs": []
@@ -454,6 +477,20 @@
    "avgRPE": 6.3,
    "avgTargetRPE": 7.3,
    "minutes": 32
+  },
+  {
+   "date": "2026-08-31",
+   "label": "Deload · Day 2 · Technique",
+   "cycle": 1,
+   "week": 4,
+   "day": 2,
+   "phase": "deload",
+   "sets": 8,
+   "reps": 14,
+   "tonnage": 780,
+   "avgRPE": 5.8,
+   "avgTargetRPE": 5.8,
+   "minutes": 50
   }
  ],
  "bodyweight": [
