@@ -1,18 +1,18 @@
 {
  "v": 1,
- "generatedAt": "2026-08-31T10:41:29.114Z",
+ "generatedAt": "2026-09-03T11:31:54.028Z",
  "athlete": {
   "firstName": null
  },
  "unit": "kg",
  "displayUnit": "kg",
  "totals": {
-  "sessions": 14,
-  "sets": 140,
-  "reps": 757,
-  "tonnage": 59533,
+  "sessions": 15,
+  "sets": 148,
+  "reps": 793,
+  "tonnage": 62153,
   "firstDate": "2026-08-05",
-  "lastDate": "2026-08-31"
+  "lastDate": "2026-09-03"
  },
  "lifts": [
   {
@@ -63,6 +63,12 @@
     {
      "date": "2026-08-31",
      "value": 141.2,
+     "deload": true,
+     "soft": false
+    },
+    {
+     "date": "2026-09-03",
+     "value": 147.1,
      "deload": true,
      "soft": false
     }
@@ -140,6 +146,12 @@
     {
      "date": "2026-08-31",
      "value": 94.1,
+     "deload": true,
+     "soft": false
+    },
+    {
+     "date": "2026-09-03",
+     "value": 98.5,
      "deload": true,
      "soft": false
     }
@@ -258,39 +270,39 @@
   }
  ],
  "lastSession": {
-  "date": "2026-08-31",
-  "label": "Deload · Day 2 · Technique",
+  "date": "2026-09-03",
+  "label": "Deload · Day 3 · Strength",
   "cycle": 1,
   "week": 4,
-  "day": 2,
+  "day": 3,
   "phase": "deload",
   "sets": 8,
-  "reps": 14,
-  "tonnage": 780,
-  "avgRPE": 5.8,
-  "avgTargetRPE": 5.8,
-  "minutes": 50,
+  "reps": 36,
+  "tonnage": 2620,
+  "avgRPE": 8.1,
+  "avgTargetRPE": 8,
+  "minutes": 49,
   "unit": "kg",
   "lifts": [
    {
     "exercise": "Low-Bar Back Squat",
-    "detail": "120×1@5, 120×1@5",
-    "topKg": 120
+    "detail": "125×3@7.5, 125×3@7.5",
+    "topKg": 125
    },
    {
     "exercise": "Bench Press",
-    "detail": "80×1@5, 80×1@5",
-    "topKg": 80
+    "detail": "85×3@8, 85×3@8",
+    "topKg": 85
    },
    {
-    "exercise": "Deadlift",
-    "detail": "150×1@5, 150×1@5",
-    "topKg": 150
+    "exercise": "Barbell Row",
+    "detail": "90×4@8, 90×4@8",
+    "topKg": 90
    },
    {
-    "exercise": "Dips",
-    "detail": "10×4@8, 10×4@8",
-    "topKg": 10
+    "exercise": "Leg Curl",
+    "detail": "40×8@8, 40×8@9.5",
+    "topKg": 40
    }
   ],
   "prs": []
@@ -491,6 +503,20 @@
    "avgRPE": 5.8,
    "avgTargetRPE": 5.8,
    "minutes": 50
+  },
+  {
+   "date": "2026-09-03",
+   "label": "Deload · Day 3 · Strength",
+   "cycle": 1,
+   "week": 4,
+   "day": 3,
+   "phase": "deload",
+   "sets": 8,
+   "reps": 36,
+   "tonnage": 2620,
+   "avgRPE": 8.1,
+   "avgTargetRPE": 8,
+   "minutes": 49
   }
  ],
  "bodyweight": [
