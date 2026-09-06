@@ -8,6 +8,7 @@ import { templateOf, graduationCheck, slotHistory, slotE1RM, volumeAudit, loadin
 import { e1RM, fmtLoad, convertLoad } from './rpe.js';
 import { byId } from './exercises.js';
 import { relDays } from './ui.js';
+import { todayISO } from './store.js';
 
 /* ======================================================================
    Readiness — "if you feel terrible, do the easiest workout you had
@@ -350,6 +351,239 @@ export function sessionBriefing(resolved, state) {
 
   const rest = tpl.days.find((d) => d.n === resolved.day)?.role === 'strength' ? 150 : 90;
   return { notes, restSeconds: rest };
+}
+
+/* ======================================================================
+   Test readiness — is today the day to find out?
+   ====================================================================== */
+
+/** How hard a logged session actually was, on the RPE the lifter reported. */
+function sessionEffort(ses) {
+  const rpes = [];
+  let target = 0, n = 0;
+  for (const e of ses.entries || []) {
+    if (e.targetRPE != null) { target += e.targetRPE; n++; }
+    for (const x of e.sets || []) if (x.done && x.rpe != null) rpes.push(x.rpe);
+  }
+  return {
+    rpe: rpes.length ? rpes.reduce((a, b) => a + b, 0) / rpes.length : null,
+    target: n ? target / n : null,
+  };
+}
+
+/** A session hard enough that a max two days later would be measuring fatigue. */
+const HARD_RPE = 7.5;
+
+/**
+ * Whether today is a good day to find out what you can lift.
+ *
+ * A one-rep max measures two things at once — how strong you are and how tired
+ * you are — and only one of them is the thing you wanted to know. Every factor
+ * here is about separating them: time since real work, where you sit in the
+ * wave, whether recent sessions have been coming in above their target, and
+ * whether the last deload actually deloaded anything.
+ *
+ * It never blocks. A lifter who wants to go and pull something today is allowed
+ * to; the job of this is to make sure they know what they are walking into, and
+ * to say when the better day would have been.
+ */
+export function testReadiness(state, { today = todayISO() } = {}) {
+  const done = (state.sessions || []).filter((x) => x.status === 'done').sort((a, b) => (a.date < b.date ? -1 : 1));
+  const factors = [];
+  let score = 100;
+
+  const bad = (label, detail, cost) => { factors.push({ label, detail, verdict: 'bad' }); score -= cost; };
+  const ok = (label, detail, cost = 0) => { factors.push({ label, detail, verdict: cost ? 'ok' : 'good' }); score -= cost; };
+
+  if (!done.length) {
+    return {
+      score: null, level: 'unknown',
+      headline: 'Nothing logged yet.',
+      factors: [{ label: 'No training history', detail: 'Work up by feel and stop at the first grinder.', verdict: 'ok' }],
+      window: null, targets: [],
+    };
+  }
+
+  /* --- 1. time since real work ------------------------------------- */
+  const lastAny = done[done.length - 1].date;
+  const sinceAny = daysBetween(lastAny, today);
+  const hard = done.filter((x) => {
+    const e = sessionEffort(x);
+    return (e.rpe ?? e.target ?? 0) >= HARD_RPE;
+  });
+  const lastHard = hard.length ? hard[hard.length - 1].date : null;
+  const sinceHard = lastHard ? daysBetween(lastHard, today) : 99;
+
+  // Graded rather than banded: the whole use of this number is to answer "should
+  // I go today or wait", and a score that reads the same on Tuesday and Friday
+  // cannot answer it.
+  if (sinceHard <= 1) bad('One day off a hard session', 'A single taken now measures yesterday\'s fatigue as much as your strength. Two or three more days changes the number on the bar.', 35);
+  else if (sinceHard === 2) ok('Two days off a hard session', 'Workable, but you are still paying for the last session. One more day is worth real weight.', 15);
+  else if (sinceHard === 3) ok('Three days off a hard session', 'Enough for a genuine attempt. Another two days would be better.', 8);
+  else if (sinceHard <= 5) ok(`${sinceHard} days off a hard session`, 'Well placed for a single.', 3);
+  else if (sinceHard <= 21) ok(`${sinceHard} days off a hard session`, 'Fully recovered from your last heavy work.');
+  else ok(`${sinceHard} days since anything hard`, 'Rested, but a long way from heavy work — expect the first attempt to feel unfamiliar.', 8);
+
+  if (sinceAny === 0) bad('You already trained today', 'Test on a day of its own.', 25);
+
+  /* --- 2. where you sit in the wave -------------------------------- */
+  const cur = state.program?.cursor;
+  const weeks = state.program ? loadingWeeks(state.program) : 3;
+  const lastPhase = done[done.length - 1].phase;
+  if (lastPhase === 'deload' && cur?.week === 1) {
+    ok('Post-deload, cycle not started', 'The freshest point the program ever puts you at. This is the window.');
+  } else if (cur?.phase === 'deload') {
+    ok('Mid-deload', 'Fatigue is on its way down. Good, and better at the end of the week.', 5);
+  } else if (cur?.week === 1) {
+    ok('Week 1 of the wave', 'Still light on accumulated fatigue.', 5);
+  } else if (cur?.week >= weeks) {
+    bad(`Week ${cur.week} of ${weeks}`, 'The most fatigued week of the cycle by design. This is the worst week of the wave to test in.', 25);
+  } else {
+    ok(`Week ${cur?.week} of ${weeks}`, 'Mid-wave. Some fatigue banked.', 12);
+  }
+
+  /* --- 3. have recent sessions been coming in hot? ------------------ */
+  // Loading weeks only. A deload's own drift is the next factor's job, and
+  // counting it here charges the lifter twice for one bad week — while a deload
+  // target of RPE 6 is routinely exceeded by half a point without meaning
+  // anything at all.
+  const recent = done.filter((x) => x.phase === 'load').slice(-3)
+    .map(sessionEffort).filter((e) => e.rpe != null && e.target != null);
+  if (recent.length) {
+    const drift = recent.reduce((a, e) => a + (e.rpe - e.target), 0) / recent.length;
+    if (drift >= 0.5) bad('Recent sessions running hot', `Your last ${recent.length} sessions came in about ${drift.toFixed(1)} RPE above target. Prescribed loads feeling heavier than they should is the clearest fatigue signal you have.`, 20);
+    else if (drift <= -0.5) ok('Recent sessions running easy', 'Prescribed loads have been feeling lighter than the target. That is what recovered looks like.');
+    else ok('Recent effort on target', 'Logged RPE is tracking what was prescribed.');
+  }
+
+  /* --- 4. did the last deload actually deload? ---------------------- */
+  const lastDeload = [...done].reverse().find((x) => x.phase === 'deload');
+  if (lastDeload) {
+    const week = done.filter((x) => x.phase === 'deload' && daysBetween(x.date, lastDeload.date) <= 10);
+    const hotDays = week.filter((x) => {
+      const e = sessionEffort(x);
+      return e.rpe != null && e.target != null && e.rpe - e.target >= 1.5;
+    });
+    // A deload week with a training session inside it did not shed the fatigue
+    // it was there to shed, whatever the calendar says about it.
+    if (hotDays.length) {
+      // Fatigue from a bad deload decays like any other fatigue, so the penalty
+      // has to decay with it. A hot day six days back is most of the way gone;
+      // one from yesterday is not.
+      const since = daysBetween(hotDays[hotDays.length - 1].date, today);
+      const cost = Math.round(18 * Math.max(0, 1 - since / 10));
+      if (cost > 0) {
+        bad(`Last deload ran hot on ${hotDays.length} day${hotDays.length === 1 ? '' : 's'}`,
+          `${hotDays.map((x) => `Day ${x.day}`).join(', ')} came in well above target ${since} day${since === 1 ? '' : 's'} ago, so that week shed less fatigue than a deload should. Treat yourself as less rested than the calendar says.`, cost);
+      } else {
+        ok('Last deload ran hot, but a while back', 'Long enough ago that it no longer counts against you.');
+      }
+    }
+  }
+
+  /* --- 5. today's own readiness answers ----------------------------- */
+  const todayReadiness = (state.readiness || []).find((r) => r.date === today);
+  if (todayReadiness) {
+    const vals = READINESS_QUESTIONS.map((q) => Number(todayReadiness[q.key])).filter((v) => v >= 1);
+    if (vals.length) {
+      const pct = Math.round((vals.reduce((a, b) => a + b, 0) / (vals.length * 5)) * 100);
+      if (pct <= 40) bad(`Readiness ${pct}%`, 'You said you feel bad today. Believe yourself.', 30);
+      else if (pct <= 60) ok(`Readiness ${pct}%`, 'Middling. Fine to train, marginal for a max.', 10);
+      else ok(`Readiness ${pct}%`, 'You feel good.');
+    }
+  } else {
+    ok('Readiness not logged today', 'Answer the five questions on Today and this gets sharper.', 3);
+  }
+
+  score = Math.max(0, Math.min(100, score));
+  const level = score >= 85 ? 'prime' : score >= 65 ? 'good' : score >= 45 ? 'fair' : 'poor';
+
+  /* --- what is even worth testing ----------------------------------- */
+  const targets = milestones(state, { perLift: 2 })
+    .flatMap((m) => m.next.filter((n) => n.inRange).map((n) => ({ ...n, lift: m.lift })));
+
+  // The cheapest thing that would move the number.
+  let window = null;
+  if (sinceHard <= 4) {
+    const wait = 5 - sinceHard;
+    window = { days: wait, text: `${wait} more rest day${wait === 1 ? '' : 's'} and you would be taking this attempt at your best.` };
+  } else if (cur?.week >= weeks) {
+    window = { days: null, text: 'After this cycle\'s deload you will be far better placed than you are now.' };
+  }
+
+  const headline = level === 'prime' ? 'As ready as you get.'
+    : level === 'good' ? 'Good day for it.'
+    : level === 'fair' ? 'You can, but you will not see your best.'
+    : 'Not today.';
+
+  return { score, level, headline, factors, window, targets, sinceHard, sinceAny };
+}
+
+/* ======================================================================
+   Test blocks — three lifts, spaced so each one gets a fair attempt
+   ====================================================================== */
+
+/** Systemic cost. Squat and deadlift compete for the same recovery; bench does not. */
+const HEAVY_SYSTEMIC = new Set(['squat', 'deadlift']);
+
+/**
+ * Lay three test days out over a calendar.
+ *
+ * Two rules, both from what the lift costs rather than from a schedule template:
+ * squat and deadlift draw on the same recovery, so they never sit adjacent;
+ * bench barely does, so it can go anywhere. And the lift the lifter most wants
+ * goes first, while they are freshest — testing your priority lift last, after
+ * two limit singles, is how you find out what you can do while tired.
+ */
+export function planTestBlock(state, { lifts = ['squat', 'bench', 'deadlift'], start = todayISO() } = {}) {
+  const ms = milestones(state, { perLift: 1 });
+  const gapOf = (lift) => {
+    const m = ms.find((x) => x.lift === lift);
+    const next = m?.next?.[0];
+    return next ? next.away : Infinity;
+  };
+  // The freshest day goes to the attempt that most needs it: one that is
+  // marginal (the target sits at or above the current estimate, so a few kilos
+  // of fatigue decide it) and systemically expensive. A squat 16 kg inside the
+  // estimate is a formality and can wait; bench is cheap to recover from and
+  // suffers least from going last.
+  const order = [...lifts].sort((a, b) => {
+    const ha = HEAVY_SYSTEMIC.has(a) ? 1 : 0, hb = HEAVY_SYSTEMIC.has(b) ? 1 : 0;
+    if (ha !== hb) return hb - ha;
+    return gapOf(b) - gapOf(a);        // more marginal first
+  });
+
+  const addDays = (iso, n) => {
+    const [y, m, d] = iso.split('-').map(Number);
+    const dt = new Date(y, m - 1, d + n);
+    return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+  };
+
+  const placed = [];
+  let offset = 0;
+  for (const lift of order) {
+    if (placed.length) {
+      const lastHeavy = [...placed].reverse().find((p) => HEAVY_SYSTEMIC.has(p.lift));
+      const need = HEAVY_SYSTEMIC.has(lift) && lastHeavy ? 2 : 1;   // rest days between
+      const from = HEAVY_SYSTEMIC.has(lift) && lastHeavy ? lastHeavy.offset : placed[placed.length - 1].offset;
+      offset = Math.max(offset + 1, from + need + 1);
+    }
+    const m = ms.find((x) => x.lift === lift);
+    placed.push({
+      lift, offset, date: addDays(start, offset),
+      attempts: null,
+      target: m?.next?.[0] || null,
+    });
+  }
+
+  // Fill the gaps so the plan reads as days rather than as a list of lifts.
+  const span = placed[placed.length - 1].offset;
+  const days = [];
+  for (let i = 0; i <= span; i++) {
+    const hit = placed.find((p) => p.offset === i);
+    days.push(hit ? { ...hit, kind: 'test' } : { kind: 'rest', offset: i, date: addDays(start, i) });
+  }
+  return { days, order, span };
 }
 
 /* ======================================================================

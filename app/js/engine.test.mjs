@@ -26,7 +26,8 @@ const { buildProgram, resolveDay, startSession, completeSession, resolveAssessme
 const { pctOf1RM, e1RM, loadFor, plateBreakdown, roundToLoadable, plateLabel, minIncrement, convertLoad,
         loadBand, RPE_TOLERANCE } = await import('./rpe.js');
 const { assessDeload, INTERMEDIATE_PL, INTERMEDIATE_PL_3DAY } = await import('./templates.js');
-const { strengthTrend, trendSummary, sessionBriefing, trainingAgeReport, TRAINING_AGE_BANDS, milestones } = await import('./coach.js');
+const { strengthTrend, trendSummary, sessionBriefing, trainingAgeReport, TRAINING_AGE_BANDS, milestones,
+        testReadiness, planTestBlock } = await import('./coach.js');
 
 let pass = 0, fail = 0;
 const problems = [];
@@ -1279,6 +1280,89 @@ hr('15c. Test day');
   }
   const anyInRange = ms.flatMap((m) => m.next).filter((n) => n.inRange);
   for (const n of anyInRange) ok(n.away <= 2.5 + 1e-9, 'in-range means within one small jump', `${n.away}`);
+}
+
+/* ======================================================================
+   15d. Test readiness and test blocks
+   ====================================================================== */
+hr('15d. Test readiness');
+{
+  // A history with dates on it, ending in a deload whose Day 3 ran hot -- the
+  // shape that actually happened.
+  store.update((s) => {
+    s.profile = { ...s.profile, units: 'kg', barWeight: 20, plates: [25, 20, 15, 10, 5, 2.5, 1.25], microplates: true };
+    s.maxes = { squat: { value: 150 }, bench: { value: 95 }, deadlift: { value: 173.5 } };
+    s.program = buildProgram({ templateId: INTERMEDIATE_PL.id });
+    s.sessions = [];
+    s.activeSessionId = null;
+    s.readiness = [];
+  });
+  const DATES = ['2026-08-05', '2026-08-07', '2026-08-09', '2026-08-11', '2026-08-13', '2026-08-14', '2026-08-16', '2026-08-17',
+                 '2026-08-18', '2026-08-20', '2026-08-22', '2026-08-26', '2026-08-30', '2026-08-31', '2026-09-03', '2026-09-04'];
+  const RPES = [7, 5.8, 8, 7.9, 7.4, 6.5, 7.6, 8, 7.3, 5.8, 8, 8.1, 6.3, 5.8, 8.1, 6.3];
+  let di = 0;
+  const trainDated = () => {
+    const s0 = store.getState();
+    const ses = startSession(s0, { ...s0.program.cursor });
+    ses.date = DATES[di]; const rpe = RPES[di]; di++;
+    for (const e of ses.entries) e.sets = e.sets.map(() => ({ load: e.plannedLoad ?? 60, reps: e.targetReps, rpe, done: true, ts: new Date().toISOString() }));
+    store.update((s) => { s.sessions.push(ses); s.activeSessionId = ses.id; });
+    store.update((s) => { completeSession(s, ses.id); s.activeSessionId = null; });
+  };
+  for (let w = 0; w < 3; w++) [1, 2, 3, 4].forEach(trainDated);
+  store.update((s) => { resolveAssessment(s, { dread: true, sleep: true }); });
+  [1, 2, 3, 4].forEach(trainDated);
+  const rSt = store.getState();
+
+  // The whole use of the score is answering "today or wait", so it has to move.
+  const days = ['2026-09-05', '2026-09-06', '2026-09-08', '2026-09-11'];
+  const scores = days.map((d) => testReadiness(rSt, { today: d }).score);
+  for (let i = 1; i < scores.length; i++) {
+    ok(scores[i] > scores[i - 1], `readiness improves with rest (${days[i - 1]} -> ${days[i]})`, `${scores[i - 1]} -> ${scores[i]}`);
+  }
+  ok(scores.every((x) => x >= 0 && x <= 100), 'the score stays on its scale', scores.join('/'));
+
+  // Testing the day after a hard session must read badly.
+  const dayAfter = testReadiness(rSt, { today: '2026-09-04' });
+  ok(dayAfter.score < scores[scores.length - 1] - 20, 'testing straight off a hard session scores far worse', `${dayAfter.score}`);
+
+  // The compromised deload is named, and stops counting once it is far enough back.
+  const near = testReadiness(rSt, { today: '2026-09-05' });
+  ok(near.factors.some((f) => /deload ran hot/.test(f.label) && f.verdict === 'bad'), 'a deload that ran hot counts against readiness');
+  const far = testReadiness(rSt, { today: '2026-09-20' });
+  ok(!far.factors.some((f) => /deload ran hot/.test(f.label) && f.verdict === 'bad'), 'and stops counting once the fatigue is gone');
+
+  // Drift is a training-week signal; a deload's own RPE must not be charged twice.
+  const drift = near.factors.find((f) => /Recent (sessions|effort)/.test(f.label));
+  ok(drift && !/running hot/.test(drift.label), 'deload RPE is not counted as training drift', drift?.label);
+
+  // It never refuses, and never throws on a lifter with no history.
+  ok(near.score != null && near.level, 'readiness always returns a verdict');
+  store.update((s) => { s.sessions = []; });
+  const empty = testReadiness(store.getState(), { today: '2026-09-06' });
+  eq(empty.level, 'unknown', 'a lifter with nothing logged gets an honest shrug');
+  ok(Array.isArray(empty.factors), 'and still gets a factor list');
+  store.update((s) => { s.sessions = rSt.sessions; });
+
+  /* ---- the block ---- */
+  hr('15d. Test block');
+  const block = planTestBlock(rSt, { lifts: ['squat', 'bench', 'deadlift'], start: '2026-09-09' });
+  const tests = block.days.filter((d) => d.kind === 'test');
+  eq(tests.length, 3, 'every chosen lift gets a day');
+  eq(tests[0].lift, 'deadlift', 'the marginal heavy lift gets the freshest day');
+  eq(tests[tests.length - 1].lift, 'bench', 'bench goes last — it is cheapest to recover from and suffers least');
+
+  // The rule that matters: squat and deadlift draw on the same recovery.
+  const heavy = tests.filter((t) => t.lift === 'squat' || t.lift === 'deadlift');
+  for (let i = 1; i < heavy.length; i++) {
+    ok(heavy[i].offset - heavy[i - 1].offset >= 3, 'squat and deadlift are never adjacent', `${heavy[i - 1].lift}@${heavy[i - 1].offset} -> ${heavy[i].lift}@${heavy[i].offset}`);
+  }
+  ok(block.days.some((d) => d.kind === 'rest'), 'the plan includes the rest days rather than just the lifts');
+  ok(block.days.every((d, i, xs) => i === 0 || d.offset === xs[i - 1].offset + 1), 'the plan is a contiguous run of days');
+  for (const d of block.days) ok(/^\d{4}-\d{2}-\d{2}$/.test(d.date), 'every day carries a real date', d.date);
+
+  // One lift is just one day.
+  eq(planTestBlock(rSt, { lifts: ['deadlift'], start: '2026-09-09' }).days.length, 1, 'a single-lift block is one day');
 }
 
 /* ======================================================================

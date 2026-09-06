@@ -6,7 +6,7 @@ import { html, raw, esc, icon, $, $$, toast, sheet, closeSheet, fmtDate, relDays
 import { fmtLoadBare, plateBreakdown, fmtRPE } from '../rpe.js';
 import { resolveDay, startSession, templateOf, resolveAssessment, cyclePlan, loadingWeeks, resolveTestDay, attemptsFor } from '../program.js';
 import { DELOAD_CHECKLIST, WARMUP, RPE_SCALE, INTERMEDIATE_PL, ADVANCED_ACCUMULATION } from '../templates.js';
-import { activeInsights, sessionBriefing, readinessVerdict, READINESS_QUESTIONS, PAIN_PROTOCOL, milestones } from '../coach.js';
+import { activeInsights, sessionBriefing, readinessVerdict, READINESS_QUESTIONS, PAIN_PROTOCOL, milestones, testReadiness, planTestBlock } from '../coach.js';
 import { byId } from '../exercises.js';
 import { buildProgram } from '../program.js';
 import { todayISO } from '../store.js';
@@ -147,6 +147,39 @@ function openTestDay(ctx) {
   const units = st.profile.units;
   const chosen = new Set(['squat', 'bench', 'deadlift']);
 
+  const ready = testReadiness(st);
+  const LIFT_NAMES = { squat: 'Squat', bench: 'Bench', deadlift: 'Deadlift' };
+
+  const readinessBlock = () => {
+    if (ready.score == null) return '';
+    const cls = { prime: 'good', good: 'good', fair: 'warn', poor: 'bad' }[ready.level] || 'info';
+    return `<div class="insight insight--${cls}">
+      <div class="insight__icon">${icon(ready.level === 'poor' ? 'warn' : 'check')}</div>
+      <div class="grow">
+        <div class="insight__t">${esc(ready.headline)} <span class="pill pill--${cls === 'bad' ? 'warn' : cls}">${ready.score}/100</span></div>
+        <div style="margin-top:8px">
+          ${ready.factors.map((f) => `<div class="kv">
+            <span class="kv__k">${f.verdict === 'bad' ? '⚠ ' : ''}${esc(f.label)}</span>
+          </div><div class="tiny dim" style="margin:-4px 0 6px">${esc(f.detail)}</div>`).join('')}
+        </div>
+        ${ready.window ? `<div class="tiny" style="margin-top:6px"><b>${esc(ready.window.text)}</b></div>` : ''}
+      </div>
+    </div>`;
+  };
+
+  const planBlock = () => {
+    if (chosen.size < 2) return '';
+    const plan = planTestBlock(st, { lifts: [...chosen] });
+    return `<div class="card card--flat">
+      <div class="eyebrow" style="margin-bottom:8px">Suggested order</div>
+      ${plan.days.map((d) => d.kind === 'test'
+        ? `<div class="kv"><span class="kv__k"><b>${esc(fmtDate(d.date))}</b></span>
+             <span class="kv__v">${esc(LIFT_NAMES[d.lift])}${d.target ? ` <span class="dim" style="font-weight:400">· ${esc(d.target.label)}</span>` : ''}</span></div>`
+        : `<div class="kv"><span class="kv__k dim">${esc(fmtDate(d.date))}</span><span class="kv__v dim" style="font-weight:400">rest</span></div>`).join('')}
+      <p class="cite" style="margin-top:8px">Squat and deadlift draw on the same recovery, so they never sit next to each other; bench barely does. The lift closest to a milestone goes first, while you are freshest. Starting below runs the first one — come back for the others on their days.</p>
+    </div>`;
+  };
+
   const table = () => ['squat', 'bench', 'deadlift'].map((lift) => {
     const a = attemptsFor(st, lift);
     const name = { squat: 'Squat', bench: 'Bench', deadlift: 'Deadlift' }[lift];
@@ -164,25 +197,34 @@ function openTestDay(ctx) {
   sheet({
     title: 'Test day',
     body: `<div class="stack">
+      ${readinessBlock()}
       <p class="muted small">Three attempts each: an opener you could triple, a second you could double, and one real attempt at a weight you have not done. This sits outside your program — it will not move your cycle or touch your training loads.</p>
       <div class="stack-sm">${table()}</div>
-      <div class="banner banner--warn">
-        <b>Order matters.</b> Squatting and benching to a limit single first will cost you weight on the deadlift.
-        If one number is the point today, test that lift on its own.
-      </div>
+      <div data-plan-slot>${planBlock()}</div>
       <button class="btn btn--primary btn--lg btn--block" data-go>${icon('trophy')} Start test day</button>
     </div>`,
     onMount(root, close) {
+      const redrawPlan = () => {
+        const slot = $('[data-plan-slot]', root);
+        if (slot) slot.innerHTML = planBlock();
+      };
       $$('[data-lift]', root).forEach((cb) => cb.onchange = () => {
         if (cb.checked) chosen.add(cb.dataset.lift); else chosen.delete(cb.dataset.lift);
         const go = $('[data-go]', root);
         if (go) go.disabled = chosen.size === 0;
+        redrawPlan();
       });
       $('[data-go]', root).onclick = () => {
         if (!chosen.size) return;
+        // A block is a plan, not a session: start the lift whose day this is and
+        // let the lifter come back for the rest. Loading all three into one
+        // session would be the exact thing the plan above tells them not to do.
+        const first = chosen.size > 1
+          ? planTestBlock(st, { lifts: [...chosen] }).order[0]
+          : [...chosen][0];
         let id = null;
         ctx.store.update((s) => {
-          s.program.testLifts = [...chosen];
+          s.program.testLifts = [first];
           const ses = startSession(s, { ...s.program.cursor, phase: 'test' });
           s.sessions.push(ses);
           s.activeSessionId = ses.id;
