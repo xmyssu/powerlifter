@@ -353,6 +353,137 @@ export function sessionBriefing(resolved, state) {
 }
 
 /* ======================================================================
+   Training age — am I still an intermediate?
+   ====================================================================== */
+
+/**
+ * The book's own classification, and it is deliberately not a strength standard
+ * (p. 100):
+ *
+ *   "it is most useful to categorize ourselves based on the length of time it
+ *    takes to improve (strength), rather than an arbitrary strength standard or
+ *    the length of time we have been lifting ... some lifters have been hitting
+ *    the gym for over 10 years, but functionally are still intermediates."
+ *
+ * So the question "are my numbers intermediate numbers?" has no answer. The
+ * question that does is "how often can I still add load?" (p. 103).
+ */
+export const TRAINING_AGE_BANDS = [
+  { age: 'novice',       label: 'Novice',       adds: 'every session', note: 'Add load workout to workout on a single progression.' },
+  { age: 'intermediate', label: 'Intermediate', adds: 'every week',    note: 'Load climbs across a wave; the cycle repeats heavier.' },
+  { age: 'advanced',     label: 'Advanced',     adds: 'every month',   note: 'Progress is a block-to-block question, not a weekly one.' },
+];
+
+export const TRAINING_AGE_CITE = 'Level 3, pp. 100-103 (how training age is defined); p. 245 (when to leave the intermediate program).';
+
+/** The 28-day change in a lift's trusted estimate, and the weekly slope. */
+function liftRate(state, lift) {
+  const all = strengthTrend(state, lift);
+  // Same exclusions trendSummary applies: a deload is light by design and a
+  // set of nine does not estimate the same 1RM as a hard triple. A rate built
+  // from either measures something other than strength.
+  const pts = all.filter((p) => !p.deload && !p.estimatedFromHighReps);
+  if (pts.length < 2) return { lift, points: pts.length, delta: null, perWeek: null, soft: all.length > pts.length };
+
+  const end = pts[pts.length - 1].date;
+  const window = pts.filter((p) => daysBetween(p.date, end) <= 28);
+  const use = window.length >= 2 ? window : pts.slice(-2);
+  const days = daysBetween(use[0].date, use[use.length - 1].date);
+
+  // A rate needs a span to be a rate. Readings inside one week — or, in the
+  // degenerate case, all on one date — produce a slope that is either wildly
+  // over-confident or exactly zero, and neither is worth putting on a card next
+  // to the words "per week".
+  const spanned = days >= 7;
+  return {
+    lift,
+    points: use.length,
+    delta: +(use[use.length - 1].value - use[0].value).toFixed(1),
+    days,
+    perWeek: spanned ? +slopePerWeek(pts).toFixed(2) : null,
+    first: use[0],
+    last: use[use.length - 1],
+    soft: all.length > pts.length,
+  };
+}
+
+/**
+ * Where the lifter sits, and how far they are from the next stage.
+ *
+ * The verdict is the stall criterion, not the rate. p. 245 is specific: you move
+ * up when you stall on a strength-day main lift, restart 5-10% lighter with
+ * halved increments, and then stall *again* — on most of those lifts. The rate
+ * is shown alongside because it is the thing that tells you the current program
+ * is still working, but it is not the decision rule and must not read as one.
+ */
+export function trainingAgeReport(state) {
+  const program = state.program;
+  if (!program) return null;
+  const tpl = templateOf(program);
+
+  const lifts = [
+    { lift: 'squat', label: 'Squat' },
+    { lift: 'bench', label: 'Bench press' },
+    { lift: 'deadlift', label: 'Deadlift' },
+  ].map((l) => ({ ...l, ...liftRate(state, l.lift) }));
+
+  // Per strength-day main lift: how much of the graduation criterion is met.
+  const rows = [];
+  for (const day of tpl.days) {
+    if (day.role !== 'strength') continue;
+    for (const slot of day.slots) {
+      if (slot.role !== 'main' && slot.role !== 'variation') continue;
+      const st = program.slots[slot.key] || {};
+      rows.push({
+        slotKey: slot.key,
+        label: byId(program.choices?.[slot.key])?.short || slot.slotType,
+        stalls: st.stalls || 0,
+        smallIncrement: !!st.smallIncrement,
+        // The book's bar: stalled again *after* the increments were already cut.
+        qualifies: !!st.smallIncrement && (st.stalls || 0) >= 2,
+      });
+    }
+  }
+  const have = rows.filter((r) => r.qualifies).length;
+  const need = Math.ceil(rows.length / 2);
+
+  const grad = graduationCheck(state);
+  const isIntermediate = tpl.trainingAge === 'intermediate';
+
+  let verdict, why;
+  if (!isIntermediate) {
+    verdict = tpl.trainingAge;
+    why = `You are running an ${tpl.trainingAge} template, so the intermediate graduation test does not apply.`;
+  } else if (grad.ready) {
+    verdict = 'graduate';
+    why = grad.text;
+  } else if (have > 0) {
+    verdict = 'intermediate';
+    why = `${have} of your ${rows.length} strength-day main lifts have stalled twice on cut increments. The book's bar is ${need}. Keep going until then.`;
+  } else {
+    const stalledAny = rows.some((r) => r.stalls > 0);
+    verdict = 'intermediate';
+    why = stalledAny
+      ? 'You have stalled, but not yet stalled a second time on already-halved increments. That second stall is the signal, not the first.'
+      : 'No stalls on your strength days, and your increments have never been cut. The intermediate progression is still doing its job — moving up now would deliberately slow you down.';
+  }
+
+  return {
+    age: tpl.trainingAge,
+    templateName: tpl.name,
+    bands: TRAINING_AGE_BANDS,
+    lifts,
+    rows,
+    have,
+    need,
+    ready: !!grad.ready,
+    verdict,
+    why,
+    cite: TRAINING_AGE_CITE,
+  };
+}
+
+/* ======================================================================
    Progress read-out
    ====================================================================== */
 

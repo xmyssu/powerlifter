@@ -4,7 +4,7 @@
 
 import { html, raw, esc, icon, $, $$, sheet, toast, confirmSheet, fmtDate, relDays } from '../ui.js';
 import { fmtLoadBare, fmtRPE, loadFor } from '../rpe.js';
-import { activeInsights, PLATEAU_TREE, PAIN_PROTOCOL, FAULTS, STICKING_POINT_PREAMBLE } from '../coach.js';
+import { activeInsights, PLATEAU_TREE, PAIN_PROTOCOL, FAULTS, STICKING_POINT_PREAMBLE, trainingAgeReport } from '../coach.js';
 import { graduationCheck, templateOf, slotHistory, slotE1RM, loadingWeeks } from '../program.js';
 import { INTERMEDIATE_PEAK, DELOAD_CHECKLIST } from '../templates.js';
 import { byId, optionsForSlot } from '../exercises.js';
@@ -36,6 +36,11 @@ function view(ctx) {
       <div class="stack-sm">
         <div class="eyebrow">Where you are</div>
         ${raw(statusCard(st, tpl))}
+      </div>
+
+      <div class="stack-sm">
+        <div class="eyebrow">Training age</div>
+        ${raw(trainingAgeCard(st))}
       </div>
 
       <div class="stack-sm">
@@ -78,6 +83,70 @@ function insightCard(i) {
   return `<div class="insight insight--${cls}">
     <div class="insight__icon">${icon(ico)}</div>
     <div><div class="insight__t">${esc(i.title)}</div><div class="insight__b">${esc(i.text)}</div></div>
+  </div>`;
+}
+
+/**
+ * Am I still an intermediate?
+ *
+ * Deliberately leads with what the book classifies on — how often you can still
+ * add load — rather than with the numbers, because the numbers are the thing it
+ * explicitly refuses to classify on (p. 100). The rate table underneath says
+ * whether the current program is still working; the criterion table says whether
+ * you have earned the next one. They are different questions and the card keeps
+ * them apart, because conflating them is how a lifter talks themselves onto a
+ * block program that will progress them more slowly.
+ */
+function trainingAgeCard(st) {
+  const r = trainingAgeReport(st);
+  if (!r) return '';
+  const units = st.profile.units;
+
+  const bands = r.bands.map((b) => {
+    const you = b.age === r.age;
+    return `<div class="kv">
+      <span class="kv__k">${you ? `<b>${esc(b.label)}</b>` : esc(b.label)}</span>
+      <span class="kv__v">${esc(b.adds)}${you ? ' <span class="pill pill--accent">you</span>' : ''}</span>
+    </div>`;
+  }).join('');
+
+  const rate = r.lifts.map((l) => {
+    if (l.delta == null) {
+      return `<div class="kv"><span class="kv__k">${esc(l.label)}</span><span class="kv__v dim">not enough data</span></div>`;
+    }
+    const sign = l.delta > 0 ? '+' : '';
+    const cls = l.delta > 0 ? 'good' : l.delta < 0 ? 'warn' : '';
+    const rate = l.perWeek == null
+      ? `<span class="dim" style="font-weight:400"> · over ${l.days} day${l.days === 1 ? '' : 's'}</span>`
+      : `<span class="dim" style="font-weight:400"> · ${l.perWeek >= 0 ? '+' : ''}${fmtLoadBare(l.perWeek)}/wk</span>`;
+    return `<div class="kv">
+      <span class="kv__k">${esc(l.label)}</span>
+      <span class="kv__v"><span class="${cls}">${sign}${fmtLoadBare(l.delta)} ${esc(units)}</span>${rate}</span>
+    </div>`;
+  }).join('');
+
+  const crit = r.rows.map((row) => `<div class="kv">
+    <span class="kv__k">${esc(row.label)}</span>
+    <span class="kv__v">${row.qualifies
+      ? '<span class="pill pill--warn">qualifies</span>'
+      : `<span class="dim" style="font-weight:400">${row.stalls === 0 ? 'no stalls' : `${row.stalls} stall${row.stalls === 1 ? '' : 's'}`} · ${row.smallIncrement ? 'increments cut' : 'full increments'}</span>`}</span>
+  </div>`).join('');
+
+  return `<div class="card">
+    <div class="insight__t">${esc(r.ready ? 'Time to move up' : `You are an ${r.age}`)}</div>
+    <div class="insight__b" style="margin-top:4px;margin-bottom:14px">${esc(r.why)}</div>
+
+    <div class="eyebrow" style="margin-bottom:6px">The book classifies on how often you can still add load</div>
+    ${bands}
+    <p class="cite" style="margin:8px 0 16px">Not on what you lift. "Some lifters have been hitting the gym for over 10 years, but functionally are still intermediates."</p>
+
+    <div class="eyebrow" style="margin-bottom:6px">Your last 28 days</div>
+    ${rate}
+    <p class="cite" style="margin:8px 0 16px">Change in estimated max, deload weeks and high-rep estimates excluded. This says whether the program is working, not which stage you are at.</p>
+
+    ${r.rows.length ? `<div class="eyebrow" style="margin-bottom:6px">Moving up needs ${r.need} of ${r.rows.length} strength-day mains to stall twice on cut increments</div>
+    ${crit}
+    <p class="cite" style="margin-top:8px">${r.have} of ${r.rows.length} there. ${esc(r.cite)}</p>` : ''}
   </div>`;
 }
 

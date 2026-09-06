@@ -25,7 +25,7 @@ const { buildProgram, resolveDay, startSession, completeSession, resolveAssessme
 const { pctOf1RM, e1RM, loadFor, plateBreakdown, roundToLoadable, plateLabel, minIncrement, convertLoad,
         loadBand, RPE_TOLERANCE } = await import('./rpe.js');
 const { assessDeload, INTERMEDIATE_PL, INTERMEDIATE_PL_3DAY } = await import('./templates.js');
-const { strengthTrend, trendSummary, sessionBriefing } = await import('./coach.js');
+const { strengthTrend, trendSummary, sessionBriefing, trainingAgeReport, TRAINING_AGE_BANDS } = await import('./coach.js');
 
 let pass = 0, fail = 0;
 const problems = [];
@@ -1099,6 +1099,74 @@ hr('15. Three-day schedule');
   const f2 = sessionBriefing(resolveDay(st4, { cycle: 1, week: 1, day: 2, phase: 'load' }), st4);
   const tn = f2.notes.find((n) => n.kind === 'technique');
   ok(tn && /^Technique day/.test(tn.title), 'the four-day still calls it a technique day');
+}
+
+/* ======================================================================
+   15b. Training age
+   ====================================================================== */
+hr('15b. Training age');
+{
+  store.update((s) => {
+    s.profile = { ...s.profile, units: 'kg', barWeight: 20, plates: [25, 20, 15, 10, 5, 2.5, 1.25], microplates: true };
+    s.maxes = { squat: { value: 170 }, bench: { value: 120 }, deadlift: { value: 200 } };
+    s.program = buildProgram({ templateId: INTERMEDIATE_PL.id });
+    s.sessions = [];
+    s.activeSessionId = null;
+  });
+  for (let w = 0; w < 3; w++) [1, 2, 3, 4].forEach(() => trainAsPrescribed());
+
+  const r = trainingAgeReport(store.getState());
+  eq(r.age, 'intermediate', 'the report reads the training age off the template');
+  eq(r.ready, false, 'a lifter who has never stalled is not ready to move up');
+  eq(r.have, 0, 'no strength-day main qualifies yet');
+  ok(r.need >= 1 && r.need <= r.rows.length, 'the bar is a real fraction of the strength mains', `${r.need}/${r.rows.length}`);
+  ok(/No stalls/.test(r.why), 'and it says so in plain words', r.why);
+  eq(TRAINING_AGE_BANDS.length, 3, 'three training-age bands');
+  ok(TRAINING_AGE_BANDS.every((b) => b.adds && b.label), 'each band says how often you can add load');
+
+  // Only strength-day mains count. Day 2 is technique work and is excluded by
+  // name in the book, so it must not appear among the rows being judged.
+  ok(!r.rows.some((x) => x.slotKey.startsWith('d2_')), 'technique-day lifts are not part of the criterion');
+  ok(r.rows.length >= 2, 'the strength days contribute several mains', `${r.rows.length}`);
+
+  // A lifter who has genuinely met the book's bar reads as ready.
+  store.update((s) => {
+    for (const row of r.rows) { s.program.slots[row.slotKey].smallIncrement = true; s.program.slots[row.slotKey].stalls = 2; }
+  });
+  const ready = trainingAgeReport(store.getState());
+  eq(ready.ready, true, 'stalling twice on cut increments across the strength mains reads as ready');
+  eq(ready.verdict, 'graduate', 'and the verdict says to move up');
+  eq(ready.have, ready.rows.length, 'every main counted');
+
+  // One stall is not the signal; the second one is.
+  store.update((s) => {
+    for (const row of r.rows) { s.program.slots[row.slotKey].smallIncrement = false; s.program.slots[row.slotKey].stalls = 1; }
+  });
+  const once = trainingAgeReport(store.getState());
+  eq(once.ready, false, 'a single stall is not the signal to move up');
+  ok(/second stall/.test(once.why), 'and the card explains that it is the second that counts', once.why);
+
+  // A rate needs a span to be a rate. trainAsPrescribed stamps every session
+  // with today's date, so this history spans zero days and the per-week figure
+  // must come back null rather than as a confident-looking zero.
+  const withRate = trainingAgeReport(store.getState());
+  for (const l of withRate.lifts) {
+    if (l.delta == null) continue;
+    ok(Number.isFinite(l.delta), `${l.lift}: the 28-day change is a real number`, `${l.delta}`);
+    eq(l.perWeek, null, `${l.lift}: a same-day history reports no weekly rate`);
+    ok(l.days < 7, `${l.lift}: and says how short the window was`, `${l.days}`);
+  }
+
+  // Spread the same sessions over a real calendar and the rate appears.
+  store.update((s) => {
+    const start = new Date('2026-08-05T12:00:00Z');
+    s.sessions.forEach((ses, i) => { ses.date = new Date(start.getTime() + i * 2 * 864e5).toISOString().slice(0, 10); });
+  });
+  const dated = trainingAgeReport(store.getState());
+  const sq = dated.lifts.find((l) => l.lift === 'squat');
+  ok(sq.days >= 7, 'a spread-out history spans enough days to rate', `${sq.days}`);
+  ok(Number.isFinite(sq.perWeek), 'and then reports a weekly rate', `${sq.perWeek}`);
+  ok(sq.perWeek > 0 && sq.perWeek < 10, 'which is a plausible weekly gain', `${sq.perWeek}`);
 }
 
 /* ======================================================================

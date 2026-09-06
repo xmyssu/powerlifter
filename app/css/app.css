@@ -113,6 +113,8 @@ h3 { font-size: 1.05rem; }
 }
 .muted   { color: var(--text-2); }
 .dim     { color: var(--text-3); }
+.good    { color: var(--good); }
+.warn    { color: var(--warn); }
 .small   { font-size: .813rem; }
 .tiny    { font-size: .719rem; }
 .center  { text-align: center; }
