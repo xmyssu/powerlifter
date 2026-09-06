@@ -21,11 +21,12 @@ const store = await import('./store.js');
 const { buildProgram, resolveDay, startSession, completeSession, resolveAssessment,
         repsForWeek, pctForWeek, loadingWeeks, graduationCheck, volumeAudit,
         slotE1RM, slotE1RMDetail, cyclePlan, convertUnits, slotHistory, lastComparable,
-        templateOf, PAIN_WEEK_REPS, RELIABLE_E1RM_REPS } = await import('./program.js');
+        templateOf, PAIN_WEEK_REPS, RELIABLE_E1RM_REPS, resolveTestDay, attemptsFor,
+        bestMaxFor } = await import('./program.js');
 const { pctOf1RM, e1RM, loadFor, plateBreakdown, roundToLoadable, plateLabel, minIncrement, convertLoad,
         loadBand, RPE_TOLERANCE } = await import('./rpe.js');
 const { assessDeload, INTERMEDIATE_PL, INTERMEDIATE_PL_3DAY } = await import('./templates.js');
-const { strengthTrend, trendSummary, sessionBriefing, trainingAgeReport, TRAINING_AGE_BANDS } = await import('./coach.js');
+const { strengthTrend, trendSummary, sessionBriefing, trainingAgeReport, TRAINING_AGE_BANDS, milestones } = await import('./coach.js');
 
 let pass = 0, fail = 0;
 const problems = [];
@@ -1167,6 +1168,117 @@ hr('15b. Training age');
   ok(sq.days >= 7, 'a spread-out history spans enough days to rate', `${sq.days}`);
   ok(Number.isFinite(sq.perWeek), 'and then reports a weekly rate', `${sq.perWeek}`);
   ok(sq.perWeek > 0 && sq.perWeek < 10, 'which is a plausible weekly gain', `${sq.perWeek}`);
+}
+
+/* ======================================================================
+   15c. Test day and milestones
+   ====================================================================== */
+hr('15c. Test day');
+{
+  store.update((s) => {
+    s.profile = { ...s.profile, units: 'kg', barWeight: 20, plates: [25, 20, 15, 10, 5, 2.5, 1.25], microplates: true };
+    s.maxes = { squat: { value: 150 }, bench: { value: 95 }, deadlift: { value: 173.5 } };
+    s.program = buildProgram({ templateId: INTERMEDIATE_PL.id, meetDate: '2026-10-16' });
+    s.sessions = [];
+    s.activeSessionId = null;
+  });
+  for (let w = 0; w < 3; w++) [1, 2, 3, 4].forEach(() => trainAsPrescribed());
+
+  const before = JSON.parse(JSON.stringify(store.getState().program.cursor));
+  const pendingBefore = store.getState().program.pendingAssessment;
+  const st0 = store.getState();
+
+  const a = attemptsFor(st0, 'deadlift');
+  ok(a.opener < a.second && a.second < a.third, 'attempts climb', `${a.opener}/${a.second}/${a.third}`);
+  ok(a.opener < a.max, 'the opener is below the estimated max — it is insurance, not a test');
+  ok(a.third > a.max, 'the third attempt is a weight the lifter has not done');
+  for (const v of [a.opener, a.second, a.third, ...a.ramp.map((r) => r.load)]) {
+    eq(roundToLoadable(v, st0.profile), v, 'every attempt and ramp load is loadable');
+  }
+  ok(a.ramp.length >= 3, 'there is a real warm-up ramp', `${a.ramp.length}`);
+  ok(a.ramp.every((r, i, xs) => i === 0 || r.load > xs[i - 1].load), 'the ramp climbs');
+  ok(a.ramp[a.ramp.length - 1].load < a.opener, 'and stops below the opener');
+
+  const td = resolveTestDay(st0, {});
+  ok(td.isTest, 'the resolved day knows it is a test');
+  eq(td.label, 'Test day', 'and is labelled as one');
+  eq(td.slots.length, 3, 'all three competition lifts by default');
+  for (const sl of td.slots) {
+    eq(sl.reps, 1, 'a test set is a single');
+    eq(sl.sets, 3, 'three attempts');
+    eq(sl.setLoads.length, 3, 'each attempt carries its own load');
+    ok(sl.exerciseId, `${sl.slotKey} resolves to a real exercise`);
+  }
+  eq(resolveTestDay(st0, { lifts: ['deadlift'] }).slots.length, 1, 'a single-lift test day is possible');
+
+  // startSession must give each attempt its own weight rather than repeating the first.
+  const ses = startSession(st0, { ...st0.program.cursor, phase: 'test' });
+  const dl = ses.entries.find((e) => e.slotKey === 'test_deadlift');
+  eq(dl.sets.length, 3, 'three attempt rows');
+  ok(dl.sets[0].load < dl.sets[1].load && dl.sets[1].load < dl.sets[2].load,
+    'each row is pre-filled with its own attempt', dl.sets.map((x) => x.load).join('/'));
+
+  // Log a successful third attempt.
+  dl.sets = dl.sets.map((x) => ({ ...x, reps: 1, rpe: 10, done: true, ts: new Date().toISOString() }));
+  for (const e of ses.entries) if (e.slotKey !== 'test_deadlift') e.sets = e.sets.map((x) => ({ ...x, done: false }));
+  store.update((s) => { s.sessions.push(ses); s.activeSessionId = ses.id; });
+  let tnotes = [];
+  store.update((s) => { tnotes = completeSession(s, ses.id).notes; s.activeSessionId = null; });
+  st = store.getState();
+
+  ok(tnotes.some((n) => n.kind === 'tested'), 'a tested max is reported back');
+  eq(st.maxes.deadlift.source, 'tested', 'and written to the maxes as tested');
+  near(st.maxes.deadlift.value, dl.sets[2].load, 'a single at RPE 10 is the max itself', 0.05);
+
+  // The whole point: a test day must not disturb the program.
+  eq(JSON.stringify(st.program.cursor), JSON.stringify(before), 'a test day does not move the cursor');
+  eq(st.program.pendingAssessment, pendingBefore, 'and leaves the checklist exactly as it found it');
+  for (const [k, v] of Object.entries(st.program.slots)) {
+    eq(v.stalls, 0, `a test day cannot stall ${k}`);
+  }
+
+  // A logged single is the truest point the trend can have.
+  ok(strengthTrend(st, 'deadlift').some((p) => p.value >= dl.sets[2].load - 0.1),
+    'the tested single reaches the strength trend');
+
+  /* ---- milestones ---- */
+  hr('15c. Milestones');
+  const ms = milestones(st);
+  const dlm = ms.find((m) => m.lift === 'deadlift');
+  ok(dlm.next.length > 0, 'there is always a next milestone');
+  ok(dlm.next.every((n) => n.load > (dlm.lifted || 0)), 'the next ones are all ahead of what has been lifted');
+  ok(dlm.next.every((n, i, xs) => i === 0 || n.load >= xs[i - 1].load), 'and are listed nearest first');
+  // "Four plates" means four 20 kg reds, not four of whatever is heaviest on the
+  // rack. A gym with 25s does not make 170 kg three plates to anyone lifting in
+  // it, and the whole point of a milestone is that it is the number the lifter
+  // already had in their head.
+  const allRows = ms.flatMap((m) => [...m.next, ...(m.cleared ? [m.cleared] : [])]);
+  const four = allRows.find((n) => /^4 plates/.test(n.label));
+  ok(four, 'there is a four-plate milestone');
+  eq(four.load, 180, 'and four plates is 180 kg, not 4 x 25 + bar');
+  const three = allRows.find((n) => /^3 plates/.test(n.label));
+  if (three) eq(three.load, 140, 'three plates is 140 kg');
+  ok(/180 kg/.test(four.label), 'the label carries the number as well as the plate count', four.label);
+
+  // A gym with no 20s falls back rather than producing nothing.
+  store.update((s) => { s.profile = { ...s.profile, plates: [25, 15, 10, 5, 2.5] }; });
+  const odd = milestones(store.getState()).flatMap((m) => m.next);
+  ok(odd.some((n) => n.kind === 'plates'), 'a gym without the standard plate still gets plate milestones');
+  store.update((s) => { s.profile = { ...s.profile, plates: [25, 20, 15, 10, 5, 2.5, 1.25] }; });
+
+  // Pounds keeps its own convention.
+  store.update((s) => { s.profile = { ...s.profile, units: 'lb', barWeight: 45, plates: [45, 35, 25, 10, 5, 2.5] }; });
+  const lb = milestones(store.getState()).flatMap((m) => [...m.next, ...(m.cleared ? [m.cleared] : [])]);
+  const lb1 = lb.find((n) => /^1 plate\b/.test(n.label));
+  if (lb1) eq(lb1.load, 135, 'one plate is 135 lb');
+  store.update((s) => { s.profile = { ...s.profile, units: 'kg', barWeight: 20, plates: [25, 20, 15, 10, 5, 2.5, 1.25] }; });
+  // "done" must mean lifted, never estimated.
+  for (const m of ms) {
+    if (!m.cleared) continue;
+    ok(m.lifted >= m.cleared.load - 1e-9, `${m.lift}: a cleared milestone was actually lifted`, `${m.lifted} vs ${m.cleared.load}`);
+  }
+  const anyInRange = ms.flatMap((m) => m.next).filter((n) => n.inRange);
+  for (const n of anyInRange) ok(n.away <= 2.5 + 1e-9, 'in-range means within one small jump', `${n.away}`);
 }
 
 /* ======================================================================

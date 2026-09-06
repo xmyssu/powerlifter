@@ -3,9 +3,9 @@
    ========================================================================== */
 
 import { html, raw, esc, icon, $, $$, sheet, toast, confirmSheet, fmtDate, relDays } from '../ui.js';
-import { fmtLoadBare, fmtRPE, loadFor } from '../rpe.js';
+import { fmtLoadBare } from '../rpe.js';
 import { activeInsights, PLATEAU_TREE, PAIN_PROTOCOL, FAULTS, STICKING_POINT_PREAMBLE, trainingAgeReport } from '../coach.js';
-import { graduationCheck, templateOf, slotHistory, slotE1RM, loadingWeeks } from '../program.js';
+import { graduationCheck, templateOf, slotHistory, slotE1RM, loadingWeeks, attemptsFor } from '../program.js';
 import { INTERMEDIATE_PEAK, DELOAD_CHECKLIST } from '../templates.js';
 import { byId, optionsForSlot } from '../exercises.js';
 import { todayISO } from '../store.js';
@@ -368,16 +368,10 @@ function openMeet(ctx) {
   const units = st.profile.units;
   const out = relDays(p.meetDate);
 
-  const attempts = ['squat', 'bench', 'deadlift'].map((lift) => {
-    const max = bestMaxFor(st, lift);
-    if (!max) return { lift, max: null };
-    return {
-      lift, max,
-      opener: round(loadFor(max, 3, 10), st),
-      second: round(loadFor(max, 2, 10), st),
-      third: round(max + (units === 'kg' ? 2.5 : 5), st),
-    };
-  });
+  // The same function the test day uses, so the sheet and the day the lifter
+  // actually walks into cannot disagree — and so every number here is one that
+  // can be loaded on their bar rather than merely rounded to 2.5.
+  const attempts = ['squat', 'bench', 'deadlift'].map((lift) => attemptsFor(st, lift) || { lift, max: null });
 
   sheet({
     title: 'Peaking for a meet',
@@ -410,7 +404,7 @@ function openMeet(ctx) {
                     : `<td class="r dim" colspan="3">no data</td>`}
           </tr>`).join('')}</tbody>
         </table></div>
-        <p class="cite">Open with your current 3RM, second attempt at your current 2RM, third at the next incremental PR if it is there. Computed from your logged estimated maxes, in ${esc(units)}.</p>
+        <p class="cite">Open with your current 3RM, second attempt at your current 2RM, third at the next incremental PR if it is there. Computed from your logged estimated maxes, in ${esc(units)}, and rounded onto your own plates. The Test day button on Today runs exactly these.</p>
       </div>
 
       <button class="btn btn--primary btn--block" data-savemeet>Save meet date</button>
@@ -426,24 +420,7 @@ function openMeet(ctx) {
   });
 }
 
-function bestMaxFor(st, lift) {
-  const tpl = templateOf(st.program);
-  let best = 0;
-  for (const d of tpl.days) {
-    for (const slot of d.slots) {
-      if (slot.lift !== lift) continue;
-      const e = slotE1RM(st, slot.key);
-      if (e && e > best) best = e;
-    }
-  }
-  return best || st.maxes[lift]?.value || null;
-}
 
-function round(v, st) {
-  if (!v) return null;
-  const step = st.profile.units === 'kg' ? 2.5 : 5;
-  return Math.round(v / step) * step;
-}
 
 /* ---- standalone checklist -------------------------------------------- */
 

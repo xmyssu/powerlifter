@@ -4,7 +4,7 @@
    cited so you can go read the argument rather than trust the app.
    ========================================================================== */
 
-import { templateOf, graduationCheck, slotHistory, slotE1RM, volumeAudit, loadingWeeks } from './program.js';
+import { templateOf, graduationCheck, slotHistory, slotE1RM, volumeAudit, loadingWeeks, bestMaxFor } from './program.js';
 import { e1RM, fmtLoad, convertLoad } from './rpe.js';
 import { byId } from './exercises.js';
 import { relDays } from './ui.js';
@@ -353,6 +353,119 @@ export function sessionBriefing(resolved, state) {
 }
 
 /* ======================================================================
+   Milestones — the numbers that actually feel like something
+   ====================================================================== */
+
+/**
+ * A strength chart is an honest picture of progress and a poor motivator. Nobody
+ * sets out to add 4.4 kg to an estimated max; they set out to pull four plates.
+ * The milestones here are the round numbers and the plate-count numbers, because
+ * those are the ones a lifter actually wants, and knowing one is within reach is
+ * the difference between waiting for a date and going to get it.
+ */
+const ROUND_TARGETS = {
+  kg: { squat: [60, 100, 140, 180, 200, 220], bench: [60, 80, 100, 120, 140], deadlift: [100, 140, 180, 200, 220, 250] },
+  lb: { squat: [135, 225, 315, 405], bench: [135, 185, 225, 275, 315], deadlift: [225, 315, 405, 495] },
+};
+
+/**
+ * Bar plus N pairs of *the* plate — "three plates", "four plates".
+ *
+ * Not the heaviest plate on the rack. When a lifter says four plates they mean
+ * four of the big ones: the 20 kg red, or the 45 lb. A gym with 25s in it does
+ * not make 170 kg "three plates" to anyone who lifts there, and naming the
+ * milestone wrong is worse than not having it — the whole value of a milestone
+ * is that it is the number the lifter already had in their head. Falls back to
+ * the heaviest available for a gym that has no standard plate.
+ */
+const BIG_PLATE = { kg: 20, lb: 45 };
+
+function plateTargets(profile) {
+  const have = (profile.plates || []).filter((x) => x > 0);
+  if (!have.length) return [];
+  const standard = BIG_PLATE[profile.units];
+  const plate = have.includes(standard) ? standard : Math.max(...have);
+  const out = [];
+  for (let n = 1; n <= 6; n++) out.push({ load: profile.barWeight + 2 * plate * n, plates: n });
+  return out;
+}
+
+/**
+ * Every milestone for the three competition lifts, nearest first.
+ *
+ * `done` is judged against what the lifter has actually put on a bar, not
+ * against an estimate — "four plates" means you pulled it, and an app that
+ * congratulates you for a number you inferred from a triple is lying to you.
+ * `inRange` uses the estimate, because that is the right basis for "go and try".
+ */
+export function milestones(state, { perLift = 3 } = {}) {
+  const profile = state.profile;
+  const units = profile.units;
+  const plates = plateTargets(profile);
+  const out = [];
+
+  for (const lift of ['squat', 'bench', 'deadlift']) {
+    const est = bestMaxFor(state, lift) || 0;
+
+    // The heaviest single this lifter has genuinely completed on this lift.
+    let lifted = 0;
+    const tpl = templateOf(state.program);
+    const keys = [`test_${lift}`];
+    for (const d of tpl.days) for (const sl of d.slots) if (sl.lift === lift) keys.push(sl.key);
+    for (const key of keys) {
+      for (const h of slotHistory(state, key)) {
+        for (const set of h.sets) if (set.reps === 1 && set.load > lifted) lifted = set.load;
+      }
+    }
+
+    const rate = liftRate(state, lift);
+    const perWeek = rate.perWeek && rate.perWeek > 0.05 ? rate.perWeek : null;
+
+    // Plate counts first, so that when 180 kg is both "180" and "four plates"
+    // the dedupe below keeps the one a lifter would actually say.
+    const targets = [
+      ...plates.map((p) => ({ load: p.load, kind: 'plates', plates: p.plates })),
+      ...(ROUND_TARGETS[units]?.[lift] || []).map((load) => ({ load, kind: 'round' })),
+    ];
+
+    const seen = new Set();
+    const rows = [];
+    for (const t of targets.slice().sort((a, b) => a.load - b.load || (a.kind === 'plates' ? -1 : 1))) {
+      if (seen.has(t.load)) continue;
+      seen.add(t.load);
+      const done = lifted >= t.load - 1e-9;
+      const away = +(t.load - est).toFixed(1);
+      rows.push({
+        lift,
+        load: t.load,
+        label: t.kind === 'plates'
+          ? `${t.plates} plate${t.plates === 1 ? '' : 's'} · ${t.load} ${units}`
+          : `${t.load} ${units}`,
+        kind: t.kind,
+        done,
+        // Within one small jump of the current estimate: go and try it.
+        inRange: !done && est > 0 && away <= (units === 'kg' ? 2.5 : 5),
+        away: done ? 0 : away,
+        weeksOff: done || !perWeek || away <= 0 ? null : Math.ceil(away / perWeek),
+        perWeek,
+      });
+    }
+
+    // The ones worth showing: the last one cleared, then the next few ahead.
+    const doneRows = rows.filter((r) => r.done);
+    const ahead = rows.filter((r) => !r.done).slice(0, perLift);
+    out.push({
+      lift,
+      est: est ? +est.toFixed(1) : null,
+      lifted: lifted || null,
+      cleared: doneRows.length ? doneRows[doneRows.length - 1] : null,
+      next: ahead,
+    });
+  }
+  return out;
+}
+
+/* ======================================================================
    Training age — am I still an intermediate?
    ====================================================================== */
 
@@ -492,7 +605,7 @@ export function strengthTrend(state, lift) {
   const program = state.program;
   if (!program) return [];
   const tpl = templateOf(program);
-  const keys = [];
+  const keys = [`test_${lift}`];   // a logged single is the truest point on the chart
   for (const d of tpl.days) for (const s of d.slots) if (s.lift === lift) keys.push(s.key);
 
   // One chart, one axis: a session logged in pounds has to be brought into the

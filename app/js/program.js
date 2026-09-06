@@ -10,9 +10,9 @@
    %1RM is only a reference for where that ought to land.
    ========================================================================== */
 
-import { TEMPLATES, INTERMEDIATE_PL, EMPHASIS, incrementFor, assessDeload } from './templates.js';
+import { TEMPLATES, INTERMEDIATE_PL, EMPHASIS, incrementFor, assessDeload, TEST_DAY, WARMUP } from './templates.js';
 import { SLOT_DEFAULTS, byId } from './exercises.js';
-import { e1RM, loadFor, roundToLoadable, pctOf1RM, normalizeRPE, convertLoad, loadBand, RPE_TOLERANCE, PLATE_PRESETS, KG_PER_LB } from './rpe.js';
+import { e1RM, loadFor, roundToLoadable, pctOf1RM, normalizeRPE, convertLoad, loadBand, minIncrement, RPE_TOLERANCE, PLATE_PRESETS, KG_PER_LB } from './rpe.js';
 import { todayISO, uid } from './store.js';
 
 /* ---- construction ----------------------------------------------------- */
@@ -324,6 +324,168 @@ export function lastComparable(state, slotKey, { reps = null, excludeSessionId =
   return { ...pick, matchedReps: sameReps.length > 0 };
 }
 
+/* ---- max testing ------------------------------------------------------ */
+
+/**
+ * The best current estimate for a competition lift, across every slot that
+ * trains it.
+ *
+ * A lift is trained in more than one place — the squat appears on the technique
+ * day and the strength day — and the strength day is the one that knows what you
+ * can actually do. Taking the best across slots picks that up without having to
+ * name which slot matters.
+ */
+export function bestMaxFor(state, lift) {
+  const tpl = templateOf(state.program);
+  let best = 0;
+  for (const d of tpl.days) {
+    for (const slot of d.slots) {
+      if (slot.lift !== lift) continue;
+      const e = slotE1RM(state, slot.key);
+      if (e && e > best) best = e;
+    }
+  }
+  // A logged single beats any estimate drawn from a triple.
+  for (const key of TEST_DAY.slots.filter((x) => x.lift === lift).map((x) => x.key)) {
+    const e = slotE1RM(state, key);
+    if (e && e > best) best = e;
+  }
+  return best || state.maxes?.[lift]?.value || null;
+}
+
+/**
+ * Opener, second and third for one lift, plus the ramp to get there.
+ *
+ * Openers and seconds come off the RPE table rather than off flat percentages:
+ * a weight you could triple *is* your opener, and the table already knows what
+ * that is relative to a max. The third is the next thing you have not done —
+ * one increment past the estimate, because a PR attempt that is not a PR is a
+ * wasted attempt.
+ *
+ * Every number is rounded onto the lifter's own plate grid. These are loads
+ * someone walks up to a bar and lifts; a figure they cannot load is not an
+ * attempt, it is a suggestion.
+ */
+export function attemptsFor(state, lift, { max = null } = {}) {
+  const est = max ?? bestMaxFor(state, lift);
+  if (!est) return null;
+  const opts = {
+    barWeight: state.profile.barWeight,
+    plates: state.profile.plates,
+    microplates: state.profile.microplates,
+  };
+  const inc = state.profile.units === 'kg' ? 2.5 : 5;
+  const opener = roundToLoadable(loadFor(est, 3, 10), opts);
+  const second = roundToLoadable(loadFor(est, 2, 10), opts);
+  let third = roundToLoadable(est + inc, opts);
+  // Rounding can collapse the jumps on a coarse plate set; keep them ordered
+  // and distinct, or the lifter is handed the same weight three times.
+  const step = minIncrement(state.profile.plates, { microplates: state.profile.microplates });
+  const second2 = Math.max(second, opener + step);
+  third = Math.max(third, second2 + step);
+
+  // Ramp to the opener, not to the third: the warm-up is there to prepare the
+  // first attempt, and the attempts themselves are the rest of the ramp.
+  const ramp = WARMUP.lowRep.sets
+    .filter((w) => w.pct != null)
+    .map((w) => ({ reps: w.reps, load: roundToLoadable((opener * w.pct) / 100, opts), pct: w.pct }))
+    .filter((w, i, xs) => i === 0 || w.load > xs[i - 1].load);
+
+  return { lift, max: est, opener, second: second2, third, ramp };
+}
+
+/**
+ * Which exercise the lifter actually competes in for a lift.
+ *
+ * A lift is trained in several slots and they can hold different exercises — a
+ * front squat on the volume day, a low-bar on the strength day. The strength
+ * day's main is the one that is the competition lift, so it wins; anything else
+ * is a fallback for a program that does not have one.
+ */
+function competitionChoice(state, lift) {
+  const tpl = templateOf(state.program);
+  const choices = state.program?.choices || {};
+  let fallback = null;
+  for (const day of tpl.days) {
+    for (const slot of day.slots) {
+      if (slot.lift !== lift || slot.technique) continue;
+      if (day.role === 'strength' && slot.role === 'main' && choices[slot.key]) return choices[slot.key];
+      if (!fallback && choices[slot.key]) fallback = choices[slot.key];
+    }
+  }
+  return fallback;
+}
+
+/**
+ * A test day: three attempts on each lift, resolved like any other day so the
+ * session screen, the logger and the history need to know nothing new.
+ *
+ * It sits outside the program. `completeSession` neither advances the cursor nor
+ * touches a wave anchor for one of these, so taking a heavy single on a whim
+ * costs you nothing except the fatigue of having taken it.
+ */
+export function resolveTestDay(state, { lifts = null } = {}) {
+  const wanted = lifts && lifts.length ? lifts : TEST_DAY.slots.map((s) => s.lift);
+  const opts = {
+    barWeight: state.profile.barWeight,
+    plates: state.profile.plates,
+    microplates: state.profile.microplates,
+  };
+
+  const slots = TEST_DAY.slots
+    .filter((slot) => wanted.includes(slot.lift))
+    .map((slot, i) => {
+      const a = attemptsFor(state, slot.lift);
+      const exId = competitionChoice(state, slot.lift) || SLOT_DEFAULTS[slot.slotType] || null;
+      return {
+        index: i,
+        slot,
+        slotKey: slot.key,
+        exerciseId: exId,
+        exercise: byId(exId),
+        role: 'main',
+        sets: 3,
+        reps: 1,
+        targetRPE: null,
+        rpeRange: null,
+        rpeMax: null,
+        pct: null,
+        timed: false,
+        prescription: null,
+        plannedLoad: a ? a.opener : null,
+        // Opener, second, third — the logger fills each set with its own weight
+        // rather than repeating the first.
+        setLoads: a ? [a.opener, a.second, a.third] : null,
+        attempts: a,
+        loadRange: null,
+        loadSource: a ? 'test' : 'discover',
+        loadNote: a
+          ? `Opener ${a.opener}, second ${a.second}, third ${a.third}. Take the third only if the second moved well — and change it on the spot if it did not.`
+          : 'No estimate yet for this lift. Work up by feel and stop at the first grinder.',
+        rpeCheckLoad: null,
+        increment: null,
+        lastTime: null,
+      };
+    });
+
+  return {
+    template: templateOf(state.program),
+    dayDef: TEST_DAY,
+    cycle: state.program?.cursor?.cycle ?? 1,
+    week: state.program?.cursor?.week ?? 1,
+    day: TEST_DAY.n,
+    phase: 'test',
+    isDeload: false,
+    isPainWeek: false,
+    isTest: true,
+    label: 'Test day',
+    scheduleNote: null,
+    why: TEST_DAY.why,
+    title: TEST_DAY.title,
+    slots,
+  };
+}
+
 /* ---- prescription ---------------------------------------------------- */
 
 /**
@@ -338,6 +500,8 @@ export function resolveDay(state, { cycle, week, day, phase } = {}) {
   week = week ?? cur.week;
   day = day ?? cur.day;
   phase = phase ?? cur.phase;
+
+  if (phase === 'test') return resolveTestDay(state, { lifts: state.program?.testLifts });
 
   const units = state.profile.units;
   const dayDef = tpl.days.find((d) => d.n === day) || tpl.days[0];
@@ -461,6 +625,7 @@ export function resolveDay(state, { cycle, week, day, phase } = {}) {
     cycle, week, day, phase,
     isDeload,
     isPainWeek,
+    isTest: false,
     label: dayLabel(tpl, dayDef, { week, cycle, phase }),
     scheduleNote: tpl.scheduleNote || null,
     why: dayDef.why || null,
@@ -646,12 +811,57 @@ export function startSession(state, position) {
       plannedLoad: s.plannedLoad,
       pct: s.pct,
       note: '',
-      sets: Array.from({ length: s.sets }, () => ({ load: s.plannedLoad, reps: null, rpe: null, done: false, ts: null })),
+      sets: Array.from({ length: s.sets }, (_, i) => ({ load: s.setLoads?.[i] ?? s.plannedLoad, reps: null, rpe: null, done: false, ts: null })),
     })),
     sessionRPE: null,
     notes: '',
     readiness: null,
   };
+}
+
+/**
+ * Fold a test day's singles into the lifter's recorded maxes.
+ *
+ * Only a completed single counts. A missed third attempt is information about
+ * the day, not about the lifter, and writing it in as a max would hand the next
+ * cycle a number the lifter has never actually lifted.
+ */
+function recordTestedMaxes(state, session) {
+  const notes = [];
+  for (const entry of session.entries) {
+    const def = TEST_DAY.slots.find((x) => x.key === entry.slotKey);
+    if (!def) continue;
+    const singles = (entry.sets || []).filter((x) => x.done && x.load > 0 && x.reps >= 1);
+    if (!singles.length) continue;
+
+    // The heaviest completed set, expressed as a one-rep max. A clean double at
+    // the end is worth more than a missed single, and the table knows it.
+    const best = singles.reduce((a, b) => {
+      const av = e1RM(a.load, a.reps, a.rpe ?? 10) || 0;
+      const bv = e1RM(b.load, b.reps, b.rpe ?? 10) || 0;
+      return bv > av ? b : a;
+    }, singles[0]);
+    const value = +(e1RM(best.load, best.reps, best.rpe ?? 10) || best.load).toFixed(1);
+    const prev = state.maxes?.[def.lift]?.value || 0;
+
+    state.maxes[def.lift] = {
+      value,
+      date: session.date,
+      source: 'tested',
+      reps: best.reps,
+      fromLoad: best.load,
+      fromRPE: best.rpe ?? 10,
+    };
+    notes.push({
+      kind: 'tested',
+      title: value > prev ? `New ${def.lift} max` : `${def.lift.charAt(0).toUpperCase() + def.lift.slice(1)} tested`,
+      slotKey: entry.slotKey,
+      text: value > prev && prev > 0
+        ? `${best.load} × ${best.reps} recorded. Your ${def.lift} max is now ${value}, up ${+(value - prev).toFixed(1)} from ${prev}. Every load the program gives you from here is built on this number.`
+        : `${best.load} × ${best.reps} recorded as your ${def.lift} max (${value}).`,
+    });
+  }
+  return notes;
 }
 
 /** Did a slot fall short of what was prescribed? (book's definition of a stall) */
@@ -682,6 +892,14 @@ export function completeSession(state, sessionId) {
 
   session.status = 'done';
   session.endedAt = new Date().toISOString();
+
+  // A test day sits outside the program: it is not part of a wave, so it has no
+  // anchor to set and nothing it can stall. What it does have is the best data
+  // the app will ever get about this lifter, so it writes the maxes.
+  if (session.phase === 'test') {
+    notes.push(...recordTestedMaxes(state, session));
+    return { state, notes };
+  }
 
   for (const entry of session.entries) {
     const slot = findSlot(tpl, entry.slotKey);

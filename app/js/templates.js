@@ -438,6 +438,37 @@ export const RPE_SCALE = [
   { rpe: 4,   rir: '6+',  meaning: 'Could do 6 or more reps. Primer and taper work.' },
 ];
 
+/**
+ * The test day — a day outside the program, for going heavy on purpose.
+ *
+ * The program never asks for a single. That is deliberate (p. 246: "just gauge
+ * if you are getting stronger via observing if loads are increasing at the same
+ * RPEs"), because maxing costs fatigue and teaches little. But a lifter who
+ * never gets to take one never gets to *feel* a personal record, only to read
+ * one off a chart, and "four plates" is not a number you experience by
+ * inference. So this exists, off to one side: it does not advance the cycle and
+ * it cannot stall anything.
+ */
+export const TEST_DAY = {
+  n: 0,
+  role: 'test',
+  label: 'Test',
+  title: 'Max testing',
+  why: 'Three attempts per lift, the way a meet runs them: an opener you could triple, a second you could double, and one real attempt at a number you have never done.',
+  slots: [
+    { key: 'test_squat',    slotType: 'squat',    lift: 'squat',    role: 'main', sets: 3, fixedReps: 1, inc: 'lower' },
+    { key: 'test_bench',    slotType: 'bench',    lift: 'bench',    role: 'main', sets: 3, fixedReps: 1, inc: 'other' },
+    { key: 'test_deadlift', slotType: 'deadlift', lift: 'deadlift', role: 'main', sets: 3, fixedReps: 1, inc: 'lower' },
+  ],
+};
+
+/** Attempt selection, pp. 245-246 — the same basis the peaking plan uses. */
+export const ATTEMPTS = {
+  opener: { reps: 3, rpe: 10, label: 'Opener',  note: 'A weight you could triple. Insurance, not a test.' },
+  second: { reps: 2, rpe: 10, label: 'Second',  note: 'Your current double. Should move.' },
+  third:  { pr: true,         label: 'Third',   note: 'The one you have not done. Next incremental PR.' },
+};
+
 /** Warm-up protocol, p. 224. */
 export const WARMUP = {
   general: [

@@ -55,7 +55,7 @@ function view(ctx) {
     <div class="row-between" style="margin-bottom:14px">
       <button class="btn btn--bare" data-home aria-label="Back">${raw(icon('back'))}</button>
       <div class="center grow">
-        <div class="eyebrow">${esc(resolved.isDeload ? 'Deload' : resolved.isPainWeek ? 'High-rep week' : `Cycle ${ses.cycle} · Week ${ses.week}`)} · Day ${ses.day}</div>
+        <div class="eyebrow">${esc(resolved.isTest ? 'Test day' : resolved.isDeload ? 'Deload' : resolved.isPainWeek ? 'High-rep week' : `Cycle ${ses.cycle} · Week ${ses.week} · Day ${ses.day}`)}</div>
         <div class="tiny dim" style="margin-top:2px">${doneSets} / ${totalSets} sets</div>
       </div>
       <button class="btn btn--bare" data-notes aria-label="Session notes">${raw(icon('note'))}</button>
@@ -88,9 +88,13 @@ function exerciseCard(entry, resolved, i, st, ses) {
   const units = st.profile.units;
   const nextIdx = entry.sets.findIndex((s) => !s.done);
 
-  const targetStr = `<b>${entry.targetSets} × ${entry.targetReps ?? '—'}</b>`
-    + (entry.targetRPE != null ? ` @ RPE <b>${fmtRPE(entry.targetRPE)}</b>`
-      : entry.rpeRange ? ` @ RPE <b>${entry.rpeRange[0]}-${entry.rpeRange[1]}</b>` : '');
+  const a = slot?.attempts;
+  const targetStr = resolved.isTest
+    ? (a ? `<b>${fmtLoadBare(a.opener)}</b> · <b>${fmtLoadBare(a.second)}</b> · <b>${fmtLoadBare(a.third)}</b> ${esc(units)}`
+         : '<b>Work up by feel</b>')
+    : `<b>${entry.targetSets} × ${entry.targetReps ?? '—'}</b>`
+      + (entry.targetRPE != null ? ` @ RPE <b>${fmtRPE(entry.targetRPE)}</b>`
+        : entry.rpeRange ? ` @ RPE <b>${entry.rpeRange[0]}-${entry.rpeRange[1]}</b>` : '');
 
   return `<div class="ex ${isOpen ? 'ex--active' : ''} ${done ? 'ex--done' : ''}">
     <button class="ex__head" data-expand="${esc(entry.slotKey)}">
@@ -107,12 +111,12 @@ function exerciseCard(entry, resolved, i, st, ses) {
 
     ${isOpen ? `<div class="ex__body">
       ${rxStrip(entry, slot, st)}
-      ${lastTimeStrip(st, entry, slot)}
+      ${resolved.isTest ? rampStrip(slot, units) : lastTimeStrip(st, entry, slot)}
       ${slot?.loadNote && nextIdx === 0 ? `<p class="cite" style="margin-bottom:10px">${esc(slot.loadNote)}</p>` : ''}
       ${rpeCheckNote(slot, entry, units)}
       ${loadStepper(entry, st)}
       <div class="sets">
-        ${entry.sets.map((s, si) => setRow(entry, s, si, si === nextIdx, units)).join('')}
+        ${entry.sets.map((s, si) => setRow(entry, s, si, si === nextIdx, units, !!resolved.isTest)).join('')}
       </div>
       <div class="row" style="gap:8px;margin-top:12px">
         <button class="btn btn--ghost grow" data-addset="${esc(entry.slotKey)}">${icon('plus')} Set</button>
@@ -206,6 +210,17 @@ function lastTimeStrip(st, entry, slot) {
   </div>`;
 }
 
+/** The warm-up ramp to the opener. On a test day this is most of the session. */
+function rampStrip(slot, units) {
+  const a = slot?.attempts;
+  if (!a || !a.ramp?.length) return '';
+  return `<div class="card card--flat card--pad-sm" style="margin-bottom:12px">
+    <div class="tiny dim" style="margin-bottom:4px">Warm up to the opener</div>
+    <div class="tiny mono">${a.ramp.map((w) => `${fmtLoadBare(w.load)}×${w.reps}`).join('  ·  ')}</div>
+    <div class="tiny dim" style="margin-top:6px">Then ${fmtLoadBare(a.opener)} ${esc(units)}. Rest 3-5 min between attempts.</div>
+  </div>`;
+}
+
 /** If the lifter's own RPE data disagrees with the wave, say so plainly. */
 function rpeCheckNote(slot, entry, units) {
   if (!slot || !slot.rpeCheckLoad || !entry.plannedLoad) return '';
@@ -233,11 +248,14 @@ function loadStepper(entry, st) {
   </div>`;
 }
 
-function setRow(entry, s, si, isNext, units) {
+/** On a test day the three sets are not "1, 2, 3" — they have names. */
+const ATTEMPT_NAMES = ['1st', '2nd', '3rd'];
+
+function setRow(entry, s, si, isNext, units, isTest = false) {
   const cls = s.done ? 'set--done' : isNext ? 'set--next' : '';
   const k = `${entry.slotKey}-${si}`;
   return `<div class="set ${cls}">
-    <div class="set__n">${si + 1}</div>
+    <div class="set__n"${isTest ? ' style="font-size:.688rem;letter-spacing:0"' : ''}>${isTest ? esc(ATTEMPT_NAMES[si] || si + 1) : si + 1}</div>
     <div class="set__cell">
       <span class="set__k">${esc(units)}</span>
       <input class="set__in" type="text" inputmode="decimal"
@@ -633,8 +651,8 @@ function showSummary(ctx, sessionId, notes) {
         <div class="insight__b">${prs.map((p) => `${esc(p.name)} +${fmtLoadBare(p.gain)} ${esc(units)}`).join(' · ')}</div></div>
       </div>` : ''}
 
-      ${notes.map((n) => `<div class="insight insight--${n.kind === 'deloadHard' ? 'info' : 'warn'}">
-        <div class="insight__icon">${icon(n.kind === 'deloadHard' ? 'rest' : 'warn')}</div>
+      ${notes.map((n) => `<div class="insight insight--${n.kind === 'tested' ? 'good' : n.kind === 'deloadHard' ? 'info' : 'warn'}">
+        <div class="insight__icon">${icon(n.kind === 'tested' ? 'trophy' : n.kind === 'deloadHard' ? 'rest' : 'warn')}</div>
         <div><div class="insight__t">${esc(n.title || 'Worth knowing')}</div><div class="insight__b">${esc(n.text)}</div></div>
       </div>`).join('')}
 

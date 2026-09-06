@@ -4,9 +4,9 @@
 
 import { html, raw, esc, icon, $, $$, toast, sheet, closeSheet, fmtDate, relDays, confirmSheet } from '../ui.js';
 import { fmtLoadBare, plateBreakdown, fmtRPE } from '../rpe.js';
-import { resolveDay, startSession, templateOf, resolveAssessment, cyclePlan, loadingWeeks } from '../program.js';
+import { resolveDay, startSession, templateOf, resolveAssessment, cyclePlan, loadingWeeks, resolveTestDay, attemptsFor } from '../program.js';
 import { DELOAD_CHECKLIST, WARMUP, RPE_SCALE, INTERMEDIATE_PL, ADVANCED_ACCUMULATION } from '../templates.js';
-import { activeInsights, sessionBriefing, readinessVerdict, READINESS_QUESTIONS, PAIN_PROTOCOL } from '../coach.js';
+import { activeInsights, sessionBriefing, readinessVerdict, READINESS_QUESTIONS, PAIN_PROTOCOL, milestones } from '../coach.js';
 import { byId } from '../exercises.js';
 import { buildProgram } from '../program.js';
 import { todayISO } from '../store.js';
@@ -35,6 +35,8 @@ function view(ctx) {
 
     <div class="stack-lg">
       ${raw(insights.filter((i) => i.kind !== 'assessment').map(insightCard).join(''))}
+
+      ${raw(meetDayBanner(st))}
 
       ${raw(active ? resumeCard(active, resolved) : '')}
 
@@ -68,8 +70,129 @@ function view(ctx) {
         <button class="btn btn--ghost grow" data-pain>${raw(icon('warn'))} Something hurts</button>
       </div>
 
+      <button class="btn btn--ghost btn--block" data-test>${raw(icon('trophy'))} Test day — go for a single</button>
+
+      ${raw(milestoneCard(st))}
+
       ${raw(scheduleNote(resolved, st))}
     </div>`;
+}
+
+/**
+ * The meet date used to be a countdown and nothing else — it never changed a
+ * single prescription, so the day itself arrived as an ordinary Day 4. If today
+ * is the day, say so and offer the thing the date was set for.
+ */
+function meetDayBanner(st) {
+  const d = st.program.meetDate;
+  if (!d) return '';
+  const out = relDays(d);
+  if (out > 1 || out < 0) return '';
+  return `<div class="insight insight--good">
+    <div class="insight__icon">${icon('trophy')}</div>
+    <div class="grow">
+      <div class="insight__t">${out === 0 ? 'This is the day' : 'Tomorrow is the day'}</div>
+      <div class="insight__b">${out === 0
+        ? 'You set this date to find out what you can do. Three attempts a lift, computed from everything you have logged since you started.'
+        : 'Keep today easy or take it off. Tomorrow is what the date was for.'}</div>
+      ${out === 0 ? `<button class="btn btn--good btn--block" style="margin-top:10px" data-test>${icon('trophy')} Start test day</button>` : ''}
+    </div>
+  </div>`;
+}
+
+/**
+ * Milestones, on the home screen rather than buried in a stats tab.
+ *
+ * The point of putting it here is the "in range" line: a lifter whose estimate
+ * has quietly crossed four plates should find that out on the day it happens,
+ * not the next time they go looking at a chart.
+ */
+function milestoneCard(st) {
+  const rows = milestones(st, { perLift: 2 });
+  const units = st.profile.units;
+  const anyReady = rows.some((r) => r.next.some((n) => n.inRange));
+  const body = rows.filter((r) => r.est).map((r) => {
+    const name = { squat: 'Squat', bench: 'Bench', deadlift: 'Deadlift' }[r.lift];
+    return r.next.map((n, i) => `<div class="kv">
+      <span class="kv__k">${i === 0 ? esc(name) : ''}</span>
+      <span class="kv__v">${esc(n.label)}
+        ${n.inRange
+          ? '<span class="pill pill--good">in range</span>'
+          : `<span class="dim" style="font-weight:400">${fmtLoadBare(n.away)} ${esc(units)} away${n.weeksOff ? ` · ~${n.weeksOff} wk` : ''}</span>`}
+      </span>
+    </div>`).join('');
+  }).join('');
+  if (!body) return '';
+  return `<div class="card">
+    <div class="eyebrow" style="margin-bottom:8px">Milestones</div>
+    ${body}
+    <p class="cite" style="margin-top:10px">${anyReady
+      ? 'Something is in range. Take a test day and go and get it.'
+      : 'Distances are from your estimated max; the weeks assume your current rate holds.'}</p>
+  </div>`;
+}
+
+/* ---- test day --------------------------------------------------------- */
+
+/**
+ * Pick the lifts, see the attempts, start the session.
+ *
+ * Lift selection matters more than it looks: maxing squat and bench first costs
+ * real kilos off a deadlift taken an hour later, so a lifter chasing one number
+ * should be able to take a day for that number alone. Defaulting to all three
+ * and letting them uncheck is the version that makes that easy to notice.
+ */
+function openTestDay(ctx) {
+  const st = ctx.state;
+  const units = st.profile.units;
+  const chosen = new Set(['squat', 'bench', 'deadlift']);
+
+  const table = () => ['squat', 'bench', 'deadlift'].map((lift) => {
+    const a = attemptsFor(st, lift);
+    const name = { squat: 'Squat', bench: 'Bench', deadlift: 'Deadlift' }[lift];
+    return `<label class="pick" style="cursor:pointer">
+      <input type="checkbox" data-lift="${lift}" ${chosen.has(lift) ? 'checked' : ''} style="margin-right:10px">
+      <div class="pick__body">
+        <div class="pick__title">${esc(name)}</div>
+        <div class="pick__sub mono">${a
+          ? `${fmtLoadBare(a.opener)} · ${fmtLoadBare(a.second)} · ${fmtLoadBare(a.third)} ${esc(units)}`
+          : 'no estimate yet — work up by feel'}</div>
+      </div>
+    </label>`;
+  }).join('');
+
+  sheet({
+    title: 'Test day',
+    body: `<div class="stack">
+      <p class="muted small">Three attempts each: an opener you could triple, a second you could double, and one real attempt at a weight you have not done. This sits outside your program — it will not move your cycle or touch your training loads.</p>
+      <div class="stack-sm">${table()}</div>
+      <div class="banner banner--warn">
+        <b>Order matters.</b> Squatting and benching to a limit single first will cost you weight on the deadlift.
+        If one number is the point today, test that lift on its own.
+      </div>
+      <button class="btn btn--primary btn--lg btn--block" data-go>${icon('trophy')} Start test day</button>
+    </div>`,
+    onMount(root, close) {
+      $$('[data-lift]', root).forEach((cb) => cb.onchange = () => {
+        if (cb.checked) chosen.add(cb.dataset.lift); else chosen.delete(cb.dataset.lift);
+        const go = $('[data-go]', root);
+        if (go) go.disabled = chosen.size === 0;
+      });
+      $('[data-go]', root).onclick = () => {
+        if (!chosen.size) return;
+        let id = null;
+        ctx.store.update((s) => {
+          s.program.testLifts = [...chosen];
+          const ses = startSession(s, { ...s.program.cursor, phase: 'test' });
+          s.sessions.push(ses);
+          s.activeSessionId = ses.id;
+          id = ses.id;
+        });
+        close();
+        if (id) ctx.go('session');
+      };
+    },
+  });
 }
 
 /* ---- header ----------------------------------------------------------- */
@@ -414,6 +537,7 @@ function mount(root, ctx) {
   $$('[data-readiness]', root).forEach((b) => b.onclick = () => openReadiness(ctx));
   $$('[data-pain]', root).forEach((b) => b.onclick = () => openPain());
   $$('[data-plan]', root).forEach((b) => b.onclick = () => openPlan(ctx));
+  $$('[data-test]', root).forEach((b) => b.onclick = () => openTestDay(ctx));
 
   $$('[data-swapday]', root).forEach((b) => b.onclick = () => {
     const day = Number(b.dataset.swapday);
