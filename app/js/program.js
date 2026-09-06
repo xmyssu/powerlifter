@@ -67,6 +67,34 @@ export function buildProgram({
 
 export const templateOf = (program) => TEMPLATES[program?.templateId] || INTERMEDIATE_PL;
 
+/** Lowest RPE the app will print. The RPE scale itself stops at 5 (p. 130), so
+ *  a deload that derives lower than that is described as "5" rather than as a
+ *  number the lifter has no way to log. */
+export const DELOAD_RPE_FLOOR = 5;
+
+/**
+ * Above this many reps a 1RM estimate stops being trustworthy (p. 116).
+ *
+ * This is not merely noise. High-rep sets estimate *higher*, systematically —
+ * the same lifter's 12-rep set and 3-rep set do not agree, and the 12 reads
+ * bigger. That matters because the obvious way to combine several sessions is
+ * to take the best one, and "best" then means "whichever week had the most
+ * reps". A lifter adding weight to a leg curl every week can watch the estimate
+ * fall as their reps come down and they actually get stronger.
+ */
+export const RELIABLE_E1RM_REPS = 6;
+
+/**
+ * The high-rep week (Level 1, pp. 40-42; the checklist's `painWeek` verdict).
+ *
+ * Joint and tendon pain as the *only* flag does not call for a deload — it calls
+ * for the same volume and the same RPE at reps high enough to bring the bar
+ * load down. Twelve is the bottom of the book's 12-20 window: enough to drop
+ * peak joint stress hard, few enough that a squat session is still a squat
+ * session.
+ */
+export const PAIN_WEEK_REPS = 12;
+
 /* ---- slot geometry ---------------------------------------------------- */
 
 /** Effective rep range for a slot, after emphasis and any widening. */
@@ -192,21 +220,108 @@ export function slotHistory(state, slotKey) {
         topSet: sets.reduce((a, b) => (b.load > a.load ? b : a), sets[0]),
         firstSet: sets[0],
         best1RM: Math.max(...sets.map((x) => e1RM(x.load, x.reps, x.rpe ?? e.targetRPE ?? 8) || 0)),
+        // The same figure restricted to sets short enough to estimate from, plus
+        // the rep count it came off. Callers that are about to prescribe a load
+        // need both: an estimate drawn from a set of twelve is only good for
+        // prescribing around twelve.
+        ...reliableOf(sets, e),
       });
     }
   }
   return out.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
 }
 
-/** Most recent usable estimate of a slot's 1RM. */
-export function slotE1RM(state, slotKey, { lookback = 6 } = {}) {
-  const hist = slotHistory(state, slotKey).slice(-lookback);
+/**
+ * The best estimate a session's sets support, and how far it had to reach.
+ *
+ * `reliable1RM` is taken only from sets at or under RELIABLE_E1RM_REPS. When a
+ * slot never goes that low — a leg curl lives at 8-12 — there is no reliable
+ * reading to be had, so `soft1RM` comes off the *shortest* set on record rather
+ * than the biggest number. The shortest set is the least extrapolated one, and
+ * picking the biggest is precisely the mistake that makes a stronger lifter's
+ * estimate go down.
+ */
+function reliableOf(sets, entry) {
+  const est = (x) => e1RM(x.load, x.reps, x.rpe ?? entry.targetRPE ?? 8) || 0;
+  const good = sets.filter((x) => x.reps <= RELIABLE_E1RM_REPS);
+  if (good.length) {
+    return {
+      reliable1RM: Math.max(...good.map(est)),
+      soft1RM: null,
+      estimatedFromReps: Math.min(...good.map((x) => x.reps)),
+    };
+  }
+  const shortest = sets.reduce((a, b) => (b.reps < a.reps ? b : a), sets[0]);
+  const tied = sets.filter((x) => x.reps === shortest.reps);
+  return {
+    reliable1RM: null,
+    soft1RM: Math.max(...tied.map(est)),
+    estimatedFromReps: shortest.reps,
+  };
+}
+
+/**
+ * Most recent usable estimate of a slot's 1RM, with the caveats attached.
+ *
+ * Returns { value, reliable, fromReps, date } or null.
+ *
+ * Two exclusions, for the same reason in both cases: the number is about to be
+ * turned into a load and put in front of a lifter, so it must not be drawn from
+ * data that cannot support it.
+ *
+ *  - Deload weeks are deliberately light. An estimate from one says nothing
+ *    about current capability — the reasoning `trendSummary` already spells out
+ *    before dropping them from the progress stats, which applies with more force
+ *    here than it does to a chart.
+ *  - Sets above RELIABLE_E1RM_REPS estimate high and estimate inconsistently.
+ *    Where a slot offers anything shorter, that wins outright; where it never
+ *    does, the estimate is returned marked `reliable: false` along with the rep
+ *    count behind it, so callers can decline to extrapolate away from it.
+ */
+export function slotE1RMDetail(state, slotKey, { lookback = 6, window = 3 } = {}) {
+  const hist = slotHistory(state, slotKey).filter((h) => h.phase !== 'deload').slice(-lookback);
   if (!hist.length) return null;
-  // Weight recency: take the best of the last three sessions, which smooths a
+  // Weight recency: take the best of the last few sessions, which smooths a
   // single bad day without letting a stale PR dominate.
-  const recent = hist.slice(-3).map((h) => h.best1RM).filter((v) => v > 0);
-  if (!recent.length) return null;
-  return Math.max(...recent);
+  const recent = hist.slice(-window);
+
+  const solid = recent.filter((h) => h.reliable1RM > 0);
+  if (solid.length) {
+    const pick = solid.reduce((a, b) => (b.reliable1RM > a.reliable1RM ? b : a), solid[0]);
+    return { value: pick.reliable1RM, reliable: true, fromReps: pick.estimatedFromReps, date: pick.date };
+  }
+
+  // Nothing short enough on record. Take the least extrapolated reading rather
+  // than the largest, and say so.
+  const soft = recent.filter((h) => h.soft1RM > 0);
+  if (!soft.length) return null;
+  const pick = soft.reduce((a, b) => (b.estimatedFromReps < a.estimatedFromReps ? b : a), soft[0]);
+  return { value: pick.soft1RM, reliable: false, fromReps: pick.estimatedFromReps, date: pick.date };
+}
+
+/** Most recent usable estimate of a slot's 1RM. */
+export function slotE1RM(state, slotKey, opts) {
+  return slotE1RMDetail(state, slotKey, opts)?.value ?? null;
+}
+
+/**
+ * The most recent session worth showing next to today's prescription.
+ *
+ * "Last time" is only useful if it is comparable. Straight after a deload the
+ * previous session for a slot is two light sets of the wave's lowest reps, and
+ * putting that beside week 1 of the next cycle reads as though the lifter has
+ * gone backwards. So: prefer the last loading session at the same rep target,
+ * fall back to the last loading session, and only fall back to the deload
+ * itself when there is nothing else on record.
+ */
+export function lastComparable(state, slotKey, { reps = null, excludeSessionId = null } = {}) {
+  const hist = slotHistory(state, slotKey).filter((h) => h.sessionId !== excludeSessionId);
+  if (!hist.length) return null;
+  const loading = hist.filter((h) => h.phase !== 'deload');
+  const sameReps = reps == null ? [] : loading.filter((h) => h.targetReps === reps);
+  const pick = sameReps[sameReps.length - 1] || loading[loading.length - 1] || hist[hist.length - 1];
+  if (!pick) return null;
+  return { ...pick, matchedReps: sameReps.length > 0 };
 }
 
 /* ---- prescription ---------------------------------------------------- */
@@ -227,6 +342,7 @@ export function resolveDay(state, { cycle, week, day, phase } = {}) {
   const units = state.profile.units;
   const dayDef = tpl.days.find((d) => d.n === day) || tpl.days[0];
   const isDeload = phase === 'deload';
+  const isPainWeek = phase === 'painWeek';
   const loadOpts = {
     barWeight: state.profile.barWeight,
     plates: state.profile.plates,
@@ -241,11 +357,19 @@ export function resolveDay(state, { cycle, week, day, phase } = {}) {
     const weeksInWave = loadingWeeks(program);
 
     // --- sets / reps -------------------------------------------------
+    // A pain week sits at week `loadingWeeks + 1`, which is off the end of the
+    // wave. Anything the rep raise below does not touch still has to resolve
+    // against a real week, or `repsForWeek` walks past the bottom of the rep
+    // range and `plannedLoad` adds a fourth increment — which is how asking for
+    // relief from joint pain produced the heaviest session in the program.
+    const waveWeek = isPainWeek ? Math.min(week, weeksInWave) : week;
+
     let sets = slot.sets;
-    let reps = repsForWeek(slot, program, week);
+    let reps = repsForWeek(slot, program, waveWeek);
     let targetRPE = slot.rpe ?? null;
     let rpeRange = slot.rpeRange ? [...slot.rpeRange] : null;
-    let pct = pctForWeek(slot, program, week);
+    let pct = pctForWeek(slot, program, waveWeek);
+    let repsRaised = false;
 
     if (isDeload) {
       // Intermediate: lowest reps and lowest load of the wave, two-thirds of the sets.
@@ -253,19 +377,56 @@ export function resolveDay(state, { cycle, week, day, phase } = {}) {
       sets = Math.max(1, Math.floor((slot.sets * 2) / 3));
       if (tpl.model === 'block') {
         reps = repsForWeek(slot, program, tpl.cycleWeeks);
-        if (rpeRange) rpeRange = [rpeRange[0] - 1, rpeRange[1] - 1];
-        if (targetRPE != null) targetRPE = targetRPE - 1;
+        const floorTo = (r) => Math.max(DELOAD_RPE_FLOOR, r - 1);
+        if (rpeRange) rpeRange = rpeRange.map(floorTo);
+        if (targetRPE != null) targetRPE = floorTo(targetRPE);
         // "Repeat week 3" — so the percentage is week 3's, minus five points.
         const w3pct = pctForWeek(slot, program, tpl.cycleWeeks);
         pct = w3pct == null ? null : w3pct - 5;
       } else {
         reps = repsForWeek(slot, program, weeksInWave);   // the lowest rep week
         pct = pctForWeek(slot, program, 1);               // the lightest load
+
+        // ...and therefore a lower RPE, which has to be said out loud.
+        //
+        // Week 1's load was chosen so that week 1's reps landed on the slot's
+        // RPE. The deload takes that same load for the wave's lowest rep count,
+        // and at a fixed load every rep you do not do is one more rep in
+        // reserve — so the honest target is the slot's RPE minus the reps the
+        // wave walked off. On the 3-5 strength slots that is RPE 8 minus two:
+        // RPE 6.
+        //
+        // Leaving the loading week's RPE on the card is not cosmetic. It made
+        // the load window, the RPE-check suggestion and the stored history all
+        // describe a hard set, so the app would tell a lifter mid-deload that
+        // their own data says to put week 3's weight back on the bar.
+        const dropped = repsForWeek(slot, program, 1) - reps;
+        if (dropped > 0 && !slot.technique) {
+          // Technique work is submaximal by design and never progresses, so it
+          // is already its own deload; dropping it further says nothing.
+          const floorTo = (r) => Math.max(DELOAD_RPE_FLOOR, r - dropped);
+          if (targetRPE != null) targetRPE = floorTo(targetRPE);
+          if (rpeRange) rpeRange = rpeRange.map(floorTo);
+        }
       }
     }
 
+    if (isPainWeek && !slot.technique && !slot.timed && !slot.fixedReps && reps != null) {
+      // Same sets, same RPE, reps raised until the bar load comes down. Only the
+      // reps move: dropping the RPE too would make this a deload, which is the
+      // thing the checklist just decided against, and cutting sets would give up
+      // the volume this week exists to preserve.
+      //
+      // Technique work is left alone. It is 1-3 reps of skill practice at RPE 5
+      // that never progresses, and taking it to twelve would not be the same
+      // exercise.
+      reps = Math.max(reps, PAIN_WEEK_REPS);
+      pct = targetRPE != null ? pctOf1RM(reps, targetRPE) : pct;
+      repsRaised = true;
+    }
+
     // --- load --------------------------------------------------------
-    const plan = plannedLoad({ state, program, slot, week, isDeload, inc, pct, reps, targetRPE, rpeRange });
+    const plan = plannedLoad({ state, program, slot, week: waveWeek, isDeload, repsRaised, inc, pct, reps, targetRPE, rpeRange });
     const planned = plan.load == null ? null : roundToLoadable(plan.load, loadOpts);
     const loadRange = bandFor(planned, reps, targetRPE, rpeRange, loadOpts);
 
@@ -299,6 +460,7 @@ export function resolveDay(state, { cycle, week, day, phase } = {}) {
     dayDef,
     cycle, week, day, phase,
     isDeload,
+    isPainWeek,
     label: dayLabel(tpl, dayDef, { week, cycle, phase }),
     scheduleNote: tpl.scheduleNote || null,
     why: dayDef.why || null,
@@ -314,19 +476,56 @@ export function resolveDay(state, { cycle, week, day, phase } = {}) {
  *   3. what your own recent RPE data implies for these reps at this RPE
  *   4. nothing — you work up by feel and the app learns from it
  */
-function plannedLoad({ state, program, slot, week, isDeload, inc, pct, reps, targetRPE, rpeRange }) {
+function plannedLoad({ state, program, slot, week, isDeload, repsRaised, inc, pct, reps, targetRPE, rpeRange }) {
   const st = program.slots[slot.key] || {};
   const hist = slotHistory(state, slot.key);
-  const lastSame = [...hist].reverse().find((h) => h.week === week && h.cycle === program.cursor.cycle - 1) || null;
   const last = hist.length ? hist[hist.length - 1] : null;
 
   const targetForRPE = rpeRange ? (rpeRange[0] + rpeRange[1]) / 2 : targetRPE;
-  const est = slotE1RM(state, slot.key);
-  const rpeCheck = est && reps && targetForRPE ? loadFor(est, reps, targetForRPE) : null;
+  const detail = slotE1RMDetail(state, slot.key);
+  const est = detail?.value ?? null;
+
+  // Whether the estimate is allowed to argue with the program today.
+  //
+  //  - On a deload the load *is* the prescription: it was picked to be light,
+  //    not to hit an RPE, so a second opinion drawn from loading weeks can only
+  //    argue for more weight, which is the one thing a deload must not do.
+  //  - An estimate that came off a set of twelve is only good for prescribing
+  //    around twelve. The bias in a high-rep e1RM cancels when you prescribe at
+  //    the reps you measured and compounds when you do not, so an unreliable
+  //    estimate may only speak near its own rep count.
+  const canCheck = detail && (detail.reliable || Math.abs(detail.fromReps - reps) <= 2);
+  const rpeCheck = !isDeload && canCheck && est && reps && targetForRPE
+    ? loadFor(est, reps, targetForRPE)
+    : null;
+
+  // A high-rep week has to leave the wave behind: the anchor was chosen for a
+  // set of five, and this is a set of twelve at the same RPE. Scale it through
+  // the RPE table instead — the ratio of percentages is the whole conversion,
+  // and it stays tied to the lifter's own anchor rather than to an estimate.
+  if (repsRaised && st.week1Load) {
+    const fromReps = repsForWeek(slot, program, 1);
+    const a = fromReps && targetForRPE ? pctOf1RM(fromReps, targetForRPE) : null;
+    const b = reps && targetForRPE ? pctOf1RM(reps, targetForRPE) : null;
+    // When the slot already lived at these reps the ratio is 1 and this lands
+    // exactly on the week-1 anchor, which is the right answer: for a leg curl
+    // prescribed 8-12, the high-rep week simply is its week 1.
+    if (a && b) {
+      return {
+        load: (st.week1Load * b) / a,
+        source: 'painWeek',
+        note: reps === fromReps
+          ? `High-rep week: this slot already lives at ${reps} reps, so it runs at its week-1 load.`
+          : `High-rep week: same sets, same RPE, ${reps} reps instead of ${fromReps} so the bar load drops. This is converted from your week-1 anchor through the RPE table — nobody can predict a ${reps}RM from a ${fromReps}RM, so treat it as a starting guess and let the RPE decide.`,
+        rpeCheck,
+        lastTime: last,
+      };
+    }
+  }
 
   if (isDeload) {
     const anchor = st.week1Load;
-    if (anchor) return { load: anchor, source: 'deload', note: 'Deload: week 1 load, week 3 reps, two-thirds of the sets.', rpeCheck, lastTime: last };
+    if (anchor) return { load: anchor, source: 'deload', note: 'Deload: week 1 load, week 3 reps, two-thirds of the sets. It should feel easy — that is the prescription, not a bonus.', rpeCheck, lastTime: last };
   }
 
   // 1. wave anchor
@@ -413,6 +612,7 @@ function dayLabel(tpl, dayDef, { week, cycle, phase }) {
   if (dayDef.off) return 'Rest day';
   if (dayDef.meet) return 'Meet day';
   if (phase === 'deload') return `Deload · Day ${dayDef.n}`;
+  if (phase === 'painWeek') return `High-rep week · Day ${dayDef.n}`;
   return `${tpl.name.includes('Advanced') ? tpl.block ? cap(tpl.block) : 'Block' : 'Week'} ${week} · Day ${dayDef.n} · ${dayDef.label}`;
 }
 
@@ -510,6 +710,7 @@ export function completeSession(state, sessionId) {
           program.forcedDeload = true;
           notes.push({
             kind: 'stall',
+            title: 'Stall recorded',
             slotKey: entry.slotKey,
             text: `You came up short on ${byId(entry.exerciseId)?.short || entry.slotKey}. Finish this cycle, dropping load as needed so every set and rep gets completed — then take the week-4 deload regardless of how the checklist scores.`,
           });
@@ -518,8 +719,51 @@ export function completeSession(state, sessionId) {
     }
   }
 
+  const hot = deloadRanHot(session, tpl);
+  if (hot) notes.push(hot);
+
   advanceCursor(state);
   return { state, notes };
+}
+
+/** How far above the deload's target RPE still counts as "went to plan". */
+const DELOAD_HARD_MARGIN = 1.5;
+
+/**
+ * A deload that still felt like work is worth saying out loud.
+ *
+ * The checklist that sent the lifter here is five self-reported questions asked
+ * once, before the week started. What the week actually felt like is a second,
+ * better-informed reading of the same thing: two light sets of the wave's
+ * lowest reps should land around RPE 6, and if they came in at 8 the fatigue
+ * was deeper than the checklist knew. That is a recovery signal, not a strength
+ * one, and the app has it for free the moment the week is logged.
+ */
+function deloadRanHot(session, tpl) {
+  if (session.phase !== 'deload') return null;
+
+  const hot = [];
+  for (const entry of session.entries) {
+    const slot = findSlot(tpl, entry.slotKey);
+    // Technique work is prescribed at RPE 5 and left there, so it is not part
+    // of the comparison the deload's own target sets up.
+    if (!slot || slot.technique || entry.targetRPE == null) continue;
+    const logged = (entry.sets || []).filter((x) => x.done && x.rpe != null).map((x) => x.rpe);
+    if (!logged.length) continue;
+    const avg = logged.reduce((a, b) => a + b, 0) / logged.length;
+    if (avg - entry.targetRPE >= DELOAD_HARD_MARGIN) {
+      hot.push({ name: byId(entry.exerciseId)?.short || entry.slotKey, avg, target: entry.targetRPE });
+    }
+  }
+  if (!hot.length) return null;
+
+  const worst = hot.reduce((a, b) => (b.avg - b.target > a.avg - a.target ? b : a), hot[0]);
+  const named = hot.map((h) => h.name).join(', ');
+  return {
+    kind: 'deloadHard',
+    title: 'Your deload ran hot',
+    text: `${named} came in around RPE ${worst.avg.toFixed(1)} where ${worst.target} was the target — this week was meant to feel easy. A deload that still feels like work is a reading on your recovery, not on your strength. If next cycle's first week lands the same way, take another easy week rather than training through it.`,
+  };
 }
 
 function findSlot(tpl, key) {
@@ -546,7 +790,12 @@ export function advanceCursor(state) {
   // end of a training week
   cur.day = days[0];
 
-  if (cur.phase === 'deload') {
+  // Both of the checklist's non-proceed answers are a single week that stands in
+  // for the normal cycle break, so both roll into the next cycle when they are
+  // done. Without this the cursor stayed pinned to the pain week and re-asked
+  // the checklist every time it came round, with no way out but answering
+  // differently.
+  if (cur.phase === 'deload' || cur.phase === 'painWeek') {
     startNextCycle(state);
     return;
   }
@@ -611,8 +860,17 @@ export function startNextCycle(state) {
       if (st.stalledThisCycle) {
         // Step 3-4 of the stall protocol: restart 5-10% lighter than the load
         // you stalled with, and halve the weekly increment from here on.
+        //
+        // Rounded onto the plate grid and floored at the empty bar. A 7.5% cut
+        // is far bigger than any plate step, so snapping it costs nothing, and
+        // it is a load the lifter will be asked to walk out and lift. Without
+        // the floor a light accessory that stalls near the bar reduces to an
+        // anchor below the bar itself, and every later stall shrinks it again.
         const base = st.stalledAtLoad || st.week1Load;
-        if (base) st.week1Load = +(base * 0.925).toFixed(2);
+        if (base) {
+          const cut = roundToLoadable(base * 0.925, state.profile);
+          st.week1Load = Math.max(cut ?? state.profile.barWeight, state.profile.barWeight);
+        }
         st.smallIncrement = true;
         st.stalledThisCycle = false;
         st.stalledAtLoad = null;
@@ -621,6 +879,13 @@ export function startNextCycle(state) {
           text: `Restarting ${slot.key} about 7.5% lighter with smaller weekly jumps.`,
         });
       } else if (st.week1Load) {
+        // Deliberately NOT snapped to the plate grid, unlike the stall reset
+        // above. After a stall the weekly increment is halved (2.5 kg, 5 lb),
+        // which in a gym without the small plates is less than one step on the
+        // bar. Rounding here would throw that increment away every cycle and
+        // freeze the lifter's progression; carrying the exact figure lets it
+        // accumulate until it crosses a step the bar can actually express.
+        // Rounding happens once, at prescription time, in `resolveDay`.
         st.week1Load = +(st.week1Load + incrementOf(slot, program, units)).toFixed(2);
       }
     }

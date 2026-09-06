@@ -10,7 +10,7 @@
 
 import { html, raw, esc, icon, $, $$, toast, sheet, closeSheet, confirmSheet, fmtDuration, haptic } from '../ui.js';
 import { fmtLoadBare, plateBreakdown, roundToLoadable, minIncrement, e1RM, fmtRPE, normalizeRPE, loadFor, parseNum, convertLoad } from '../rpe.js';
-import { resolveDay, completeSession, slotHistory, templateOf } from '../program.js';
+import { resolveDay, completeSession, slotHistory, lastComparable, templateOf } from '../program.js';
 import { RPE_SCALE, REST_GUIDE } from '../templates.js';
 import { sessionBriefing } from '../coach.js';
 import { optionsForSlot, SLOT_INFO, byId } from '../exercises.js';
@@ -55,7 +55,7 @@ function view(ctx) {
     <div class="row-between" style="margin-bottom:14px">
       <button class="btn btn--bare" data-home aria-label="Back">${raw(icon('back'))}</button>
       <div class="center grow">
-        <div class="eyebrow">${esc(resolved.isDeload ? 'Deload' : `Cycle ${ses.cycle} · Week ${ses.week}`)} · Day ${ses.day}</div>
+        <div class="eyebrow">${esc(resolved.isDeload ? 'Deload' : resolved.isPainWeek ? 'High-rep week' : `Cycle ${ses.cycle} · Week ${ses.week}`)} · Day ${ses.day}</div>
         <div class="tiny dim" style="margin-top:2px">${doneSets} / ${totalSets} sets</div>
       </div>
       <button class="btn btn--bare" data-notes aria-label="Session notes">${raw(icon('note'))}</button>
@@ -186,13 +186,21 @@ function barViz(pb) {
 }
 
 function lastTimeStrip(st, entry, slot) {
-  const hist = slotHistory(st, entry.slotKey);
-  const prev = hist.filter((h) => h.sessionId !== st.activeSessionId).slice(-1)[0];
+  const prev = lastComparable(st, entry.slotKey, {
+    reps: entry.targetReps,
+    excludeSessionId: st.activeSessionId,
+  });
   if (!prev) return '';
   const sets = prev.sets.map((s) => `${fmtLoadBare(s.load)}×${s.reps}${s.rpe ? `@${fmtRPE(s.rpe)}` : ''}`).join('  ');
+  // Say which comparison this is. "Last time at 5 reps" from three weeks ago is
+  // a useful number; the same numbers labelled "last time" right after a deload
+  // are how a lifter concludes they have gone backwards.
+  const label = prev.matchedReps
+    ? `Last time at ${entry.targetReps} reps · wk ${prev.week}`
+    : prev.phase === 'deload' ? `Last time · deload` : `Last time · wk ${prev.week}`;
   return `<div class="card card--flat card--pad-sm" style="margin-bottom:12px">
     <div class="row-between" style="gap:8px">
-      <span class="tiny dim">Last time · wk ${prev.week}</span>
+      <span class="tiny dim">${esc(label)}</span>
       <span class="tiny mono" style="text-align:right">${esc(sets)}</span>
     </div>
   </div>`;
@@ -625,9 +633,9 @@ function showSummary(ctx, sessionId, notes) {
         <div class="insight__b">${prs.map((p) => `${esc(p.name)} +${fmtLoadBare(p.gain)} ${esc(units)}`).join(' · ')}</div></div>
       </div>` : ''}
 
-      ${notes.map((n) => `<div class="insight insight--warn">
-        <div class="insight__icon">${icon('warn')}</div>
-        <div><div class="insight__t">Stall recorded</div><div class="insight__b">${esc(n.text)}</div></div>
+      ${notes.map((n) => `<div class="insight insight--${n.kind === 'deloadHard' ? 'info' : 'warn'}">
+        <div class="insight__icon">${icon(n.kind === 'deloadHard' ? 'rest' : 'warn')}</div>
+        <div><div class="insight__t">${esc(n.title || 'Worth knowing')}</div><div class="insight__b">${esc(n.text)}</div></div>
       </div>`).join('')}
 
       <button class="btn btn--primary btn--lg btn--block" data-done>Done</button>

@@ -20,7 +20,8 @@ globalThis.CustomEvent = class { constructor(t, o) { this.type = t; Object.assig
 const store = await import('./store.js');
 const { buildProgram, resolveDay, startSession, completeSession, resolveAssessment,
         repsForWeek, pctForWeek, loadingWeeks, graduationCheck, volumeAudit,
-        slotE1RM, cyclePlan, convertUnits, slotHistory, templateOf } = await import('./program.js');
+        slotE1RM, slotE1RMDetail, cyclePlan, convertUnits, slotHistory, lastComparable,
+        templateOf, PAIN_WEEK_REPS, RELIABLE_E1RM_REPS } = await import('./program.js');
 const { pctOf1RM, e1RM, loadFor, plateBreakdown, roundToLoadable, plateLabel, minIncrement, convertLoad,
         loadBand, RPE_TOLERANCE } = await import('./rpe.js');
 const { assessDeload, INTERMEDIATE_PL, INTERMEDIATE_PL_3DAY } = await import('./templates.js');
@@ -36,6 +37,13 @@ function eq(a, b, label) { ok(a === b, label, `got ${a}, want ${b}`); }
 function near(a, b, label, tol = 0.01) { ok(Math.abs(a - b) <= tol, label, `got ${a}, want ~${b}`); }
 
 const hr = (s) => console.log(`\n\x1b[1m${s}\x1b[0m`);
+
+/** Find a slot definition by key in the currently-programmed template. */
+function findTplSlot(key) {
+  const tpl = templateOf(store.getState().program);
+  for (const d of tpl.days) { const f = d.slots.find((x) => x.key === key); if (f) return f; }
+  return null;
+}
 
 /* ======================================================================
    1. RPE / %1RM table
@@ -242,12 +250,62 @@ eq(dlsq3.sets, 2, 'deload cuts 3 sets to 2 (two-thirds)');
 eq(dlsq3.reps, 3, 'deload uses the lowest reps of the wave');
 eq(dlsq3.plannedLoad, st.program.slots.d3_squat.week1Load, 'deload uses the lightest load of the wave');
 
+// Week 1's load was set so that week 1's reps hit RPE 8. Doing that same load
+// for two fewer reps leaves two more reps in the tank, so the deload target is
+// RPE 6 — printing 8 here is what talked a lifter into re-loading the bar.
+eq(dlsq3.targetRPE, 6, 'deload drops the RPE by the reps the wave walked off (8 -> 6)');
+const dlLegCurl = resolveDay(st, { day: 3 }).slots.find((s) => s.slotKey === 'd3_legcurl');
+eq(dlLegCurl.targetRPE, 5, 'a two-rep-step slot floors at RPE 5 rather than printing an unloggable number');
+const dlTech = resolveDay(st, { day: 2 }).slots.find((s) => s.slotKey === 'd2_squat');
+eq(dlTech.targetRPE, 5, 'technique work is already submaximal and is left at RPE 5');
+
+// The load window has to agree with the RPE printed above it.
+const dlBand = dlsq3.loadRange;
+ok(dlBand.low <= dlsq3.plannedLoad && dlsq3.plannedLoad <= dlBand.high, 'deload load sits inside its own band');
+
+// The "worth a look" suggestion is drawn from loading weeks, so on a deload it
+// can only ever argue for more weight. It must not be offered at all.
+eq(dlsq3.rpeCheckLoad, null, 'no RPE-check suggestion is offered during a deload');
+ok(resolveDay(st, { week: 3, day: 3, phase: 'load' }).slots
+  .find((s) => s.slotKey === 'd3_squat').rpeCheckLoad != null, 'the RPE check still works on a loading week');
+
 // finishing the deload week rolls into the next cycle and resets the counter
 [1, 2, 3, 4].forEach(() => trainAsPrescribed());
 st = store.getState();
 eq(st.program.cursor.cycle, 3, 'deload week completes into cycle 3');
 eq(st.program.cursor.phase, 'load', 'back to loading');
 eq(st.program.cyclesSinceDeload, 0, 'deload resets the without-a-deload counter');
+
+// A deload logged at its (light) prescription must not drag the estimate that
+// picks the next cycle's loads, nor may it be what "last time" compares against.
+const estAfterDeload = slotE1RM(st, 'd3_squat');
+const loadingOnly = slotHistory(st, 'd3_squat').filter((h) => h.phase !== 'deload');
+near(estAfterDeload, Math.max(...loadingOnly.slice(-3).map((h) => h.best1RM)),
+  'the e1RM estimate ignores deload weeks', 0.1);
+const cmp = lastComparable(st, 'd3_squat', { reps: 5 });
+ok(cmp.phase !== 'deload', '"last time" skips the deload week');
+eq(cmp.targetReps, 5, '"last time" matches the rep target being prescribed');
+
+// A deload that still felt like work is a recovery reading worth surfacing.
+// This runs as a probe off to the side: it logs an extra session, so the store
+// is put back exactly as it was before the stall section starts from here.
+const beforeProbe = JSON.stringify(store.getState());
+const hotDeload = (() => {
+  const s0 = store.getState();
+  const ses = startSession(s0, { cycle: 3, week: 4, day: 3, phase: 'deload' });
+  for (const entry of ses.entries) {
+    entry.sets = entry.sets.map(() => ({
+      load: entry.plannedLoad ?? 60, reps: entry.targetReps,
+      rpe: (entry.targetRPE ?? 6) + 2, done: true, ts: new Date().toISOString(),
+    }));
+  }
+  store.update((s) => { s.sessions.push(ses); s.activeSessionId = ses.id; });
+  let out = [];
+  store.update((s) => { out = completeSession(s, ses.id).notes; s.activeSessionId = null; });
+  return out;
+})();
+ok(hotDeload.some((n) => n.kind === 'deloadHard'), 'a deload logged two RPE points hot raises a fatigue note');
+store.update((s) => { const r = JSON.parse(beforeProbe); s.sessions = r.sessions; s.program = r.program; s.activeSessionId = null; });
 
 /* ======================================================================
    7. Stall handling
@@ -313,6 +371,90 @@ ok(/advanced/i.test(g.text || ''), 'graduation message points at the advanced ap
 hr('9. Estimated max tracking');
 const est = slotE1RM(store.getState(), 'd3_squat');
 ok(est > 150 && est < 220, 'squat e1RM lands in a sane range', `got ${est}`);
+
+// The squat works in 3-5s, so there is always a set short enough to estimate from.
+const sqDetail = slotE1RMDetail(store.getState(), 'd3_squat');
+ok(sqDetail.reliable, 'a 3-5 rep slot yields a reliable estimate');
+ok(sqDetail.fromReps <= RELIABLE_E1RM_REPS, 'and it came off a set short enough to trust');
+
+// The leg curl never goes below eight, so there is no reliable reading to be had.
+// What matters is which unreliable one gets picked: high reps estimate high, so
+// taking the biggest would mean a lifter adding weight every week watches the
+// estimate fall as their reps come down. The shortest set is the honest choice.
+const lcDetail = slotE1RMDetail(store.getState(), 'd3_legcurl');
+ok(!lcDetail.reliable, 'an 8-12 rep slot is marked as an unreliable estimate');
+const lcHist = slotHistory(store.getState(), 'd3_legcurl').filter((h) => h.phase !== 'deload').slice(-3);
+eq(lcDetail.fromReps, Math.min(...lcHist.map((h) => h.estimatedFromReps)),
+  'the unreliable estimate comes off the shortest set available, not the biggest number');
+ok(lcDetail.value < Math.max(...lcHist.map((h) => h.best1RM)),
+  'which is a smaller figure than the naive best-of would have produced');
+
+/* ======================================================================
+   9b. The high-rep (pain) week
+   ====================================================================== */
+hr('9b. High-rep week');
+
+// Set up a clean cycle of its own so the checklist can be answered with pain only.
+const painStore = JSON.stringify(store.getState());
+store.update((s) => {
+  s.profile = { ...s.profile, units: 'kg', barWeight: 20, plates: [25, 20, 15, 10, 5, 2.5, 1.25], microplates: true };
+  s.maxes = { squat: { value: 170 }, bench: { value: 120 }, deadlift: { value: 200 } };
+  s.program = buildProgram({ templateId: INTERMEDIATE_PL.id });
+  s.sessions = [];
+  s.activeSessionId = null;
+});
+for (let w = 0; w < 3; w++) [1, 2, 3, 4].forEach(() => trainAsPrescribed());
+
+st = store.getState();
+const beforePain = resolveDay(st, { week: 3, day: 3 }).slots.find((x) => x.slotKey === 'd3_squat');
+let painRes = null;
+store.update((s) => { painRes = resolveAssessment(s, { pain: true }); });
+eq(painRes.action, 'painWeek', 'pain as the only flag routes to a high-rep week, not a deload');
+st = store.getState();
+
+const pw = resolveDay(st, { day: 3 });
+ok(pw.isPainWeek, 'the resolved day knows it is a high-rep week');
+eq(pw.label, 'High-rep week · Day 3', 'and is labelled as one rather than as week 4');
+
+const pwSq = pw.slots.find((x) => x.slotKey === 'd3_squat');
+eq(pwSq.reps, PAIN_WEEK_REPS, 'reps are raised to the high-rep target');
+eq(pwSq.sets, 3, 'volume is unchanged — this is not a deload');
+eq(pwSq.targetRPE, 8, 'RPE is unchanged — this is not a deload');
+// The whole point is less load on the joint. Before this existed, week 4 fell off
+// the end of the wave and prescribed a fourth increment: the heaviest session in
+// the program, handed out as the remedy for joint pain.
+ok(pwSq.plannedLoad < beforePain.plannedLoad,
+  'the bar load drops rather than rising', `${pwSq.plannedLoad} vs ${beforePain.plannedLoad}`);
+ok(pwSq.plannedLoad < st.program.slots.d3_squat.week1Load,
+  'and lands below even the week-1 anchor, since the reps more than doubled');
+
+// A slot that already lives at these reps is simply at its week 1.
+const pwCurl = pw.slots.find((x) => x.slotKey === 'd3_legcurl');
+eq(pwCurl.reps, PAIN_WEEK_REPS, 'an 8-12 slot tops out at the high-rep target');
+eq(pwCurl.plannedLoad, st.program.slots.d3_legcurl.week1Load,
+  'and runs at its week-1 load, because for it this simply is week 1');
+
+// Technique work is 1-3 reps of skill practice at RPE 5 and is left alone — but
+// it must still resolve against a real week rather than off the end of the wave.
+const pwTech = resolveDay(st, { day: 2 }).slots.find((x) => x.slotKey === 'd2_squat');
+eq(pwTech.reps, repsForWeek(findTplSlot('d2_squat'), st.program, 3), 'technique reps are the last loading week\'s');
+eq(pwTech.targetRPE, 5, 'technique work stays at RPE 5');
+eq(pwTech.plannedLoad, resolveDay(st, { week: 3, day: 2, phase: 'load' })
+  .slots.find((x) => x.slotKey === 'd2_squat').plannedLoad,
+  'and at the last loading week\'s load, not a fourth increment above it');
+
+// It has to end. Before this, the cursor stayed on the pain week for ever.
+const anchorBefore = st.program.slots.d3_squat.week1Load;
+[1, 2, 3, 4].forEach(() => trainAsPrescribed());
+st = store.getState();
+eq(st.program.cursor.phase, 'load', 'the high-rep week rolls into the next cycle');
+eq(st.program.cursor.cycle, 2, 'and the cycle counter moves');
+eq(st.program.cursor.week, 1, 'back to week 1');
+ok(!st.program.pendingAssessment, 'without re-raising the checklist it just answered');
+eq(st.program.slots.d3_squat.week1Load, anchorBefore + 5, 'anchors roll forward as after any normal week');
+eq(st.program.cyclesSinceDeload, 1, 'a high-rep week is not a deload, so the every-third-cycle backstop still counts');
+
+store.update((s) => { const r = JSON.parse(painStore); s.profile = r.profile; s.maxes = r.maxes; s.sessions = r.sessions; s.program = r.program; s.activeSessionId = null; });
 
 /* ======================================================================
    10. Advanced templates resolve
@@ -957,6 +1099,74 @@ hr('15. Three-day schedule');
   const f2 = sessionBriefing(resolveDay(st4, { cycle: 1, week: 1, day: 2, phase: 'load' }), st4);
   const tn = f2.notes.find((n) => n.kind === 'technique');
   ok(tn && /^Technique day/.test(tn.title), 'the four-day still calls it a technique day');
+}
+
+/* ======================================================================
+   16. Invariants that hold for every template
+   ----------------------------------------------------------------------
+   The deload and the high-rep week were both wrong in the same shape: a phase
+   the cursor could reach that nothing had actually resolved, so it inherited
+   whatever the ordinary wave maths produced at a week number off the end of the
+   range. Two sweeps, so the next phase added cannot repeat it.
+   ====================================================================== */
+hr('16. Cross-template invariants');
+
+for (const id of [INTERMEDIATE_PL.id, INTERMEDIATE_PL_3DAY.id]) {
+  store.update((s) => {
+    s.profile = { ...s.profile, units: 'kg', barWeight: 20, plates: [25, 20, 15, 10, 5, 2.5, 1.25], microplates: true };
+    s.maxes = { squat: { value: 170 }, bench: { value: 120 }, deadlift: { value: 200 } };
+    s.program = buildProgram({ templateId: id });
+    s.sessions = [];
+    s.activeSessionId = null;
+  });
+  const tpl = templateOf(store.getState().program);
+  const weeks = loadingWeeks(store.getState().program);
+  for (let w = 0; w < weeks; w++) tpl.days.forEach(() => trainAsPrescribed());
+
+  const base = store.getState();
+  const heaviest = {};
+  for (const d of tpl.days) {
+    for (let w = 1; w <= weeks; w++) {
+      for (const sl of resolveDay(base, { week: w, day: d.n, phase: 'load' }).slots) {
+        if (sl.plannedLoad == null) continue;
+        heaviest[sl.slotKey] = Math.max(heaviest[sl.slotKey] ?? 0, sl.plannedLoad);
+      }
+    }
+  }
+
+  // Answer the checklist for real rather than poking the cursor, so the routing
+  // that puts the lifter into these phases is under test too.
+  for (const [phase, answers] of [['deload', { dread: true, sleep: true }], ['painWeek', { pain: true }]]) {
+    const snap = JSON.stringify(store.getState());
+    let routed = null;
+    store.update((s) => { routed = resolveAssessment(s, answers); });
+    eq(routed.action, phase, `${id}: the checklist routes to ${phase}`);
+    const stx = store.getState();
+    eq(stx.program.cursor.phase, phase, `${id}: and the cursor follows it there`);
+    for (const d of tpl.days) {
+      for (const sl of resolveDay(stx, { day: d.n, phase }).slots) {
+        // An easy week may never be the heaviest thing the program has asked for.
+        if (sl.plannedLoad != null) {
+          ok(sl.plannedLoad <= heaviest[sl.slotKey] + 1e-6,
+            `${id} ${phase}: ${sl.slotKey} is not heavier than any loading week`,
+            `${sl.plannedLoad} vs ${heaviest[sl.slotKey]}`);
+        }
+        // And it may never print an RPE the lifter has no way to log.
+        const lows = [sl.targetRPE, ...(sl.rpeRange || [])].filter((r) => r != null);
+        for (const r of lows) {
+          ok(r >= 5 && r <= 10, `${id} ${phase}: ${sl.slotKey} RPE ${r} is on the scale`);
+        }
+        // Reps have to stay inside what a human can be asked for.
+        if (sl.reps != null) ok(sl.reps >= 1 && sl.reps <= 20, `${id} ${phase}: ${sl.slotKey} reps are sane`, `got ${sl.reps}`);
+      }
+    }
+    // Every non-proceed phase must terminate into the next cycle.
+    tpl.days.forEach(() => trainAsPrescribed());
+    const after = store.getState();
+    eq(after.program.cursor.phase, 'load', `${id} ${phase}: rolls back into a loading phase`);
+    ok(!after.program.pendingAssessment, `${id} ${phase}: does not re-raise the checklist it just answered`);
+    store.update((s) => { const r = JSON.parse(snap); s.sessions = r.sessions; s.program = r.program; s.activeSessionId = null; });
+  }
 }
 
 /* ======================================================================

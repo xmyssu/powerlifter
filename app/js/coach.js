@@ -299,7 +299,15 @@ export function sessionBriefing(resolved, state) {
       title: 'This is a deload week',
       text: tpl.model === 'block'
         ? 'Week 3 repeated at two-thirds of the sets, a point lower on RPE, five percentage points lighter. The point is to shed fatigue while keeping the pattern — do not turn it into a training week.'
-        : 'The lowest reps and the lightest load of the wave, at two-thirds of the sets. It will feel easy. That is the entire point — you are here to arrive at the next cycle recovered.',
+        : 'The lowest reps and the lightest load of the wave, at two-thirds of the sets — which is why the RPE target drops with them, to about 6 on your main lifts. It will feel easy. That is the entire point: you are here to arrive at the next cycle recovered, not to prove anything. Do not load the bar back up to chase last week\'s number.',
+    });
+  }
+
+  if (resolved.isPainWeek) {
+    notes.push({
+      kind: 'painWeek',
+      title: 'High-rep week — same effort, lighter bar',
+      text: 'Aches and pains were your only flag, so this is not a deload. Volume and RPE stay exactly where they were; the reps go up to twelve and the load comes down to meet them. That keeps the training stimulus while taking the peak stress off the joint. If a movement still hurts at these reps, swap it rather than grinding it — every slot has alternatives behind the swap button.',
     });
   }
 

@@ -20,7 +20,19 @@ const PCT = [
   46.7,
 ];
 
-export const RPE_MIN = 5.5;
+/**
+ * The floor of the scale the app can represent.
+ *
+ * This has to be at or below the lowest RPE any template actually prescribes,
+ * because `pctOf1RM` normalises before it indexes: an RPE under the floor is
+ * silently read as the floor, and the load comes out heavier than the program
+ * asked for. The advanced primer and taper days prescribe RPE 4, and the
+ * intermediate technique slots prescribe RPE 5 — with the floor at 5.5 both were
+ * computed as 5.5, making the lightest, most deliberately submaximal work in the
+ * program 1.6% (RPE 5) to 4.8% (RPE 4) heavier than intended. On a 200 kg squat
+ * that put a primer single meant for 162 kg at 170 kg, on meet week.
+ */
+export const RPE_MIN = 4;
 export const RPE_MAX = 10;
 
 /** Clamp + snap an RPE to the nearest half point. */

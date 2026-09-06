@@ -42,7 +42,7 @@ function view(ctx) {
 
       <div class="day-head">
         <div class="day-head__meta">
-          <span class="pill pill--accent">${esc(resolved.isDeload ? 'Deload' : `Cycle ${resolved.cycle} · Week ${resolved.week}`)}</span>
+          <span class="pill pill--accent">${esc(resolved.isDeload ? 'Deload' : resolved.isPainWeek ? 'High-rep week' : `Cycle ${resolved.cycle} · Week ${resolved.week}`)}</span>
           <span class="pill">Day ${resolved.day}</span>
           <span class="pill ${resolved.dayDef.role === 'strength' ? 'pill--bad' : resolved.dayDef.role === 'technique' ? 'pill--info' : 'pill--warn'}">${esc(resolved.dayDef.label)}</span>
         </div>
@@ -50,8 +50,8 @@ function view(ctx) {
         ${raw(resolved.why ? `<div class="day-head__why">${esc(resolved.why)}</div>` : '')}
       </div>
 
-      ${raw(brief.notes.filter((n) => n.kind === 'deload' || n.kind === 'cycle').map((n) =>
-        `<div class="banner ${n.kind === 'deload' ? 'banner--good' : ''}"><b>${esc(n.title)}</b><br>${esc(n.text)}</div>`).join(''))}
+      ${raw(brief.notes.filter((n) => n.kind === 'deload' || n.kind === 'painWeek' || n.kind === 'cycle').map((n) =>
+        `<div class="banner ${n.kind === 'deload' ? 'banner--good' : n.kind === 'painWeek' ? 'banner--warn' : ''}"><b>${esc(n.title)}</b><br>${esc(n.text)}</div>`).join(''))}
 
       <div class="stack-sm">
         ${raw(resolved.slots.map((s, i) => slotRow(s, i, units, st)).join(''))}

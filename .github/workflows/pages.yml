@@ -33,6 +33,12 @@ jobs:
       - name: Run sync tests
         run: node --test app/js/sync.test.mjs
 
+      # Property sweeps over every template x day x week x phase x plate set,
+      # plus seeded random training histories. Slower to write than a worked
+      # example and far faster to run than to debug what it catches.
+      - name: Run property sweeps
+        run: node --test app/js/fuzz.test.mjs
+
       # enablement creates the Pages site on first run. Without it this step
       # 404s on a repo where Pages has never been turned on in Settings.
       - uses: actions/configure-pages@v5

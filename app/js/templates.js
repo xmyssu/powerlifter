@@ -435,6 +435,7 @@ export const RPE_SCALE = [
   { rpe: 7,   rir: '3',   meaning: 'Could do 3 more reps.' },
   { rpe: 6,   rir: '4-6', meaning: 'Could do 4 to 6 more reps.' },
   { rpe: 5,   rir: '4-6', meaning: 'Could do 4 to 6 more reps. Light.' },
+  { rpe: 4,   rir: '6+',  meaning: 'Could do 6 or more reps. Primer and taper work.' },
 ];
 
 /** Warm-up protocol, p. 224. */
