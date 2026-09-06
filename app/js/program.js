@@ -820,6 +820,34 @@ export function startSession(state, position) {
 }
 
 /**
+ * Throw away a session that was started and not wanted.
+ *
+ * Starting a session is how you find out what is in one, so it has to be
+ * undoable — otherwise the only way out of a session opened out of curiosity is
+ * to finish it, which writes a training day that never happened into the log and
+ * moves the cycle on.
+ *
+ * Only an unfinished session can go. A completed one is history, and history
+ * that can be deleted by a stray tap is not history; the caller gets a null back
+ * rather than an exception so a double-tap on the button is harmless.
+ *
+ * Nothing else needs unwinding: `startSession` is pure — the cursor only moves in
+ * `completeSession` — so discarding leaves the program exactly where it was.
+ */
+export function discardSession(state, sessionId) {
+  const i = (state.sessions || []).findIndex((x) => x.id === sessionId);
+  if (i < 0) return { discarded: null };
+  const ses = state.sessions[i];
+  if (ses.status === 'done') return { discarded: null };
+
+  const logged = (ses.entries || []).reduce((n, e) => n + (e.sets || []).filter((x) => x.done).length, 0);
+  state.sessions.splice(i, 1);
+  if (state.activeSessionId === sessionId) state.activeSessionId = null;
+  if (ses.phase === 'test' && state.program) delete state.program.testLifts;
+  return { discarded: { id: ses.id, phase: ses.phase, date: ses.date, logged } };
+}
+
+/**
  * Fold a test day's singles into the lifter's recorded maxes.
  *
  * Only a completed single counts. A missed third attempt is information about

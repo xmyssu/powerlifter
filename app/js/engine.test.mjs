@@ -22,7 +22,7 @@ const { buildProgram, resolveDay, startSession, completeSession, resolveAssessme
         repsForWeek, pctForWeek, loadingWeeks, graduationCheck, volumeAudit,
         slotE1RM, slotE1RMDetail, cyclePlan, convertUnits, slotHistory, lastComparable,
         templateOf, PAIN_WEEK_REPS, RELIABLE_E1RM_REPS, resolveTestDay, attemptsFor,
-        bestMaxFor } = await import('./program.js');
+        bestMaxFor, discardSession } = await import('./program.js');
 const { pctOf1RM, e1RM, loadFor, plateBreakdown, roundToLoadable, plateLabel, minIncrement, convertLoad,
         loadBand, RPE_TOLERANCE } = await import('./rpe.js');
 const { assessDeload, INTERMEDIATE_PL, INTERMEDIATE_PL_3DAY } = await import('./templates.js');
@@ -1363,6 +1363,88 @@ hr('15d. Test readiness');
 
   // One lift is just one day.
   eq(planTestBlock(rSt, { lifts: ['deadlift'], start: '2026-09-09' }).days.length, 1, 'a single-lift block is one day');
+}
+
+/* ======================================================================
+   15e. Discarding a session
+   ====================================================================== */
+hr('15e. Discard');
+{
+  store.update((s) => {
+    s.profile = { ...s.profile, units: 'kg', barWeight: 20, plates: [25, 20, 15, 10, 5, 2.5, 1.25], microplates: true };
+    s.maxes = { squat: { value: 150 }, bench: { value: 95 }, deadlift: { value: 175 } };
+    s.program = buildProgram({ templateId: INTERMEDIATE_PL.id });
+    s.sessions = [];
+    s.activeSessionId = null;
+  });
+  [1, 2, 3, 4].forEach(() => trainAsPrescribed());   // one real week of history
+
+  const beforeCursor = JSON.stringify(store.getState().program.cursor);
+  const beforeCount = store.getState().sessions.length;
+  const beforeAnchor = store.getState().program.slots.d3_squat.week1Load;
+
+  // Open a session, log a couple of sets, then bin it.
+  let sid = null;
+  store.update((s) => {
+    const ses = startSession(s, { ...s.program.cursor });
+    ses.entries[0].sets[0] = { ...ses.entries[0].sets[0], reps: 5, rpe: 8, done: true };
+    ses.entries[0].sets[1] = { ...ses.entries[0].sets[1], reps: 5, rpe: 8, done: true };
+    s.sessions.push(ses);
+    s.activeSessionId = ses.id;
+    sid = ses.id;
+  });
+  eq(store.getState().sessions.length, beforeCount + 1, 'starting a session adds one');
+  // Starting must not have moved anything on its own.
+  eq(JSON.stringify(store.getState().program.cursor), beforeCursor, 'starting a session does not move the cursor');
+
+  let res = null;
+  store.update((s) => { res = discardSession(s, sid); });
+  st = store.getState();
+  eq(res.discarded.logged, 2, 'the discard reports what was thrown away');
+  eq(st.sessions.length, beforeCount, 'the session is gone');
+  eq(st.activeSessionId, null, 'and nothing is active any more');
+  eq(JSON.stringify(st.program.cursor), beforeCursor, 'the cycle stays exactly where it was');
+  eq(st.program.slots.d3_squat.week1Load, beforeAnchor, 'and no anchor moved');
+  ok(!st.sessions.some((x) => x.id === sid), 'it is not lurking in the history');
+
+  // Nothing it logged may survive into what the engine reads.
+  for (const key of Object.keys(st.program.slots)) {
+    ok(!slotHistory(st, key).some((h) => h.sessionId === sid), `${key} history has no trace of it`);
+  }
+
+  // A finished session is history and must survive a stray tap.
+  const doneId = st.sessions[st.sessions.length - 1].id;
+  let res2 = null;
+  store.update((s) => { res2 = discardSession(s, doneId); });
+  eq(res2.discarded, null, 'a completed session cannot be discarded');
+  eq(store.getState().sessions.length, beforeCount, 'and is still there');
+
+  // Double-tap, and an id that was never real, are both harmless.
+  let res3 = null;
+  store.update((s) => { res3 = discardSession(s, sid); });
+  eq(res3.discarded, null, 'discarding twice is a no-op');
+  store.update((s) => { res3 = discardSession(s, 'ses_nonexistent'); });
+  eq(res3.discarded, null, 'discarding an unknown id is a no-op');
+
+  // A discarded test day leaves no test state behind either.
+  let tid = null;
+  store.update((s) => {
+    s.program.testLifts = ['deadlift'];
+    const ses = startSession(s, { ...s.program.cursor, phase: 'test' });
+    s.sessions.push(ses); s.activeSessionId = ses.id; tid = ses.id;
+  });
+  store.update((s) => { discardSession(s, tid); });
+  st = store.getState();
+  eq(st.program.testLifts, undefined, 'a discarded test day clears its lift selection');
+  eq(st.activeSessionId, null, 'and clears the active session');
+  eq(JSON.stringify(st.program.cursor), beforeCursor, 'and still has not moved the cycle');
+
+  // The program must be perfectly usable afterwards.
+  const after = trainAsPrescribed();
+  ok(after.session.id !== sid, 'a fresh session starts cleanly after a discard');
+  ok(store.getState().program.cursor.day !== JSON.parse(beforeCursor).day
+     || store.getState().program.cursor.week !== JSON.parse(beforeCursor).week,
+     'and completing it advances the cycle as normal');
 }
 
 /* ======================================================================

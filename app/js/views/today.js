@@ -4,7 +4,7 @@
 
 import { html, raw, esc, icon, $, $$, toast, sheet, closeSheet, fmtDate, relDays, confirmSheet } from '../ui.js';
 import { fmtLoadBare, plateBreakdown, fmtRPE } from '../rpe.js';
-import { resolveDay, startSession, templateOf, resolveAssessment, cyclePlan, loadingWeeks, resolveTestDay, attemptsFor } from '../program.js';
+import { resolveDay, startSession, templateOf, resolveAssessment, cyclePlan, loadingWeeks, resolveTestDay, attemptsFor, discardSession } from '../program.js';
 import { DELOAD_CHECKLIST, WARMUP, RPE_SCALE, INTERMEDIATE_PL, ADVANCED_ACCUMULATION } from '../templates.js';
 import { activeInsights, sessionBriefing, readinessVerdict, READINESS_QUESTIONS, PAIN_PROTOCOL, milestones, testReadiness, planTestBlock } from '../coach.js';
 import { byId } from '../exercises.js';
@@ -271,13 +271,17 @@ function insightCard(i) {
 function resumeCard(active, resolved) {
   const logged = active.entries.reduce((n, e) => n + e.sets.filter((s) => s.done).length, 0);
   const total = active.entries.reduce((n, e) => n + e.sets.length, 0);
+  // The way out is offered here as well as inside the session, because the most
+  // likely reason to want it is having opened a session to look at it — and
+  // having to go back into the thing you did not want in order to leave it is a
+  // silly shape for that to take.
   return `<div class="card card--accent">
     <div class="row-between">
       <div>
-        <div class="eyebrow" style="color:var(--accent)">Session in progress</div>
+        <div class="eyebrow" style="color:var(--accent)">${esc(active.phase === 'test' ? 'Test day in progress' : 'Session in progress')}</div>
         <div class="small" style="margin-top:3px">${logged} of ${total} sets logged</div>
       </div>
-      ${icon('play', 'dim')}
+      <button class="btn btn--bare" data-discard style="color:var(--bad);flex:0 0 auto">Discard</button>
     </div>
   </div>`;
 }
@@ -580,6 +584,23 @@ function mount(root, ctx) {
   $$('[data-pain]', root).forEach((b) => b.onclick = () => openPain());
   $$('[data-plan]', root).forEach((b) => b.onclick = () => openPlan(ctx));
   $$('[data-test]', root).forEach((b) => b.onclick = () => openTestDay(ctx));
+  $$('[data-discard]', root).forEach((b) => b.onclick = async () => {
+    const active = ctx.state.sessions.find((x) => x.id === ctx.state.activeSessionId && x.status === 'active');
+    if (!active) return;
+    const logged = active.entries.reduce((n, e) => n + e.sets.filter((x) => x.done).length, 0);
+    const yes = await confirmSheet({
+      title: 'Discard this session?',
+      message: logged
+        ? `${logged} logged set${logged === 1 ? '' : 's'} will be deleted and nothing will be written to your history. Your cycle stays exactly where it is.`
+        : 'Nothing has been logged, so nothing is lost. Your cycle stays exactly where it is.',
+      confirmLabel: logged ? `Discard ${logged} set${logged === 1 ? '' : 's'}` : 'Discard',
+      danger: true,
+    });
+    if (!yes) return;
+    ctx.store.update((s) => { discardSession(s, active.id); });
+    toast('Session discarded.');
+    ctx.refresh();
+  });
 
   $$('[data-swapday]', root).forEach((b) => b.onclick = () => {
     const day = Number(b.dataset.swapday);

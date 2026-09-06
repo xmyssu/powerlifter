@@ -10,7 +10,7 @@
 
 import { html, raw, esc, icon, $, $$, toast, sheet, closeSheet, confirmSheet, fmtDuration, haptic } from '../ui.js';
 import { fmtLoadBare, plateBreakdown, roundToLoadable, minIncrement, e1RM, fmtRPE, normalizeRPE, loadFor, parseNum, convertLoad } from '../rpe.js';
-import { resolveDay, completeSession, slotHistory, lastComparable, templateOf } from '../program.js';
+import { resolveDay, completeSession, discardSession, slotHistory, lastComparable, templateOf } from '../program.js';
 import { RPE_SCALE, REST_GUIDE } from '../templates.js';
 import { sessionBriefing } from '../coach.js';
 import { optionsForSlot, SLOT_INFO, byId } from '../exercises.js';
@@ -72,6 +72,7 @@ function view(ctx) {
         <button class="btn ${allDone ? 'btn--primary' : 'btn--ghost'} btn--lg btn--block" data-finish>
           ${esc(allDone ? 'Finish session' : `Finish early (${doneSets}/${totalSets})`)}
         </button>
+        <button class="btn btn--bare btn--block" data-discard style="color:var(--bad)">Discard session</button>
       </div>
 
       <p class="cite">${esc(REST_GUIDE.principle)} If you know you rush it: at least 2.5 min on compounds, 1.5 min on the smaller stuff.</p>
@@ -612,6 +613,37 @@ async function finish(ctx) {
   showSummary(ctx, ses.id, notes);
 }
 
+/**
+ * Bin the session and go home.
+ *
+ * The confirmation names the number of logged sets rather than asking a generic
+ * "are you sure", because those two cases deserve different amounts of hesitation
+ * — a session opened to look at and a session with nine sets in it are the same
+ * tap and very different mistakes.
+ */
+async function discard(ctx) {
+  const st = ctx.state;
+  const ses = sessionOf(st);
+  if (!ses) { ctx.go('today'); return; }
+  const logged = ses.entries.reduce((n, e) => n + e.sets.filter((x) => x.done).length, 0);
+
+  const okToGo = await confirmSheet({
+    title: 'Discard this session?',
+    message: logged
+      ? `${logged} logged set${logged === 1 ? '' : 's'} will be deleted and nothing will be written to your history. Your cycle stays exactly where it is.`
+      : 'Nothing has been logged, so nothing is lost. Your cycle stays exactly where it is.',
+    confirmLabel: logged ? `Discard ${logged} set${logged === 1 ? '' : 's'}` : 'Discard',
+    danger: true,
+  });
+  if (!okToGo) return;
+
+  timer.stop();
+  expanded = null;
+  ctx.store.update((s) => { discardSession(s, ses.id); });
+  toast('Session discarded.');
+  ctx.go('today');
+}
+
 function showSummary(ctx, sessionId, notes) {
   const st = ctx.state;
   const ses = st.sessions.find((s) => s.id === sessionId);
@@ -678,6 +710,7 @@ function mount(root, ctx) {
   $$('[data-exnote]', root).forEach((b) => b.onclick = () => openNote(ctx, b.dataset.exnote));
   $$('[data-notes]', root).forEach((b) => b.onclick = () => openNote(ctx, null));
   $$('[data-finish]', root).forEach((b) => b.onclick = () => finish(ctx));
+  $$('[data-discard]', root).forEach((b) => b.onclick = () => discard(ctx));
 
   $$('[data-addset]', root).forEach((b) => b.onclick = () => {
     ctx.store.update((s) => {
