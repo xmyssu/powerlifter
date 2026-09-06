@@ -30,6 +30,13 @@ function view(ctx) {
   const todaysReadiness = st.readiness.find((r) => r.date === todayISO());
   const verdict = todaysReadiness ? readinessVerdict(todaysReadiness, st) : null;
 
+  // A milestone inside a plate's reach is the most actionable thing the app can
+  // tell a lifter, so it does not belong under the fold beneath the warm-up
+  // card. When something is in range the card comes up to meet the eye and
+  // carries the button with it; when nothing is, it stays out of the way.
+  const ms = milestones(st, { perLift: 2 });
+  const anyInRange = ms.some((m) => m.next.some((n) => n.inRange));
+
   return html`
     ${raw(header(st, tpl))}
 
@@ -41,6 +48,8 @@ function view(ctx) {
       ${raw(active ? resumeCard(active, resolved) : '')}
 
       ${raw(verdict ? readinessCard(verdict) : readinessPrompt())}
+
+      ${raw(anyInRange ? milestoneCard(st, ms) : '')}
 
       <div class="day-head">
         <div class="day-head__meta">
@@ -70,9 +79,9 @@ function view(ctx) {
         <button class="btn btn--ghost grow" data-pain>${raw(icon('warn'))} Something hurts</button>
       </div>
 
-      <button class="btn btn--ghost btn--block" data-test>${raw(icon('trophy'))} Test day — go for a single</button>
+      ${raw(anyInRange ? '' : `<button class="btn btn--ghost btn--block" data-test>${raw(icon('trophy'))} Test day — go for a single</button>`)}
 
-      ${raw(milestoneCard(st))}
+      ${raw(anyInRange ? '' : milestoneCard(st, ms))}
 
       ${raw(scheduleNote(resolved, st))}
     </div>`;
@@ -107,10 +116,10 @@ function meetDayBanner(st) {
  * has quietly crossed four plates should find that out on the day it happens,
  * not the next time they go looking at a chart.
  */
-function milestoneCard(st) {
-  const rows = milestones(st, { perLift: 2 });
+function milestoneCard(st, rows) {
   const units = st.profile.units;
   const anyReady = rows.some((r) => r.next.some((n) => n.inRange));
+  const ready = rows.flatMap((r) => r.next.filter((n) => n.inRange).map((n) => ({ ...n, lift: r.lift })));
   const body = rows.filter((r) => r.est).map((r) => {
     const name = { squat: 'Squat', bench: 'Bench', deadlift: 'Deadlift' }[r.lift];
     return r.next.map((n, i) => `<div class="kv">
@@ -123,12 +132,16 @@ function milestoneCard(st) {
     </div>`).join('');
   }).join('');
   if (!body) return '';
-  return `<div class="card">
-    <div class="eyebrow" style="margin-bottom:8px">Milestones</div>
+  const names = { squat: 'Squat', bench: 'Bench', deadlift: 'Deadlift' };
+  return `<div class="card ${anyReady ? 'card--accent' : ''}">
+    <div class="eyebrow" style="margin-bottom:8px${anyReady ? ';color:var(--accent)' : ''}">
+      ${anyReady ? `${ready.length} milestone${ready.length === 1 ? '' : 's'} in range` : 'Milestones'}
+    </div>
     ${body}
     <p class="cite" style="margin-top:10px">${anyReady
-      ? 'Something is in range. Take a test day and go and get it.'
+      ? esc(`${ready.map((n) => `${names[n.lift]} ${n.label}`).join(', ')} — your estimate says ${ready.length === 1 ? 'it is' : 'they are'} there. A test day is the only way to find out.`)
       : 'Distances are from your estimated max; the weeks assume your current rate holds.'}</p>
+    ${anyReady ? `<button class="btn btn--primary btn--block" style="margin-top:12px" data-test>${icon('trophy')} Test day — go and get it</button>` : ''}
   </div>`;
 }
 
