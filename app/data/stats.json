@@ -1,18 +1,18 @@
 {
  "v": 1,
- "generatedAt": "2026-09-05T05:17:36.732Z",
+ "generatedAt": "2026-09-10T03:35:46.083Z",
  "athlete": {
   "firstName": null
  },
  "unit": "kg",
  "displayUnit": "kg",
  "totals": {
-  "sessions": 16,
-  "sets": 154,
-  "reps": 827,
-  "tonnage": 64953,
+  "sessions": 17,
+  "sets": 157,
+  "reps": 830,
+  "tonnage": 65463,
   "firstDate": "2026-08-05",
-  "lastDate": "2026-09-04"
+  "lastDate": "2026-09-08"
  },
  "lifts": [
   {
@@ -22,7 +22,7 @@
    "e1rmDate": "2026-08-22",
    "tested": 150.6,
    "testedDate": "2026-08-04",
-   "change28": 8.4,
+   "change28": 2.3,
    "trend": [
     {
      "date": "2026-08-07",
@@ -50,7 +50,7 @@
     },
     {
      "date": "2026-08-20",
-     "value": 152.9,
+     "value": 155.3,
      "deload": false,
      "soft": false
     },
@@ -62,7 +62,7 @@
     },
     {
      "date": "2026-08-31",
-     "value": 141.2,
+     "value": 143.4,
      "deload": true,
      "soft": false
     },
@@ -81,7 +81,7 @@
    "e1rmDate": "2026-08-22",
    "tested": 94.6,
    "testedDate": "2026-08-04",
-   "change28": 4.6,
+   "change28": 2.9,
    "trend": [
     {
      "date": "2026-08-05",
@@ -91,7 +91,7 @@
     },
     {
      "date": "2026-08-07",
-     "value": 93.9,
+     "value": 95.4,
      "deload": false,
      "soft": false
     },
@@ -109,7 +109,7 @@
     },
     {
      "date": "2026-08-14",
-     "value": 94.1,
+     "value": 95.6,
      "deload": false,
      "soft": false
     },
@@ -127,7 +127,7 @@
     },
     {
      "date": "2026-08-20",
-     "value": 94.1,
+     "value": 95.6,
      "deload": false,
      "soft": false
     },
@@ -145,7 +145,7 @@
     },
     {
      "date": "2026-08-31",
-     "value": 94.1,
+     "value": 95.6,
      "deload": true,
      "soft": false
     },
@@ -160,15 +160,15 @@
   {
    "lift": "deadlift",
    "label": "Deadlift",
-   "e1rm": 179.6,
-   "e1rmDate": "2026-08-26",
-   "tested": 173.5,
-   "testedDate": "2026-08-04",
-   "change28": 4.4,
+   "e1rm": 181,
+   "e1rmDate": "2026-09-08",
+   "tested": 181,
+   "testedDate": "2026-09-08",
+   "change28": 2.9,
    "trend": [
     {
      "date": "2026-08-07",
-     "value": 175.2,
+     "value": 178.1,
      "deload": false,
      "soft": false
     },
@@ -180,7 +180,7 @@
     },
     {
      "date": "2026-08-14",
-     "value": 176,
+     "value": 178.8,
      "deload": false,
      "soft": false
     },
@@ -192,7 +192,7 @@
     },
     {
      "date": "2026-08-20",
-     "value": 176.5,
+     "value": 179.2,
      "deload": false,
      "soft": false
     },
@@ -204,7 +204,7 @@
     },
     {
      "date": "2026-08-31",
-     "value": 176.5,
+     "value": 179.2,
      "deload": true,
      "soft": false
     },
@@ -213,6 +213,12 @@
      "value": 172.6,
      "deload": true,
      "soft": false
+    },
+    {
+     "date": "2026-09-08",
+     "value": 181,
+     "deload": false,
+     "soft": false
     }
    ]
   }
@@ -220,11 +226,11 @@
  "prs": [
   {
    "exercise": "Deadlift",
-   "e1rm": 179.6,
-   "date": "2026-08-26",
-   "load": 155,
-   "reps": 3,
-   "rpe": 8
+   "e1rm": 181,
+   "date": "2026-09-08",
+   "load": 170,
+   "reps": 1,
+   "rpe": 8.5
   },
   {
    "exercise": "Low-Bar Back Squat",
@@ -276,34 +282,24 @@
   }
  ],
  "lastSession": {
-  "date": "2026-09-04",
-  "label": "Deload · Day 4 · Strength",
-  "cycle": 1,
-  "week": 4,
-  "day": 4,
-  "phase": "deload",
-  "sets": 6,
-  "reps": 34,
-  "tonnage": 2800,
-  "avgRPE": 6.3,
-  "avgTargetRPE": 8,
+  "date": "2026-09-08",
+  "label": "C2 W1 · Day 0",
+  "cycle": 2,
+  "week": 1,
+  "day": 0,
+  "phase": "test",
+  "sets": 3,
+  "reps": 3,
+  "tonnage": 510,
+  "avgRPE": 8.5,
+  "avgTargetRPE": null,
   "minutes": null,
   "unit": "kg",
   "lifts": [
    {
-    "exercise": "Close-Grip Bench Press",
-    "detail": "70×6@6, 70×6@6",
-    "topKg": 70
-   },
-   {
     "exercise": "Deadlift",
-    "detail": "140×3@6, 140×3@6",
-    "topKg": 140
-   },
-   {
-    "exercise": "Cable Row",
-    "detail": "70×8@6, 70×8@8",
-    "topKg": 70
+    "detail": "160×1@7, 170×1@8.5, 180×1@10",
+    "topKg": 180
    }
   ],
   "prs": []
@@ -531,6 +527,20 @@
    "tonnage": 2800,
    "avgRPE": 6.3,
    "avgTargetRPE": 8,
+   "minutes": null
+  },
+  {
+   "date": "2026-09-08",
+   "label": "C2 W1 · Day 0",
+   "cycle": 2,
+   "week": 1,
+   "day": 0,
+   "phase": "test",
+   "sets": 3,
+   "reps": 3,
+   "tonnage": 510,
+   "avgRPE": 8.5,
+   "avgTargetRPE": null,
    "minutes": null
   }
  ],
