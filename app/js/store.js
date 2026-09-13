@@ -82,6 +82,9 @@ export function defaultState() {
       plateHelper: true,
       confirmDeload: true,
       lastBackupAt: null,
+      // Set by "not now" on the milestone card; the home screen stops asking for
+      // a test day until this date. Milestones themselves stay visible.
+      testPromptSnoozedUntil: null,
     },
 
     meta: { lastOpenedAt: null, appVersion: null },

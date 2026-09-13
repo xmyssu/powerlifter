@@ -7,8 +7,8 @@ import { fmtLoadBare, plateBreakdown, fmtRPE } from '../rpe.js';
 import { resolveDay, startSession, templateOf, resolveAssessment, cyclePlan, loadingWeeks, resolveTestDay,
          attemptsFor, discardSession, exitPeak, PEAK_WEEKS } from '../program.js';
 import { DELOAD_CHECKLIST, WARMUP, RPE_SCALE, INTERMEDIATE_PL, ADVANCED_ACCUMULATION } from '../templates.js';
-import { activeInsights, sessionBriefing, readinessVerdict, READINESS_QUESTIONS, PAIN_PROTOCOL, milestones,
-         testReadiness, planTestBlock } from '../coach.js';
+import { activeInsights, sessionBriefing, readinessVerdict, READINESS_QUESTIONS, PAIN_PROTOCOL,
+         testReadiness, planTestBlock, testPromotion, TEST_PROMPT_QUIET_DAYS } from '../coach.js';
 import { byId } from '../exercises.js';
 import { buildProgram } from '../program.js';
 import { todayISO } from '../store.js';
@@ -34,10 +34,13 @@ function view(ctx) {
 
   // A milestone inside a plate's reach is the most actionable thing the app can
   // tell a lifter, so it does not belong under the fold beneath the warm-up
-  // card. When something is in range the card comes up to meet the eye and
-  // carries the button with it; when nothing is, it stays out of the way.
-  const ms = milestones(st, { perLift: 2 });
-  const anyInRange = ms.some((m) => m.next.some((n) => n.inRange));
+  // card. When one is in range *and* going after it is actually the right call
+  // today, the card comes up to meet the eye and carries the button with it.
+  // The rest of the time it stays below, saying the same things quietly: an app
+  // that asks for a max every morning is an app whose asking means nothing.
+  const promo = testPromotion(st);
+  const ms = promo.rows;
+  const anyInRange = promo.promote;
 
   return html`
     ${raw(header(st, tpl))}
@@ -51,7 +54,7 @@ function view(ctx) {
 
       ${raw(verdict ? readinessCard(verdict) : readinessPrompt())}
 
-      ${raw(anyInRange ? milestoneCard(st, ms) : '')}
+      ${raw(anyInRange ? milestoneCard(st, ms, promo) : '')}
 
       <div class="day-head">
         <div class="day-head__meta">
@@ -81,9 +84,9 @@ function view(ctx) {
         <button class="btn btn--ghost grow" data-pain>${raw(icon('warn'))} Something hurts</button>
       </div>
 
-      ${raw(anyInRange ? '' : `<button class="btn btn--ghost btn--block" data-test>${raw(icon('trophy'))} Test day — go for a single</button>`)}
+      ${raw(anyInRange || promo.reason === 'meet' ? '' : `<button class="btn btn--ghost btn--block" data-test>${raw(icon('trophy'))} Test day — go for a single</button>`)}
 
-      ${raw(anyInRange ? '' : milestoneCard(st, ms))}
+      ${raw(anyInRange ? '' : milestoneCard(st, ms, promo))}
 
       ${raw(scheduleNote(resolved, st))}
     </div>`;
@@ -132,32 +135,39 @@ function phaseLabel(resolved) {
  * has quietly crossed four plates should find that out on the day it happens,
  * not the next time they go looking at a chart.
  */
-function milestoneCard(st, rows) {
+function milestoneCard(st, rows, promo) {
   const units = st.profile.units;
-  const anyReady = rows.some((r) => r.next.some((n) => n.inRange));
-  const ready = rows.flatMap((r) => r.next.filter((n) => n.inRange).map((n) => ({ ...n, lift: r.lift })));
+  const promote = !!promo?.promote;
+  const ready = promo?.ready || [];
   const body = rows.filter((r) => r.est).map((r) => {
     const name = { squat: 'Squat', bench: 'Bench', deadlift: 'Deadlift' }[r.lift];
     return r.next.map((n, i) => `<div class="kv">
       <span class="kv__k">${i === 0 ? esc(name) : ''}</span>
       <span class="kv__v">${esc(n.label)}
-        ${n.inRange
-          ? '<span class="pill pill--good">in range</span>'
-          : `<span class="dim" style="font-weight:400">${fmtLoadBare(n.away)} ${esc(units)} away${n.weeksOff ? ` · ~${n.weeksOff} wk` : ''}</span>`}
+        ${n.missed
+          ? `<span class="pill pill--bad">missed ${n.missed.daysAgo}d ago</span>`
+          : n.inRange
+            ? '<span class="pill pill--good">in range</span>'
+            : `<span class="dim" style="font-weight:400">${fmtLoadBare(n.away)} ${esc(units)} away${n.weeksOff ? ` · ~${n.weeksOff} wk` : ''}</span>`}
       </span>
     </div>`).join('');
   }).join('');
   if (!body) return '';
   const names = { squat: 'Squat', bench: 'Bench', deadlift: 'Deadlift' };
-  return `<div class="card ${anyReady ? 'card--accent' : ''}">
-    <div class="eyebrow" style="margin-bottom:8px${anyReady ? ';color:var(--accent)' : ''}">
-      ${anyReady ? `${ready.length} milestone${ready.length === 1 ? '' : 's'} in range` : 'Milestones'}
+  const listed = ready.map((n) => `${names[n.lift]} ${n.label}`).join(', ');
+
+  return `<div class="card ${promote ? 'card--accent' : ''}">
+    <div class="eyebrow" style="margin-bottom:8px${promote ? ';color:var(--accent)' : ''}">
+      ${promote ? `${ready.length} milestone${ready.length === 1 ? '' : 's'} in range` : 'Milestones'}
     </div>
     ${body}
-    <p class="cite" style="margin-top:10px">${anyReady
-      ? esc(`${ready.map((n) => `${names[n.lift]} ${n.label}`).join(', ')} — your estimate says ${ready.length === 1 ? 'it is' : 'they are'} there. A test day is the only way to find out.`)
-      : 'Distances are from your estimated max; the weeks assume your current rate holds.'}</p>
-    ${anyReady ? `<button class="btn btn--primary btn--block" style="margin-top:12px" data-test>${icon('trophy')} Test day — go and get it</button>` : ''}
+    <p class="cite" style="margin-top:10px">${promote
+      ? esc(`${listed} — your estimate says ${ready.length === 1 ? 'it is' : 'they are'} there, and today is a good day to find out. A test day is the only way to know.`)
+      : promo?.detail
+        ? esc(promo.detail)
+        : 'Distances are from your estimated max; the weeks assume your current rate holds.'}</p>
+    ${promote ? `<button class="btn btn--primary btn--block" style="margin-top:12px" data-test>${icon('trophy')} Test day — go and get it</button>
+    <button class="btn btn--bare btn--block" style="margin-top:6px" data-snooze>Not now — stop asking for ${TEST_PROMPT_QUIET_DAYS} days</button>` : ''}
   </div>`;
 }
 
@@ -617,6 +627,14 @@ function mount(root, ctx) {
   $$('[data-pain]', root).forEach((b) => b.onclick = () => openPain());
   $$('[data-plan]', root).forEach((b) => b.onclick = () => openPlan(ctx));
   $$('[data-test]', root).forEach((b) => b.onclick = () => openTestDay(ctx));
+
+  $$('[data-snooze]', root).forEach((b) => b.onclick = () => {
+    const until = new Date();
+    until.setDate(until.getDate() + TEST_PROMPT_QUIET_DAYS);
+    ctx.store.update((s) => { s.settings.testPromptSnoozedUntil = todayISO(until); });
+    toast(`Milestones stay on the board — the app will stop asking for ${TEST_PROMPT_QUIET_DAYS} days.`);
+    ctx.refresh();
+  });
 
   $$('[data-closepeak]', root).forEach((b) => b.onclick = async () => {
     const yes = await confirmSheet({

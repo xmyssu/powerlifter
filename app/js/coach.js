@@ -5,7 +5,7 @@
    ========================================================================== */
 
 import { templateOf, graduationCheck, slotHistory, slotE1RM, volumeAudit, loadingWeeks, bestMaxFor,
-         peakStatus, PEAK_MIN_DAYS } from './program.js';
+         missedAttempts, peakStatus, PEAK_MIN_DAYS } from './program.js';
 import { e1RM, fmtLoad, convertLoad } from './rpe.js';
 import { byId } from './exercises.js';
 import { relDays } from './ui.js';
@@ -566,6 +566,67 @@ export function testReadiness(state, { today = todayISO() } = {}) {
   return { score, level, headline, factors, window, targets, sinceHard, sinceAny };
 }
 
+/**
+ * Should the home screen be *asking* for a test day?
+ *
+ * The milestone card is the most actionable thing the app has, which is exactly
+ * why it has to be able to shut up. Promoted to the top with a button on it, it
+ * reads as an instruction, and an instruction that appears every single time the
+ * app is opened stops being read at all — and worse, an app that asks for a max
+ * every few days is asking for something no program wants. A tested single is a
+ * rare event: it costs a training day, it is only honest when the lifter is
+ * fresh, and when a meet is on the calendar it is the meet's job entirely.
+ *
+ * So the information stays visible always and the *ask* is rationed. Returns
+ * `{ promote, reason, detail }`; `reason` is why it is staying quiet.
+ */
+export const TEST_PROMPT_QUIET_DAYS = 21;
+
+export function testPromotion(state, { today = todayISO() } = {}) {
+  const rows = milestones(state, { perLift: 2, today });
+  const ready = rows.flatMap((r) => r.next.filter((n) => n.inRange).map((n) => ({ ...n, lift: r.lift })));
+  const quiet = (reason, detail) => ({ promote: false, reason, detail, ready, rows });
+
+  if (!ready.length) {
+    const missed = rows.flatMap((r) => r.next.filter((n) => n.missed).map((n) => ({ ...n, lift: r.lift })));
+    if (missed.length) {
+      const m = missed[0];
+      return quiet('missed', `You went for ${m.label} ${m.missed.daysAgo} day${m.missed.daysAgo === 1 ? '' : 's'} ago and did not get it. It stays on the board — the app just is not going to keep asking until either three weeks have passed or your estimate clears it outright.`);
+    }
+    return quiet('nothingInRange', null);
+  }
+
+  // A meet outranks everything. The block ends on a platform with three judges
+  // on it; nobody needs a test day nine days beforehand as well.
+  const peak = peakStatus(state, { today });
+  if (peak && (peak.kind === 'running' || peak.kind === 'nextWeek' || peak.kind === 'waiting')) {
+    return quiet('meet', peak.kind === 'running'
+      ? 'You are inside your peaking block. The meet is the test — everything in range gets answered on the platform.'
+      : `Your meet is ${peak.out} days out and the peaking block will take over. Save the attempt for the platform.`);
+  }
+
+  const snoozed = state.settings?.testPromptSnoozedUntil;
+  if (snoozed && snoozed > today) return quiet('snoozed', null);
+
+  // Something already answered the question recently.
+  const lastTest = (state.sessions || [])
+    .filter((x) => x.status === 'done' && (x.phase === 'test' || x.phase === 'meetWeek'))
+    .map((x) => x.date).sort().pop();
+  if (lastTest && daysBetween(lastTest, today) < TEST_PROMPT_QUIET_DAYS) {
+    const ago = daysBetween(lastTest, today);
+    return quiet('recentlyTested', `You tested ${ago} day${ago === 1 ? '' : 's'} ago. Estimates move faster than maxes do; give it a few weeks of training before you go again.`);
+  }
+
+  // The app's own readiness score already says whether today is the day. Asking
+  // for a max on a day it scores as "not today" is the app arguing with itself.
+  const readiness = testReadiness(state, { today });
+  if (readiness.score != null && readiness.score < 65) {
+    return quiet('notReady', `${readiness.headline} ${readiness.window?.text || ''}`.trim());
+  }
+
+  return { promote: true, reason: null, detail: null, ready, rows, readiness };
+}
+
 /* ======================================================================
    Test blocks — three lifts, spaced so each one gets a fair attempt
    ====================================================================== */
@@ -661,6 +722,16 @@ const ROUND_TARGETS = {
  */
 const BIG_PLATE = { kg: 20, lb: 45 };
 
+/**
+ * How long a missed attempt keeps a milestone off the "go and get it" list.
+ *
+ * Three weeks is roughly a mesocycle: long enough that the app is not asking a
+ * lifter to re-run a session they just failed, short enough that it is not still
+ * bringing it up after they have trained through a whole cycle. It is a
+ * suppression, not a verdict — the milestone still shows, with the date on it.
+ */
+export const MISS_MEMORY_DAYS = 21;
+
 function plateTargets(profile) {
   const have = (profile.plates || []).filter((x) => x > 0);
   if (!have.length) return [];
@@ -679,23 +750,33 @@ function plateTargets(profile) {
  * congratulates you for a number you inferred from a triple is lying to you.
  * `inRange` uses the estimate, because that is the right basis for "go and try".
  */
-export function milestones(state, { perLift = 3 } = {}) {
+export function milestones(state, { perLift = 3, today = todayISO() } = {}) {
   const profile = state.profile;
   const units = profile.units;
   const plates = plateTargets(profile);
+  const step = units === 'kg' ? 2.5 : 5;
   const out = [];
 
   for (const lift of ['squat', 'bench', 'deadlift']) {
     const est = bestMaxFor(state, lift) || 0;
+    const misses = missedAttempts(state, { lift }).filter((m) => daysBetween(m.date, today) <= MISS_MEMORY_DAYS);
 
-    // The heaviest single this lifter has genuinely completed on this lift.
+    // The heaviest single this lifter has genuinely completed on this lift, and
+    // — separately — the heaviest bar they have completed a rep with at all,
+    // with the date on it. The second is what answers a missed attempt: a set of
+    // three at the weight you once failed for a single is proof you have moved
+    // past it in a way an estimate is not.
     let lifted = 0;
+    let bestCompleted = [];
     const tpl = templateOf(state.program);
     const keys = [`test_${lift}`];
     for (const d of tpl.days) for (const sl of d.slots) if (sl.lift === lift) keys.push(sl.key);
     for (const key of keys) {
       for (const h of slotHistory(state, key)) {
-        for (const set of h.sets) if (set.reps === 1 && set.load > lifted) lifted = set.load;
+        for (const set of h.sets) {
+          if (set.reps === 1 && set.load > lifted) lifted = set.load;
+          if (set.reps >= 1) bestCompleted.push({ load: set.load, date: h.date });
+        }
       }
     }
 
@@ -721,6 +802,25 @@ export function milestones(state, { perLift = 3 } = {}) {
       // flattering the estimate is about it. The memory expires, and it expires
       // early if the estimate has since climbed clear of the weight — that is
       // the difference between a bad day and a wall.
+      // Deliberately not "the estimate has since climbed past it". The estimate
+      // that put a weight in range is the same estimate that was wrong about it
+      // — a 185 kg e1RM taken off a set of five is exactly what made 180 look
+      // available on the day it was missed, and letting that same number
+      // overrule the miss puts the app straight back to suggesting it. Only a
+      // completed rep at the weight, logged after the miss, counts.
+      // The comparison runs downward, not upward. A failed 180 says nothing at
+      // all about 100 — but it says a great deal about 180 and about 200. So the
+      // miss that binds a target is the *heaviest* one at or below it; matching
+      // the other way round had one missed deadlift mark every milestone the
+      // lifter owned as unavailable.
+      const hit = misses
+        .filter((m) => m.load <= t.load + 1e-9)
+        .reduce((a, b) => (a == null || b.load > a.load ? b : a), null);
+      const outgrown = hit && bestCompleted.some((c) => c.load >= hit.load - 1e-9 && c.date > hit.date);
+      const missed = hit && !outgrown
+        ? { date: hit.date, load: hit.load, daysAgo: daysBetween(hit.date, today) }
+        : null;
+
       rows.push({
         lift,
         load: t.load,
@@ -729,8 +829,9 @@ export function milestones(state, { perLift = 3 } = {}) {
           : `${t.load} ${units}`,
         kind: t.kind,
         done,
+        missed,
         // Within one small jump of the current estimate: go and try it.
-        inRange: !done && est > 0 && away <= (units === 'kg' ? 2.5 : 5),
+        inRange: !done && !missed && est > 0 && away <= step,
         away: done ? 0 : away,
         weeksOff: done || !perWeek || away <= 0 ? null : Math.ceil(away / perWeek),
         perWeek,

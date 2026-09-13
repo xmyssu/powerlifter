@@ -23,12 +23,13 @@ const { buildProgram, resolveDay, startSession, completeSession, resolveAssessme
         slotE1RM, slotE1RMDetail, cyclePlan, convertUnits, slotHistory, lastComparable,
         templateOf, PAIN_WEEK_REPS, RELIABLE_E1RM_REPS, resolveTestDay, attemptsFor,
         bestMaxFor, discardSession, shouldEnterPeak, enterPeak, exitPeak, peakStatus,
-        peakWeek, missedAttempts, entryStalled, PEAK_WEEKS, PEAK_MIN_DAYS } = await import('./program.js');
+        peakWeek, missedAttempts, entryStalled, daysUntil, PEAK_WEEKS, PEAK_MIN_DAYS } = await import('./program.js');
 const { pctOf1RM, e1RM, loadFor, plateBreakdown, roundToLoadable, plateLabel, minIncrement, convertLoad,
         loadBand, RPE_TOLERANCE } = await import('./rpe.js');
 const { assessDeload, INTERMEDIATE_PL, INTERMEDIATE_PL_3DAY } = await import('./templates.js');
 const { strengthTrend, trendSummary, sessionBriefing, trainingAgeReport, TRAINING_AGE_BANDS, milestones,
-        testReadiness, planTestBlock } = await import('./coach.js');
+        testReadiness, planTestBlock, testPromotion, activeInsights,
+        MISS_MEMORY_DAYS, TEST_PROMPT_QUIET_DAYS } = await import('./coach.js');
 
 let pass = 0, fail = 0;
 const problems = [];
@@ -1811,6 +1812,77 @@ hr('18. Missed attempts');
     `${st.maxes.deadlift.fromLoad}`);
   ok(st.maxes.deadlift.value < 180, 'a missed third is not a max');
 
+  /* ---- the app stops suggesting a weight it watched you miss ---- */
+  const dlm = () => milestones(store.getState(), { perLift: 4 }).find((m) => m.lift === 'deadlift');
+  const four = dlm().next.find((n) => n.load === 180) || dlm().cleared;
+  ok(four?.missed, '180 is marked as missed rather than in range');
+  eq(four.inRange, false, 'and is not offered as a target');
+  ok(dlm().next.every((n) => !n.inRange || n.load !== 180), 'the milestone list agrees');
+
+  eq(testPromotion(store.getState()).promote, false, 'so the home screen does not ask for a test day');
+  eq(testPromotion(store.getState()).reason, 'recentlyTested', 'and says why');
+
+  // A miss only speaks about weights at least as heavy as itself. Matching the
+  // other way round had one failed deadlift mark every milestone the lifter had
+  // already cleared as "missed".
+  const below = dlm().next.concat(dlm().cleared ? [dlm().cleared] : []).filter((n) => n.load < 180);
+  ok(below.length > 0, 'there are milestones below the missed weight');
+  ok(below.every((n) => !n.missed), 'and missing 180 says nothing about any of them');
+
+  // Once the estimate climbs clear of the missed weight, the memory lifts.
+  store.update((s) => { s.maxes.deadlift = { value: 190, date: store.todayISO(), source: 'tested', reps: 1 }; });
+  const stale = milestones(store.getState(), { perLift: 4, today: store.todayISO(new Date(Date.now() + (MISS_MEMORY_DAYS + 1) * 86400000)) });
+  const dl2 = stale.find((m) => m.lift === 'deadlift');
+  ok([...dl2.next, dl2.cleared].filter(Boolean).every((n) => !n.missed),
+    'a miss stops counting once it is old enough');
+
+  // ...and an estimate alone never lifts it early. The estimate is the thing
+  // that was wrong about the weight in the first place.
+  const dl3 = milestones(store.getState(), { perLift: 4 }).find((m) => m.lift === 'deadlift');
+  const still = [...dl3.next, dl3.cleared].filter(Boolean).find((n) => n.load === 180);
+  ok(still?.missed, 'a bigger estimate does not overrule a miss — only a completed rep does');
+}
+
+/* ======================================================================
+   19. Rationing the ask for a test day
+   ====================================================================== */
+hr('19. Test-day promotion');
+{
+  const setup = () => {
+    store.update((s) => {
+      Object.assign(s, store.defaultState());
+      s.program = buildProgram({});
+      // An estimate sitting right on a plate milestone, and a long time since
+      // anything hard — the case the card exists for.
+      s.maxes = { squat: { value: 180 }, bench: { value: 100 }, deadlift: { value: 180 } };
+      s.sessions = [{
+        id: 'old', status: 'done', date: store.todayISO(new Date(Date.now() - 30 * 86400000)),
+        units: 'kg', cycle: 1, week: 1, day: 1, phase: 'load', entries: [], sessionRPE: 2,
+      }];
+    });
+    return store.getState();
+  };
+
+  setup();
+  const base = testPromotion(store.getState());
+  ok(base.ready.length > 0, 'a milestone is in range');
+  eq(base.promote, true, 'and with nothing against it, the app asks');
+
+  // A snooze silences the ask without hiding the milestone.
+  store.update((s) => { s.settings.testPromptSnoozedUntil = store.todayISO(new Date(Date.now() + 5 * 86400000)); });
+  const snoozed = testPromotion(store.getState());
+  eq(snoozed.promote, false, '"not now" stops the app asking');
+  eq(snoozed.reason, 'snoozed', 'for the stated reason');
+  ok(snoozed.ready.length > 0, 'while the milestone itself stays on the board');
+  store.update((s) => { s.settings.testPromptSnoozedUntil = null; });
+
+  // A meet outranks it entirely.
+  const iso = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return store.todayISO(d); };
+  store.update((s) => { s.program.meetDate = iso(20); });
+  eq(testPromotion(store.getState()).reason, 'meet', 'a meet on the calendar outranks a test day');
+  store.update((s) => { enterPeak(s); });
+  eq(testPromotion(store.getState()).reason, 'meet', 'and so does a running peak block');
+  eq(testPromotion(store.getState()).promote, false, 'which never asks for a separate max attempt');
 }
 
 /* ======================================================================
