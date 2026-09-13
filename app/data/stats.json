@@ -1,18 +1,18 @@
 {
  "v": 1,
- "generatedAt": "2026-09-10T05:50:58.568Z",
+ "generatedAt": "2026-09-13T10:34:35.536Z",
  "athlete": {
   "firstName": null
  },
  "unit": "kg",
  "displayUnit": "kg",
  "totals": {
-  "sessions": 18,
-  "sets": 160,
-  "reps": 833,
-  "tonnage": 65883,
+  "sessions": 19,
+  "sets": 162,
+  "reps": 835,
+  "tonnage": 66076,
   "firstDate": "2026-08-05",
-  "lastDate": "2026-09-10"
+  "lastDate": "2026-09-13"
  },
  "lifts": [
   {
@@ -83,11 +83,11 @@
   {
    "lift": "bench",
    "label": "Bench press",
-   "e1rm": 98.5,
-   "e1rmDate": "2026-08-22",
-   "tested": 94.6,
-   "testedDate": "2026-09-10",
-   "change28": 2.9,
+   "e1rm": 100,
+   "e1rmDate": "2026-09-13",
+   "tested": 100,
+   "testedDate": "2026-09-13",
+   "change28": 4.4,
    "trend": [
     {
      "date": "2026-08-05",
@@ -160,6 +160,12 @@
      "value": 98.5,
      "deload": true,
      "soft": false
+    },
+    {
+     "date": "2026-09-13",
+     "value": 100,
+     "deload": false,
+     "soft": false
     }
    ]
   },
@@ -170,7 +176,7 @@
    "e1rmDate": "2026-09-08",
    "tested": 175.7,
    "testedDate": "2026-09-10",
-   "change28": 2.9,
+   "change28": 2.2,
    "trend": [
     {
      "date": "2026-08-07",
@@ -264,11 +270,11 @@
   },
   {
    "exercise": "Bench Press",
-   "e1rm": 98.5,
-   "date": "2026-08-22",
-   "load": 85,
-   "reps": 3,
-   "rpe": 8
+   "e1rm": 100,
+   "date": "2026-09-13",
+   "load": 100,
+   "reps": 1,
+   "rpe": 10
   },
   {
    "exercise": "Close-Grip Bench Press",
@@ -288,24 +294,24 @@
   }
  ],
  "lastSession": {
-  "date": "2026-09-10",
+  "date": "2026-09-13",
   "label": "C2 W1 · Day 0",
   "cycle": 2,
   "week": 1,
   "day": 0,
   "phase": "test",
-  "sets": 3,
-  "reps": 3,
-  "tonnage": 420,
-  "avgRPE": 8.5,
+  "sets": 2,
+  "reps": 2,
+  "tonnage": 193,
+  "avgRPE": 9.5,
   "avgTargetRPE": null,
-  "minutes": 1,
+  "minutes": 167,
   "unit": "kg",
   "lifts": [
    {
-    "exercise": "Low-Bar Back Squat",
-    "detail": "130×1@7, 140×1@8.5, 150×1@10",
-    "topKg": 150
+    "exercise": "Bench Press",
+    "detail": "92.5×1@9, 100×1@10",
+    "topKg": 100
    }
   ],
   "prs": []
@@ -562,6 +568,20 @@
    "avgRPE": 8.5,
    "avgTargetRPE": null,
    "minutes": 1
+  },
+  {
+   "date": "2026-09-13",
+   "label": "C2 W1 · Day 0",
+   "cycle": 2,
+   "week": 1,
+   "day": 0,
+   "phase": "test",
+   "sets": 2,
+   "reps": 2,
+   "tonnage": 193,
+   "avgRPE": 9.5,
+   "avgTargetRPE": null,
+   "minutes": 167
   }
  ],
  "bodyweight": [
