@@ -4,9 +4,11 @@
 
 import { html, raw, esc, icon, $, $$, toast, sheet, closeSheet, fmtDate, relDays, confirmSheet } from '../ui.js';
 import { fmtLoadBare, plateBreakdown, fmtRPE } from '../rpe.js';
-import { resolveDay, startSession, templateOf, resolveAssessment, cyclePlan, loadingWeeks, resolveTestDay, attemptsFor, discardSession } from '../program.js';
+import { resolveDay, startSession, templateOf, resolveAssessment, cyclePlan, loadingWeeks, resolveTestDay,
+         attemptsFor, discardSession, exitPeak, PEAK_WEEKS } from '../program.js';
 import { DELOAD_CHECKLIST, WARMUP, RPE_SCALE, INTERMEDIATE_PL, ADVANCED_ACCUMULATION } from '../templates.js';
-import { activeInsights, sessionBriefing, readinessVerdict, READINESS_QUESTIONS, PAIN_PROTOCOL, milestones, testReadiness, planTestBlock } from '../coach.js';
+import { activeInsights, sessionBriefing, readinessVerdict, READINESS_QUESTIONS, PAIN_PROTOCOL,
+         testReadiness, planTestBlock, testPromotion, TEST_PROMPT_QUIET_DAYS } from '../coach.js';
 import { byId } from '../exercises.js';
 import { buildProgram } from '../program.js';
 import { todayISO } from '../store.js';
@@ -32,10 +34,13 @@ function view(ctx) {
 
   // A milestone inside a plate's reach is the most actionable thing the app can
   // tell a lifter, so it does not belong under the fold beneath the warm-up
-  // card. When something is in range the card comes up to meet the eye and
-  // carries the button with it; when nothing is, it stays out of the way.
-  const ms = milestones(st, { perLift: 2 });
-  const anyInRange = ms.some((m) => m.next.some((n) => n.inRange));
+  // card. When one is in range *and* going after it is actually the right call
+  // today, the card comes up to meet the eye and carries the button with it.
+  // The rest of the time it stays below, saying the same things quietly: an app
+  // that asks for a max every morning is an app whose asking means nothing.
+  const promo = testPromotion(st);
+  const ms = promo.rows;
+  const anyInRange = promo.promote;
 
   return html`
     ${raw(header(st, tpl))}
@@ -49,11 +54,11 @@ function view(ctx) {
 
       ${raw(verdict ? readinessCard(verdict) : readinessPrompt())}
 
-      ${raw(anyInRange ? milestoneCard(st, ms) : '')}
+      ${raw(anyInRange ? milestoneCard(st, ms, promo) : '')}
 
       <div class="day-head">
         <div class="day-head__meta">
-          <span class="pill pill--accent">${esc(resolved.isDeload ? 'Deload' : resolved.isPainWeek ? 'High-rep week' : `Cycle ${resolved.cycle} · Week ${resolved.week}`)}</span>
+          <span class="pill pill--accent">${esc(phaseLabel(resolved))}</span>
           <span class="pill">Day ${resolved.day}</span>
           <span class="pill ${resolved.dayDef.role === 'strength' ? 'pill--bad' : resolved.dayDef.role === 'technique' ? 'pill--info' : 'pill--warn'}">${esc(resolved.dayDef.label)}</span>
         </div>
@@ -68,8 +73,8 @@ function view(ctx) {
         ${raw(resolved.slots.map((s, i) => slotRow(s, i, units, st)).join(''))}
       </div>
 
-      <button class="btn btn--primary btn--lg btn--block" data-start>
-        ${raw(icon('play'))} ${esc(active ? 'Resume session' : 'Start session')}
+      <button class="btn ${resolved.peakKind === 'meet' ? 'btn--good' : 'btn--primary'} btn--lg btn--block" data-start>
+        ${raw(icon(resolved.peakKind === 'meet' ? 'trophy' : 'play'))} ${esc(active ? 'Resume session' : resolved.peakKind === 'meet' ? 'Start the meet' : 'Start session')}
       </button>
 
       ${raw(warmupCard(resolved))}
@@ -79,9 +84,9 @@ function view(ctx) {
         <button class="btn btn--ghost grow" data-pain>${raw(icon('warn'))} Something hurts</button>
       </div>
 
-      ${raw(anyInRange ? '' : `<button class="btn btn--ghost btn--block" data-test>${raw(icon('trophy'))} Test day — go for a single</button>`)}
+      ${raw(anyInRange || promo.reason === 'meet' ? '' : `<button class="btn btn--ghost btn--block" data-test>${raw(icon('trophy'))} Test day — go for a single</button>`)}
 
-      ${raw(anyInRange ? '' : milestoneCard(st, ms))}
+      ${raw(anyInRange ? '' : milestoneCard(st, ms, promo))}
 
       ${raw(scheduleNote(resolved, st))}
     </div>`;
@@ -95,6 +100,10 @@ function view(ctx) {
 function meetDayBanner(st) {
   const d = st.program.meetDate;
   if (!d) return '';
+  // Inside a peaking block the meet is a scheduled day with its own card, its
+  // own attempts and its own start button. Two things offering to start it is
+  // one thing too many.
+  if (st.program.peak) return '';
   const out = relDays(d);
   if (out > 1 || out < 0) return '';
   return `<div class="insight insight--good">
@@ -109,6 +118,16 @@ function meetDayBanner(st) {
   </div>`;
 }
 
+/** What kind of week this is, in the words the lifter is living in. */
+function phaseLabel(resolved) {
+  if (resolved.peakKind === 'meet') return 'Meet day';
+  if (resolved.peakWeek === PEAK_WEEKS || resolved.phase === 'meetWeek') return 'Meet week';
+  if (resolved.isPeak) return `Peak · week ${resolved.peakWeek} of ${PEAK_WEEKS}`;
+  if (resolved.isDeload) return 'Deload';
+  if (resolved.isPainWeek) return 'High-rep week';
+  return `Cycle ${resolved.cycle} · Week ${resolved.week}`;
+}
+
 /**
  * Milestones, on the home screen rather than buried in a stats tab.
  *
@@ -116,32 +135,39 @@ function meetDayBanner(st) {
  * has quietly crossed four plates should find that out on the day it happens,
  * not the next time they go looking at a chart.
  */
-function milestoneCard(st, rows) {
+function milestoneCard(st, rows, promo) {
   const units = st.profile.units;
-  const anyReady = rows.some((r) => r.next.some((n) => n.inRange));
-  const ready = rows.flatMap((r) => r.next.filter((n) => n.inRange).map((n) => ({ ...n, lift: r.lift })));
+  const promote = !!promo?.promote;
+  const ready = promo?.ready || [];
   const body = rows.filter((r) => r.est).map((r) => {
     const name = { squat: 'Squat', bench: 'Bench', deadlift: 'Deadlift' }[r.lift];
     return r.next.map((n, i) => `<div class="kv">
       <span class="kv__k">${i === 0 ? esc(name) : ''}</span>
       <span class="kv__v">${esc(n.label)}
-        ${n.inRange
-          ? '<span class="pill pill--good">in range</span>'
-          : `<span class="dim" style="font-weight:400">${fmtLoadBare(n.away)} ${esc(units)} away${n.weeksOff ? ` · ~${n.weeksOff} wk` : ''}</span>`}
+        ${n.missed
+          ? `<span class="pill pill--bad">missed ${n.missed.daysAgo}d ago</span>`
+          : n.inRange
+            ? '<span class="pill pill--good">in range</span>'
+            : `<span class="dim" style="font-weight:400">${fmtLoadBare(n.away)} ${esc(units)} away${n.weeksOff ? ` · ~${n.weeksOff} wk` : ''}</span>`}
       </span>
     </div>`).join('');
   }).join('');
   if (!body) return '';
   const names = { squat: 'Squat', bench: 'Bench', deadlift: 'Deadlift' };
-  return `<div class="card ${anyReady ? 'card--accent' : ''}">
-    <div class="eyebrow" style="margin-bottom:8px${anyReady ? ';color:var(--accent)' : ''}">
-      ${anyReady ? `${ready.length} milestone${ready.length === 1 ? '' : 's'} in range` : 'Milestones'}
+  const listed = ready.map((n) => `${names[n.lift]} ${n.label}`).join(', ');
+
+  return `<div class="card ${promote ? 'card--accent' : ''}">
+    <div class="eyebrow" style="margin-bottom:8px${promote ? ';color:var(--accent)' : ''}">
+      ${promote ? `${ready.length} milestone${ready.length === 1 ? '' : 's'} in range` : 'Milestones'}
     </div>
     ${body}
-    <p class="cite" style="margin-top:10px">${anyReady
-      ? esc(`${ready.map((n) => `${names[n.lift]} ${n.label}`).join(', ')} — your estimate says ${ready.length === 1 ? 'it is' : 'they are'} there. A test day is the only way to find out.`)
-      : 'Distances are from your estimated max; the weeks assume your current rate holds.'}</p>
-    ${anyReady ? `<button class="btn btn--primary btn--block" style="margin-top:12px" data-test>${icon('trophy')} Test day — go and get it</button>` : ''}
+    <p class="cite" style="margin-top:10px">${promote
+      ? esc(`${listed} — your estimate says ${ready.length === 1 ? 'it is' : 'they are'} there, and today is a good day to find out. A test day is the only way to know.`)
+      : promo?.detail
+        ? esc(promo.detail)
+        : 'Distances are from your estimated max; the weeks assume your current rate holds.'}</p>
+    ${promote ? `<button class="btn btn--primary btn--block" style="margin-top:12px" data-test>${icon('trophy')} Test day — go and get it</button>
+    <button class="btn btn--bare btn--block" style="margin-top:6px" data-snooze>Not now — stop asking for ${TEST_PROMPT_QUIET_DAYS} days</button>` : ''}
   </div>`;
 }
 
@@ -277,6 +303,7 @@ function insightCard(i) {
       <div class="insight__t">${esc(i.title)}</div>
       <div class="insight__b">${esc(i.text)}</div>
       ${i.action === 'graduate' ? `<button class="btn btn--good" style="margin-top:10px" data-graduate>Switch to the advanced program</button>` : ''}
+      ${i.action === 'closePeak' ? `<button class="btn btn--ghost" style="margin-top:10px" data-closepeak>Close the block — I did not compete</button>` : ''}
     </div>
   </div>`;
 }
@@ -549,17 +576,20 @@ function openPlan(ctx) {
   const units = st.profile.units;
 
   sheet({
-    title: `${plan.template.name} — cycle plan`,
+    title: plan.peaking ? 'Peaking block — the weeks ahead' : `${plan.template.name} — cycle plan`,
     body: `<div class="stack">
       ${plan.weeks.map((wk) => `
         <div>
-          <div class="eyebrow" style="margin-bottom:8px">Week ${wk.week}</div>
+          <div class="eyebrow" style="margin-bottom:8px">${esc(plan.peaking ? (wk.phase === 'meetWeek' ? 'Meet week' : `Peak week ${wk.week}`) : `Week ${wk.week}`)}</div>
+          ${wk.note ? `<p class="cite" style="margin:-4px 0 8px">${esc(wk.note)}</p>` : ''}
           <div class="tbl-wrap"><table class="tbl">
             <thead><tr><th>Exercise</th><th class="r">Sets</th><th class="r">Reps</th><th class="r">RPE</th></tr></thead>
             <tbody>
               ${wk.days.map((d) => `
                 <tr><td colspan="4" style="padding-top:12px"><span class="eyebrow">Day ${d.day} · ${esc(d.label)}</span></td></tr>
-                ${d.slots.map((s) => `<tr>
+                ${d.peakKind === 'meet'
+                  ? `<tr><td colspan="4" class="dim">Squat, bench, deadlift — three attempts each, off your attempt card.</td></tr>`
+                  : d.slots.map((s) => `<tr>
                   <td>${esc(s.name)}</td>
                   <td class="r mono">${s.sets}</td>
                   <td class="r mono">${s.reps ?? '—'}</td>
@@ -568,7 +598,7 @@ function openPlan(ctx) {
             </tbody>
           </table></div>
         </div>`).join('')}
-      <p class="cite">Loads are not shown here because they are set by your first-set RPE each week, not fixed in advance.</p>
+      <p class="cite">Loads are not shown here because they are set by your first-set RPE each week, not fixed in advance.${plan.peaking ? ' Meet week is a taper: the numbers on those days are deliberately small and are not a measure of anything.' : ''}</p>
     </div>`,
   });
 }
@@ -597,6 +627,26 @@ function mount(root, ctx) {
   $$('[data-pain]', root).forEach((b) => b.onclick = () => openPain());
   $$('[data-plan]', root).forEach((b) => b.onclick = () => openPlan(ctx));
   $$('[data-test]', root).forEach((b) => b.onclick = () => openTestDay(ctx));
+
+  $$('[data-snooze]', root).forEach((b) => b.onclick = () => {
+    const until = new Date();
+    until.setDate(until.getDate() + TEST_PROMPT_QUIET_DAYS);
+    ctx.store.update((s) => { s.settings.testPromptSnoozedUntil = todayISO(until); });
+    toast(`Milestones stay on the board — the app will stop asking for ${TEST_PROMPT_QUIET_DAYS} days.`);
+    ctx.refresh();
+  });
+
+  $$('[data-closepeak]', root).forEach((b) => b.onclick = async () => {
+    const yes = await confirmSheet({
+      title: 'Close the peaking block?',
+      message: 'Nothing is recorded as a meet and no maxes are written. A normal cycle starts from the loads your peak left you on — which are the heaviest anchors you have had, so expect week 1 to bite.',
+      confirmLabel: 'Close it',
+    });
+    if (!yes) return;
+    ctx.store.update((s) => { exitPeak(s, { competed: false }); });
+    toast('Peaking block closed.');
+    ctx.refresh();
+  });
   $$('[data-discard]', root).forEach((b) => b.onclick = async () => {
     const active = ctx.state.sessions.find((x) => x.id === ctx.state.activeSessionId && x.status === 'active');
     if (!active) return;

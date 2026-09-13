@@ -35,8 +35,8 @@ const store = await import('./store.js');
 const {
   buildProgram, resolveDay, startSession, completeSession, resolveAssessment,
   repsForWeek, pctForWeek, loadingWeeks, slotE1RM, slotE1RMDetail, slotHistory,
-  lastComparable, convertUnits, templateOf, entryStalled,
-  RELIABLE_E1RM_REPS, PAIN_WEEK_REPS, DELOAD_RPE_FLOOR,
+  lastComparable, convertUnits, templateOf, entryStalled, enterPeak, peakPlanFor,
+  RELIABLE_E1RM_REPS, PAIN_WEEK_REPS, DELOAD_RPE_FLOOR, PEAK_WEEKS,
 } = await import('./program.js');
 const {
   pctOf1RM, e1RM, loadFor, eXRM, repsAt, loadBand, roundToLoadable, minIncrement,
@@ -352,6 +352,117 @@ for (const templateId of TEMPLATE_IDS) {
   }
 }
 console.log(`   ${resolved} day-resolutions swept`);
+
+/* ======================================================================
+   D2. The same sweep again, inside a peaking block.
+   --------------------------------------------------------------------------
+   The peak adds a phase the cursor can reach, two day shapes the template does
+   not contain, and a per-slot deload — which is exactly the shape of every bug
+   this file has ever caught. Meet week gets its own invariant on top of the
+   general ones: nothing in it may be the heaviest the lifter has been asked for,
+   because a taper that prescribes a peak load is not a taper.
+   ====================================================================== */
+hr('D2. Peaking sweep — every peak week x day, every gym');
+
+let peakDays = 0;
+for (const templateId of ['intermediate-pl', 'intermediate-pl-3day']) {
+  for (const emphasis of ['balanced', 'intensity', 'volume']) {
+    for (const gym of GYMS) {
+      const st = stateFor({
+        templateId, gym, emphasis,
+        maxes: gym.units === 'kg' ? { squat: 170, bench: 120, deadlift: 200 }
+                                  : { squat: 375, bench: 265, deadlift: 440 },
+      });
+      const tpl = templateOf(st.program);
+      const weeks = loadingWeeks(st.program);
+
+      // Anchors in place, so the wave has something to peak off.
+      for (const key of Object.keys(st.program.slots)) {
+        st.program.slots[key].week1Load = roundToLoadable(gym.barWeight + 40 * (gym.units === 'kg' ? 1 : 2.2), gym);
+      }
+      enterPeak(st);
+      ok(!!st.program.peak, `the peak starts for ${templateId}/${gym.units}`);
+
+      // The ceiling is the peak's *own* loading weeks, not the cycle before it.
+      // Entering the block deliberately raises the anchor on every slot whose
+      // reps dropped, so measuring meet week against the pre-peak wave would
+      // assert that the peak is not allowed to have worked.
+      const heaviest = {};
+      for (const d of tpl.days) {
+        for (let w = 1; w <= weeks; w++) {
+          for (const sl of resolveDay(st, { week: w, day: d.n, phase: 'load' }).slots) {
+            if (sl.plannedLoad != null) heaviest[sl.slotKey] = Math.max(heaviest[sl.slotKey] ?? 0, sl.plannedLoad);
+          }
+        }
+      }
+
+      // Peak weeks 1..3 as loading weeks, then meet week.
+      const positions = [];
+      for (let w = 1; w <= weeks; w++) for (const d of tpl.days) positions.push({ week: w, day: d.n, phase: 'load' });
+      for (const d of tpl.days) positions.push({ week: PEAK_WEEKS, day: d.n, phase: 'meetWeek' });
+
+      // The block has to have an end. Every template must place exactly one meet
+      // day and one primer inside meet week, or the peak tapers forever — which
+      // is what taking the book's "Day 4" literally did to the three-day week.
+      const kinds = tpl.days.map((d) => peakPlanFor(st.program, { week: PEAK_WEEKS, day: d.n, phase: 'meetWeek' })?.kind);
+      eq(kinds.filter((k) => k === 'meet').length, 1, `meet week has exactly one meet day (${templateId})`);
+      eq(kinds.filter((k) => k === 'primer').length, 1, `and exactly one primer (${templateId})`);
+      eq(kinds[kinds.length - 1], 'meet', `with the meet last (${templateId})`);
+      const w3 = tpl.days.map((d) => peakPlanFor(st.program, { week: 3, day: d.n, phase: 'load' })?.kind);
+      eq(w3.filter((k) => k === 'openers').length, 1, `week 3 has exactly one opener day (${templateId})`);
+
+      for (const pos of positions) {
+        const day = resolveDay(st, pos);
+        peakDays++;
+        const tag = `peak ${templateId}/${emphasis}/${gym.units}${gym.barWeight}/d${pos.day}/w${pos.week}/${pos.phase}`;
+
+        ok(typeof day.label === 'string' && day.label.length > 0, `the peak day has a label (${tag})`);
+        ok(day.isPeak, `and knows it is part of the block (${tag})`);
+        ok(Array.isArray(day.slots) && day.slots.length > 0, `and has something to do (${tag})`);
+
+        for (const sl of day.slots) {
+          const at = `${tag}/${sl.slotKey}`;
+          finite(sl.plannedLoad, `plannedLoad is finite (${at})`);
+          finite(sl.pct, `pct is finite (${at})`);
+          ok(Number.isInteger(sl.sets) && sl.sets >= 1, `sets is a positive integer (${at})`, `got ${sl.sets}`);
+          if (sl.reps != null) {
+            ok(Number.isInteger(sl.reps) && sl.reps >= 1 && sl.reps <= 30, `reps is a sane integer (${at})`, `got ${sl.reps}`);
+          }
+          for (const r of [sl.targetRPE, ...(sl.rpeRange || [])]) {
+            if (r == null) continue;
+            ok(r >= RPE_MIN && r <= RPE_MAX, `RPE is on the scale (${at})`, `got ${r}`);
+            eq(normalizeRPE(r), r, `the printed RPE survives normalisation (${at})`);
+          }
+          if (sl.plannedLoad != null) {
+            eq(roundToLoadable(sl.plannedLoad, gym), sl.plannedLoad, `the load is loadable (${at})`);
+            ok(plateBreakdown(sl.plannedLoad, gym).ok, `and can be built from these plates (${at})`);
+            ok(sl.plannedLoad >= gym.barWeight - 1e-9, `and is at least the empty bar (${at})`, `got ${sl.plannedLoad}`);
+          }
+          // Meet week is a taper and the primer is RPE 4. Neither may hand the
+          // lifter a load or an effort bigger than a loading week did.
+          if (pos.phase === 'meetWeek' && sl.plannedLoad != null && heaviest[sl.slotKey] != null) {
+            ok(sl.plannedLoad <= heaviest[sl.slotKey] + 1e-9,
+              `meet week is never the heaviest week (${at})`, `${sl.plannedLoad} vs ${heaviest[sl.slotKey]}`);
+          }
+          if (day.peakKind === 'primer') {
+            ok(sl.targetRPE != null && sl.targetRPE <= 5, `the primer stays at primer effort (${at})`, `got ${sl.targetRPE}`);
+            eq(sl.reps, 1, `and is singles (${at})`);
+          }
+        }
+
+        // Every day the block can reach must be startable and loggable.
+        const ses = startSession(st, pos);
+        ok(ses.entries.length > 0, `the day starts a real session (${tag})`);
+        for (const e of ses.entries) {
+          for (const set of e.sets) {
+            if (set.load != null) eq(roundToLoadable(set.load, gym), set.load, `pre-filled peak set loads are loadable (${tag})`);
+          }
+        }
+      }
+    }
+  }
+}
+console.log(`   ${peakDays} peak-day resolutions swept`);
 
 /* ======================================================================
    E. Randomised lifters, randomised training, over many cycles.

@@ -313,10 +313,17 @@ function openSwitch(ctx) {
         b.onclick = async () => {
           const id = b.dataset.t;
           if (id === cur) { close(); return; }
+          // Switching mid-peak throws the block away, and the block is the only
+          // thing standing between the lifter and an untapered meet. Worth one
+          // extra sentence.
+          const inPeak = !!ctx.state.program.peak;
           const yes = await confirmSheet({
             title: `Switch to ${TEMPLATES[id].name}?`,
-            message: 'Your cycle position resets to cycle 1, week 1, day 1. History is kept.',
-            confirmLabel: 'Switch',
+            message: inPeak
+              ? 'You are in the middle of a peaking block for a meet. Switching drops out of it and starts a fresh cycle 1 on the new program. If the meet is still four weeks out or less, a new block will start itself at the end of your first week — but the weeks you have already peaked through do not carry over.'
+              : 'Your cycle position resets to cycle 1, week 1, day 1. History is kept.',
+            confirmLabel: inPeak ? 'Abandon the peak and switch' : 'Switch',
+            danger: inPeak,
           });
           if (!yes) return;
           ctx.store.update((s) => {
@@ -325,6 +332,13 @@ function openSwitch(ctx) {
               templateId: id, emphasis: old.emphasis, startDate: todayISO(), meetDate: old.meetDate,
               choices: old.choices,
             });
+            // A meet already lifted stays lifted, so that record carries across.
+            // A peak abandoned *by this switch* deliberately does not: the meet
+            // is still on the calendar, and someone moving to the three-day week
+            // three weeks out wants the block to pick them up again on the new
+            // program rather than to walk into a meet untapered.
+            if (old.peakDoneFor) s.program.peakDoneFor = old.peakDoneFor;
+            if (old.peak) s.program.events.push({ date: todayISO(), kind: 'peakEnd', meetDate: old.peak.meetDate, competed: false });
             s.program.events.push({ date: todayISO(), kind: 'switched', from: old.templateId, to: id });
             s.profile.trainingAge = TEMPLATES[id].trainingAge || s.profile.trainingAge;
             s.profile.daysPerWeek = TEMPLATES[id].daysPerWeek || s.profile.daysPerWeek;

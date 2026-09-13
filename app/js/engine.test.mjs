@@ -22,12 +22,14 @@ const { buildProgram, resolveDay, startSession, completeSession, resolveAssessme
         repsForWeek, pctForWeek, loadingWeeks, graduationCheck, volumeAudit,
         slotE1RM, slotE1RMDetail, cyclePlan, convertUnits, slotHistory, lastComparable,
         templateOf, PAIN_WEEK_REPS, RELIABLE_E1RM_REPS, resolveTestDay, attemptsFor,
-        bestMaxFor, discardSession } = await import('./program.js');
+        bestMaxFor, discardSession, shouldEnterPeak, enterPeak, exitPeak, peakStatus,
+        peakWeek, missedAttempts, entryStalled, daysUntil, PEAK_WEEKS, PEAK_MIN_DAYS } = await import('./program.js');
 const { pctOf1RM, e1RM, loadFor, plateBreakdown, roundToLoadable, plateLabel, minIncrement, convertLoad,
         loadBand, RPE_TOLERANCE } = await import('./rpe.js');
 const { assessDeload, INTERMEDIATE_PL, INTERMEDIATE_PL_3DAY } = await import('./templates.js');
 const { strengthTrend, trendSummary, sessionBriefing, trainingAgeReport, TRAINING_AGE_BANDS, milestones,
-        testReadiness, planTestBlock } = await import('./coach.js');
+        testReadiness, planTestBlock, testPromotion, activeInsights,
+        MISS_MEMORY_DAYS, TEST_PROMPT_QUIET_DAYS } = await import('./coach.js');
 
 let pass = 0, fail = 0;
 const problems = [];
@@ -1513,6 +1515,374 @@ for (const id of [INTERMEDIATE_PL.id, INTERMEDIATE_PL_3DAY.id]) {
     ok(!after.program.pendingAssessment, `${id} ${phase}: does not re-raise the checklist it just answered`);
     store.update((s) => { const r = JSON.parse(snap); s.sessions = r.sessions; s.program = r.program; s.activeSessionId = null; });
   }
+}
+
+/* ======================================================================
+   17. Peaking for a meet
+   ====================================================================== */
+hr('17. The peaking block');
+{
+  const iso = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return store.todayISO(d); };
+
+  /** A lifter mid-programme with anchors in place and a meet `out` days away. */
+  const lifterWithMeet = (out) => {
+    store.update((s) => {
+      Object.assign(s, store.defaultState());
+      s.maxes = { squat: { value: 150 }, bench: { value: 100 }, deadlift: { value: 170 } };
+      s.program = buildProgram({ meetDate: out == null ? null : iso(out) });
+      for (const k of Object.keys(s.program.slots)) s.program.slots[k].week1Load = 60;
+      s.program.slots.d3_squat.week1Load = 125;
+      s.program.slots.d3_bench.week1Load = 82.5;
+      s.program.slots.d4_dead.week1Load = 140;
+    });
+    return store.getState();
+  };
+
+  /** Log every prescribed set exactly to plan and close the session. */
+  const trainDay = (mutate) => {
+    const st = store.getState();
+    const ses = startSession(st, st.program.cursor);
+    for (const e of ses.entries) {
+      e.sets = e.sets.map((x) => ({
+        load: x.load ?? e.plannedLoad ?? 60, reps: e.targetReps ?? 1,
+        rpe: e.targetRPE ?? 8, done: true, ts: new Date().toISOString(),
+      }));
+    }
+    mutate?.(ses);
+    store.update((s) => { s.sessions.push(ses); s.activeSessionId = ses.id; });
+    let notes = [];
+    store.update((s) => { notes = completeSession(s, ses.id).notes; s.activeSessionId = null; });
+    return { ses, notes };
+  };
+
+  const trainWeek = () => { for (let i = 0; i < 4; i++) trainDay(); };
+
+  /* ---- when it starts, and when it does not ---- */
+  eq(shouldEnterPeak(lifterWithMeet(null)), false, 'no meet date, no peak');
+  eq(shouldEnterPeak(lifterWithMeet(90)), false, 'a meet three months out does not start a peak');
+  eq(shouldEnterPeak(lifterWithMeet(29)), false, 'nor does one 29 days out — the trigger is four weeks');
+  eq(shouldEnterPeak(lifterWithMeet(26)), true, 'a meet 26 days out arms the peak');
+  eq(shouldEnterPeak(lifterWithMeet(PEAK_MIN_DAYS - 1)), false,
+    'a meet inside the minimum runway does not get a truncated block');
+  eq(peakStatus(lifterWithMeet(PEAK_MIN_DAYS - 1)).kind, 'tooLate', 'and says so');
+  eq(peakStatus(lifterWithMeet(33)).kind, 'waiting', 'a meet 33 days out is waiting');
+  eq(peakStatus(lifterWithMeet(26)).kind, 'nextWeek', 'one 26 days out starts at the next week boundary');
+
+  /* ---- the switch happens on its own at a week boundary ---- */
+  lifterWithMeet(26);
+  const cycleBefore = store.getState().program.cursor.cycle;
+  const squatAnchorBefore = store.getState().program.slots.d3_squat.week1Load;
+  ok(!store.getState().program.peak, 'the peak is not running before the week ends');
+  trainWeek();
+  let st = store.getState();
+  ok(st.program.peak, 'finishing the week inside four weeks starts the peaking block on its own');
+  eq(st.program.cursor.week, 1, 'the peak is its own mesocycle and starts at week 1');
+  eq(st.program.cursor.cycle, cycleBefore + 1, 'and counts as a new cycle');
+  eq(st.program.cursor.phase, 'load', 'in a loading phase');
+  eq(peakWeek(st.program), 1, 'peak week 1');
+  ok(st.program.events.some((e) => e.kind === 'peakStart'), 'and it is written to the event log');
+
+  /* ---- the anchor moves because the reps did ---- */
+  const squatAnchorAfter = st.program.slots.d3_squat.week1Load;
+  ok(squatAnchorAfter > squatAnchorBefore,
+    'a slot dropping from fives to triples gets a heavier anchor', `${squatAnchorBefore} -> ${squatAnchorAfter}`);
+  near(squatAnchorAfter, (squatAnchorBefore * pctOf1RM(3, 8)) / pctOf1RM(5, 8),
+    'converted through the RPE table, not guessed', 0.02);
+  near(st.program.slots.d1_bench.week1Load, 60 + 2.5,
+    'a slot the peak does not touch takes its ordinary weekly increment');
+
+  /* ---- the wave walks 3, 2, 1 ---- */
+  const mainReps = (w) => resolveDay(store.getState(), { week: w, day: 3, phase: 'load' })
+    .slots.find((x) => x.slotKey === 'd3_squat').reps;
+  eq(mainReps(1), 3, 'peak week 1 is triples');
+  eq(mainReps(2), 2, 'peak week 2 is doubles');
+  eq(mainReps(3), 1, 'peak week 3 is singles');
+
+  /* ---- week 3 deloads what is not contested, and only that ---- */
+  const w3d1 = resolveDay(store.getState(), { week: 3, day: 1, phase: 'load' });
+  eq(w3d1.peakKind, 'week3', 'week 3 knows what it is');
+  const sqvar = w3d1.slots.find((x) => x.slotKey === 'd1_sqvar');
+  const benchComp = w3d1.slots.find((x) => x.slotKey === 'd1_bench');
+  ok(sqvar.sets < 3, 'the squat variation deloads in week 3', `${sqvar.sets} sets`);
+  eq(benchComp.sets, 3, 'the competition bench does not');
+  ok(benchComp.targetRPE >= 7, 'and keeps its loading-week RPE', `${benchComp.targetRPE}`);
+  ok(sqvar.targetRPE < 7, 'while the variation drops its RPE with the load', `${sqvar.targetRPE}`);
+
+  /* ---- week 3 day 4 is the opener rehearsal ---- */
+  const openers = resolveDay(store.getState(), { week: 3, day: 4, phase: 'load' });
+  eq(openers.peakKind, 'openers', 'day 4 of week 3 becomes the opener day');
+  eq(openers.slots.length, 3, 'three lifts');
+  eq(openers.slots.map((x) => x.slot.lift).join(','), 'squat,bench,deadlift', 'in meet order');
+  for (const sl of openers.slots) {
+    eq(sl.reps, 1, `${sl.slotKey} is a single`);
+    eq(sl.sets, 1, `${sl.slotKey} is one attempt, not three`);
+    eq(JSON.stringify(sl.rpeRange), '[7.5,8.5]', `${sl.slotKey} sits at opener RPE`);
+    eq(roundToLoadable(sl.plannedLoad, store.getState().profile), sl.plannedLoad, `${sl.slotKey} opener is loadable`);
+    near(sl.plannedLoad, attemptsFor(store.getState(), sl.slot.lift).opener, `${sl.slotKey} rehearses the printed opener`, 0.01);
+  }
+
+  /* ---- the four weeks run without ever raising the checklist ---- */
+  for (let w = 0; w < 3; w++) {
+    trainWeek();
+    ok(!store.getState().program.pendingAssessment,
+      'a peaking week never stops to ask about a deload — the meet decides');
+  }
+  st = store.getState();
+  eq(st.program.cursor.phase, 'meetWeek', 'after three weeks the cursor is in meet week');
+  eq(peakWeek(st.program), PEAK_WEEKS, 'which is peak week 4');
+
+  /* ---- meet week ---- */
+  const taper = resolveDay(st, { week: PEAK_WEEKS, day: 1, phase: 'meetWeek' });
+  eq(taper.peakKind, 'taper', 'meet week days before the primer are a taper');
+  ok(taper.isDeload, 'and the competition lifts come down too');
+  const primer = resolveDay(st, { week: PEAK_WEEKS, day: 3, phase: 'meetWeek' });
+  eq(primer.peakKind, 'primer', 'day 3 is the primer');
+  eq(primer.slots.length, 3, 'squat, bench, deadlift');
+  eq(primer.slots.map((x) => x.sets).join(','), '2,2,1', 'two singles, two singles, one');
+  for (const sl of primer.slots) eq(sl.targetRPE, 4, `${sl.slotKey} primer is RPE 4`);
+  ok(primer.slots[0].plannedLoad < attemptsFor(st, 'squat').opener,
+    'and the primer is lighter than the opener it is priming');
+
+  const meet = resolveDay(st, { week: PEAK_WEEKS, day: 4, phase: 'meetWeek' });
+  eq(meet.peakKind, 'meet', 'day 4 is the meet');
+  ok(meet.isMeet, 'and knows it');
+  eq(meet.slots.length, 3, 'three lifts on the platform');
+  for (const sl of meet.slots) eq(sl.setLoads.length, 3, `${sl.slotKey} carries opener, second and third`);
+
+  /* ---- the primer never becomes evidence ---- */
+  const estBeforePrimer = bestMaxFor(store.getState(), 'squat');
+  trainDay(); trainDay(); trainDay();     // meet-week days 1, 2 and the primer
+  near(bestMaxFor(store.getState(), 'squat'), estBeforePrimer,
+    'a taper week and an RPE-4 primer leave the estimate alone', 0.01);
+
+  /* ---- logging the meet closes the block ---- */
+  st = store.getState();
+  eq(st.program.cursor.day, 4, 'and the cursor is on meet day');
+  const cycleAtMeet = st.program.cursor.cycle;
+  const { notes } = trainDay();
+  st = store.getState();
+  ok(notes.some((n) => n.kind === 'tested'), 'the platform writes tested maxes');
+  ok(notes.some((n) => n.kind === 'meetDone'), 'and says the block is over');
+  eq(st.program.peak, null, 'the peak is closed');
+  eq(st.program.peakDoneFor, st.program.meetDate, 'stamped against the meet it was for');
+  eq(st.program.cursor.cycle, cycleAtMeet + 1, 'and an ordinary cycle is waiting');
+  eq(st.program.cursor.phase, 'load', 'in a loading phase');
+  eq(st.program.cyclesSinceDeload, 0, 'with the deload counter reset by the taper');
+  eq(st.maxes.squat.source, 'tested', 'the meet is where the maxes come from');
+
+  /* ---- and it does not start again for the same meet ---- */
+  eq(shouldEnterPeak(store.getState()), false, 'a meet already lifted cannot start a second block');
+  trainWeek();
+  ok(!store.getState().program.peak, 'training on past the meet stays an ordinary cycle');
+
+  /* ---- the block fits itself to the calendar ---- */
+  // A lifter who takes a deload before the meet arrives with three weeks, not
+  // four. Running the block from its own week 1 anyway would schedule meet week
+  // to start after the meet had happened.
+  for (const [out, wantWeek, why] of [
+    [27, 1, 'a full four weeks starts at peak week 1'],
+    [20, 2, 'three weeks left skips the first loading week'],
+    [15, 3, 'two weeks left goes straight to the opener week'],
+  ]) {
+    lifterWithMeet(out);
+    store.update((s) => { enterPeak(s); });
+    eq(store.getState().program.cursor.week, wantWeek, why);
+    ok(store.getState().program.peak, 'and the block is running either way');
+  }
+
+  // ...and the date wins over the week count once the meet is close, however
+  // many training weeks the lifter has actually got through.
+  lifterWithMeet(26);
+  store.update((s) => { enterPeak(s); });
+  eq(store.getState().program.cursor.week, 1, 'starting at week 1 with four weeks to go');
+  store.update((s) => { s.program.meetDate = iso(5); });
+  trainWeek();
+  eq(store.getState().program.cursor.phase, 'meetWeek',
+    'a meet five days away puts the lifter in meet week whatever week the block says');
+
+  lifterWithMeet(26);
+  store.update((s) => { enterPeak(s); s.program.meetDate = iso(12); });
+  trainWeek();
+  eq(store.getState().program.cursor.week, 3,
+    'and a meet twelve days away jumps to the opener week rather than another loading week');
+
+  /* ---- the three-day week gets a meet day too ---- */
+  // The book writes the peak against the four-day program and names Day 4 as the
+  // meet. Taken literally, the three-day week — which has no Day 4 — resolved
+  // every meet-week day as a taper, never reached a competition day, and left
+  // the block running forever.
+  store.update((s) => {
+    Object.assign(s, store.defaultState());
+    s.maxes = { squat: { value: 150 }, bench: { value: 100 }, deadlift: { value: 170 } };
+    s.program = buildProgram({ templateId: 'intermediate-pl-3day', meetDate: iso(20) });
+    for (const k of Object.keys(s.program.slots)) s.program.slots[k].week1Load = 80;
+    enterPeak(s);
+  });
+  st = store.getState();
+  const days3 = templateOf(st.program).days.map((d) => d.n);
+  eq(days3.length, 3, 'the three-day template has three days');
+  eq(resolveDay(st, { week: PEAK_WEEKS, day: 3, phase: 'meetWeek' }).peakKind, 'meet',
+    'and its last day is the meet');
+  eq(resolveDay(st, { week: PEAK_WEEKS, day: 2, phase: 'meetWeek' }).peakKind, 'primer',
+    'with the primer the day before');
+  eq(resolveDay(st, { week: 3, day: 3, phase: 'load' }).peakKind, 'openers',
+    'and week 3 still gets its opener rehearsal');
+
+  // Walk it to the end and check the block actually closes.
+  for (let i = 0; i < 12; i++) {
+    if (!store.getState().program.peak) break;
+    trainDay();
+  }
+  eq(store.getState().program.peak, null, 'a three-day peaking block terminates');
+  eq(store.getState().maxes.squat.source, 'tested', 'having written maxes from its meet day');
+
+  /* ---- bailing out of a block that never reached a platform ---- */
+  lifterWithMeet(20);
+  store.update((s) => { enterPeak(s); });
+  ok(store.getState().program.peak, 'a peak can be started directly');
+  const meetDate = store.getState().program.meetDate;
+  store.update((s) => { exitPeak(s, { competed: false }); });
+  st = store.getState();
+  eq(st.program.peak, null, 'and abandoned without a meet');
+  eq(st.program.peakDoneFor, meetDate, 'which still counts as done for that date');
+  ok(st.program.events.some((e) => e.kind === 'peakEnd' && e.competed === false),
+    'recorded as not competed');
+}
+
+/* ======================================================================
+   18. Missed attempts
+   ====================================================================== */
+hr('18. Missed attempts');
+{
+  store.update((s) => {
+    Object.assign(s, store.defaultState());
+    s.maxes = { squat: { value: 150 }, bench: { value: 100 }, deadlift: { value: 175 } };
+    s.program = buildProgram({});
+  });
+
+  // A deadlift day where the third set is loaded and missed.
+  let st = store.getState();
+  const ses = startSession(st, { ...st.program.cursor, day: 4, phase: 'load' });
+  const dl = ses.entries.find((e) => e.slotKey === 'd4_dead');
+  dl.plannedLoad = 150;
+  dl.sets = [
+    { load: 150, reps: 5, rpe: 8, done: true, ts: new Date().toISOString() },
+    { load: 150, reps: 5, rpe: 9, done: true, ts: new Date().toISOString() },
+    { load: 180, reps: 0, rpe: null, failed: true, done: true, ts: new Date().toISOString() },
+  ];
+  for (const e of ses.entries) {
+    if (e.slotKey === 'd4_dead') continue;
+    e.sets = e.sets.map((x) => ({ load: e.plannedLoad ?? 60, reps: e.targetReps ?? 5, rpe: 8, done: true, ts: new Date().toISOString() }));
+  }
+  store.update((s) => { s.sessions.push(ses); s.activeSessionId = ses.id; });
+  store.update((s) => { completeSession(s, ses.id); s.activeSessionId = null; });
+  st = store.getState();
+
+  const hist = slotHistory(st, 'd4_dead');
+  const logged = hist.flatMap((h) => h.sets);
+  eq(logged.length, 2, 'a missed attempt never reaches the history the engine reads');
+  ok(logged.every((x) => x.load === 150), 'and the weight that was missed is not in it');
+  near(slotE1RM(st, 'd4_dead'), e1RM(150, 5, 8),
+    'the estimate is exactly what the completed sets support, and nothing more', 0.05);
+
+  const missed = missedAttempts(st, { lift: 'deadlift' });
+  eq(missed.length, 1, 'but the miss itself is recorded');
+  eq(missed[0].load, 180, 'at the weight that was attempted');
+  eq(missed[0].lift, 'deadlift', 'against the right lift');
+  eq(missedAttempts(st, { lift: 'squat' }).length, 0, 'and only that lift');
+
+  ok(entryStalled({ targetSets: 3, targetReps: 5, plannedLoad: 150, sets: [{ done: true, failed: true, load: 180, reps: 0 }] }),
+    'a miss is a stall — the bar went up and did not come back');
+
+  // A miss on a test day is not a max.
+  store.update((s) => {
+    s.program.testLifts = ['deadlift'];
+    const t = startSession(s, { ...s.program.cursor, phase: 'test' });
+    const e = t.entries[0];
+    e.sets = [
+      { load: 160, reps: 1, rpe: 8, done: true, ts: new Date().toISOString() },
+      { load: 170, reps: 1, rpe: 9, done: true, ts: new Date().toISOString() },
+      { load: 180, reps: 0, rpe: null, failed: true, done: true, ts: new Date().toISOString() },
+    ];
+    s.sessions.push(t); s.activeSessionId = t.id;
+    completeSession(s, t.id); s.activeSessionId = null;
+  });
+  st = store.getState();
+  ok(st.maxes.deadlift.fromLoad === 170, 'a tested max comes from the heaviest completed single, not the heaviest bar',
+    `${st.maxes.deadlift.fromLoad}`);
+  ok(st.maxes.deadlift.value < 180, 'a missed third is not a max');
+
+  /* ---- the app stops suggesting a weight it watched you miss ---- */
+  const dlm = () => milestones(store.getState(), { perLift: 4 }).find((m) => m.lift === 'deadlift');
+  const four = dlm().next.find((n) => n.load === 180) || dlm().cleared;
+  ok(four?.missed, '180 is marked as missed rather than in range');
+  eq(four.inRange, false, 'and is not offered as a target');
+  ok(dlm().next.every((n) => !n.inRange || n.load !== 180), 'the milestone list agrees');
+
+  eq(testPromotion(store.getState()).promote, false, 'so the home screen does not ask for a test day');
+  eq(testPromotion(store.getState()).reason, 'recentlyTested', 'and says why');
+
+  // A miss only speaks about weights at least as heavy as itself. Matching the
+  // other way round had one failed deadlift mark every milestone the lifter had
+  // already cleared as "missed".
+  const below = dlm().next.concat(dlm().cleared ? [dlm().cleared] : []).filter((n) => n.load < 180);
+  ok(below.length > 0, 'there are milestones below the missed weight');
+  ok(below.every((n) => !n.missed), 'and missing 180 says nothing about any of them');
+
+  // Once the estimate climbs clear of the missed weight, the memory lifts.
+  store.update((s) => { s.maxes.deadlift = { value: 190, date: store.todayISO(), source: 'tested', reps: 1 }; });
+  const stale = milestones(store.getState(), { perLift: 4, today: store.todayISO(new Date(Date.now() + (MISS_MEMORY_DAYS + 1) * 86400000)) });
+  const dl2 = stale.find((m) => m.lift === 'deadlift');
+  ok([...dl2.next, dl2.cleared].filter(Boolean).every((n) => !n.missed),
+    'a miss stops counting once it is old enough');
+
+  // ...and an estimate alone never lifts it early. The estimate is the thing
+  // that was wrong about the weight in the first place.
+  const dl3 = milestones(store.getState(), { perLift: 4 }).find((m) => m.lift === 'deadlift');
+  const still = [...dl3.next, dl3.cleared].filter(Boolean).find((n) => n.load === 180);
+  ok(still?.missed, 'a bigger estimate does not overrule a miss — only a completed rep does');
+}
+
+/* ======================================================================
+   19. Rationing the ask for a test day
+   ====================================================================== */
+hr('19. Test-day promotion');
+{
+  const setup = () => {
+    store.update((s) => {
+      Object.assign(s, store.defaultState());
+      s.program = buildProgram({});
+      // An estimate sitting right on a plate milestone, and a long time since
+      // anything hard — the case the card exists for.
+      s.maxes = { squat: { value: 180 }, bench: { value: 100 }, deadlift: { value: 180 } };
+      s.sessions = [{
+        id: 'old', status: 'done', date: store.todayISO(new Date(Date.now() - 30 * 86400000)),
+        units: 'kg', cycle: 1, week: 1, day: 1, phase: 'load', entries: [], sessionRPE: 2,
+      }];
+    });
+    return store.getState();
+  };
+
+  setup();
+  const base = testPromotion(store.getState());
+  ok(base.ready.length > 0, 'a milestone is in range');
+  eq(base.promote, true, 'and with nothing against it, the app asks');
+
+  // A snooze silences the ask without hiding the milestone.
+  store.update((s) => { s.settings.testPromptSnoozedUntil = store.todayISO(new Date(Date.now() + 5 * 86400000)); });
+  const snoozed = testPromotion(store.getState());
+  eq(snoozed.promote, false, '"not now" stops the app asking');
+  eq(snoozed.reason, 'snoozed', 'for the stated reason');
+  ok(snoozed.ready.length > 0, 'while the milestone itself stays on the board');
+  store.update((s) => { s.settings.testPromptSnoozedUntil = null; });
+
+  // A meet outranks it entirely.
+  const iso = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return store.todayISO(d); };
+  store.update((s) => { s.program.meetDate = iso(20); });
+  eq(testPromotion(store.getState()).reason, 'meet', 'a meet on the calendar outranks a test day');
+  store.update((s) => { enterPeak(s); });
+  eq(testPromotion(store.getState()).reason, 'meet', 'and so does a running peak block');
+  eq(testPromotion(store.getState()).promote, false, 'which never asks for a separate max attempt');
 }
 
 /* ======================================================================

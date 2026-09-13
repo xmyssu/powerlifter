@@ -4,7 +4,8 @@
    cited so you can go read the argument rather than trust the app.
    ========================================================================== */
 
-import { templateOf, graduationCheck, slotHistory, slotE1RM, volumeAudit, loadingWeeks, bestMaxFor } from './program.js';
+import { templateOf, graduationCheck, slotHistory, slotE1RM, volumeAudit, loadingWeeks, bestMaxFor,
+         missedAttempts, peakStatus, PEAK_MIN_DAYS } from './program.js';
 import { e1RM, fmtLoad, convertLoad } from './rpe.js';
 import { byId } from './exercises.js';
 import { relDays } from './ui.js';
@@ -330,7 +331,11 @@ export function sessionBriefing(resolved, state) {
     });
   }
 
-  if (resolved.dayDef.role === 'strength') {
+  // Opener and primer days are strength-shaped and are not strength days. Telling
+  // a lifter to push on the day whose entire purpose is to not push would be the
+  // worst-placed sentence in the app.
+  const peaking = resolved.isPeak && resolved.peakKind && resolved.peakKind !== 'load';
+  if (resolved.dayDef.role === 'strength' && !peaking) {
     notes.push({
       kind: 'strength',
       title: 'Strength day — this is where you push',
@@ -338,10 +343,14 @@ export function sessionBriefing(resolved, state) {
     });
   }
 
+  if (resolved.isPeak) notes.push(...peakBriefing(resolved));
+
   const layoff = layoffAdvice(state);
   if (layoff) notes.push({ kind: 'layoff', title: layoff.headline, text: layoff.advice, cite: layoff.cite });
 
-  if (resolved.week === 1 && resolved.cycle > 1 && !resolved.isDeload) {
+  // Not during a peak: its week 1 is the opposite of an ordinary one — the reps
+  // came *down* and the bar went up to meet them.
+  if (resolved.week === 1 && resolved.cycle > 1 && !resolved.isDeload && !resolved.isPeak) {
     notes.push({
       kind: 'cycle',
       title: `Cycle ${resolved.cycle}, week 1`,
@@ -351,6 +360,44 @@ export function sessionBriefing(resolved, state) {
 
   const rest = tpl.days.find((d) => d.n === resolved.day)?.role === 'strength' ? 150 : 90;
   return { notes, restSeconds: rest };
+}
+
+/** What this particular day of the peaking block is for. */
+function peakBriefing(resolved) {
+  switch (resolved.peakKind) {
+    case 'openers':
+      return [{
+        kind: 'cycle',
+        title: 'Dress rehearsal, not a test',
+        text: 'One single each, in meet order, at the opener. Do it in the kit you will compete in, with the commands you will hear, at roughly the time of day the meet starts. If the opener does not move like a warm-up, lower it — today is the last day changing it is free, and an opener you miss is a meet you are already losing.',
+      }];
+    case 'primer':
+      return [{
+        kind: 'deload',
+        title: 'This cannot make you stronger. It can make you worse.',
+        text: 'Two easy singles on squat and bench and one on the deadlift, at RPE 4, and then you leave. Nothing here is training — it exists so the platform is not the first bar you have touched in four days. The only way to get this wrong is to do more.',
+      }];
+    case 'meet':
+      return [{
+        kind: 'cycle',
+        title: 'Nine attempts, three that count',
+        text: 'Openers are insurance. Take the second only if the opener moved and the third only if the second did, and change any of them on the spot if the day is not going the way the numbers said. Three for three is a better meet than one for three with a bigger number on the card.',
+      }];
+    case 'week3':
+      return [{
+        kind: 'deload',
+        title: 'Peak week 3 — everything but the big three comes down',
+        text: 'Your variations and accessories deload this week; the competition lifts do not. That split is the whole idea — shed the fatigue that is not making you better at squat, bench and deadlift, and keep the practice that is.',
+      }];
+    case 'taper':
+      return [{
+        kind: 'deload',
+        title: 'Meet week — the work is done',
+        text: 'The competition lifts come down too now. Nothing you do this week can add strength by the weekend, and plenty of it can take some away. Sleep, eat, keep moving, and stay off the bar beyond what is written.',
+      }];
+    default:
+      return [];
+  }
 }
 
 /* ======================================================================
@@ -519,6 +566,67 @@ export function testReadiness(state, { today = todayISO() } = {}) {
   return { score, level, headline, factors, window, targets, sinceHard, sinceAny };
 }
 
+/**
+ * Should the home screen be *asking* for a test day?
+ *
+ * The milestone card is the most actionable thing the app has, which is exactly
+ * why it has to be able to shut up. Promoted to the top with a button on it, it
+ * reads as an instruction, and an instruction that appears every single time the
+ * app is opened stops being read at all — and worse, an app that asks for a max
+ * every few days is asking for something no program wants. A tested single is a
+ * rare event: it costs a training day, it is only honest when the lifter is
+ * fresh, and when a meet is on the calendar it is the meet's job entirely.
+ *
+ * So the information stays visible always and the *ask* is rationed. Returns
+ * `{ promote, reason, detail }`; `reason` is why it is staying quiet.
+ */
+export const TEST_PROMPT_QUIET_DAYS = 21;
+
+export function testPromotion(state, { today = todayISO() } = {}) {
+  const rows = milestones(state, { perLift: 2, today });
+  const ready = rows.flatMap((r) => r.next.filter((n) => n.inRange).map((n) => ({ ...n, lift: r.lift })));
+  const quiet = (reason, detail) => ({ promote: false, reason, detail, ready, rows });
+
+  if (!ready.length) {
+    const missed = rows.flatMap((r) => r.next.filter((n) => n.missed).map((n) => ({ ...n, lift: r.lift })));
+    if (missed.length) {
+      const m = missed[0];
+      return quiet('missed', `You went for ${m.label} ${m.missed.daysAgo} day${m.missed.daysAgo === 1 ? '' : 's'} ago and did not get it. It stays on the board — the app just is not going to keep asking until either three weeks have passed or your estimate clears it outright.`);
+    }
+    return quiet('nothingInRange', null);
+  }
+
+  // A meet outranks everything. The block ends on a platform with three judges
+  // on it; nobody needs a test day nine days beforehand as well.
+  const peak = peakStatus(state, { today });
+  if (peak && (peak.kind === 'running' || peak.kind === 'nextWeek' || peak.kind === 'waiting')) {
+    return quiet('meet', peak.kind === 'running'
+      ? 'You are inside your peaking block. The meet is the test — everything in range gets answered on the platform.'
+      : `Your meet is ${peak.out} days out and the peaking block will take over. Save the attempt for the platform.`);
+  }
+
+  const snoozed = state.settings?.testPromptSnoozedUntil;
+  if (snoozed && snoozed > today) return quiet('snoozed', null);
+
+  // Something already answered the question recently.
+  const lastTest = (state.sessions || [])
+    .filter((x) => x.status === 'done' && (x.phase === 'test' || x.phase === 'meetWeek'))
+    .map((x) => x.date).sort().pop();
+  if (lastTest && daysBetween(lastTest, today) < TEST_PROMPT_QUIET_DAYS) {
+    const ago = daysBetween(lastTest, today);
+    return quiet('recentlyTested', `You tested ${ago} day${ago === 1 ? '' : 's'} ago. Estimates move faster than maxes do; give it a few weeks of training before you go again.`);
+  }
+
+  // The app's own readiness score already says whether today is the day. Asking
+  // for a max on a day it scores as "not today" is the app arguing with itself.
+  const readiness = testReadiness(state, { today });
+  if (readiness.score != null && readiness.score < 65) {
+    return quiet('notReady', `${readiness.headline} ${readiness.window?.text || ''}`.trim());
+  }
+
+  return { promote: true, reason: null, detail: null, ready, rows, readiness };
+}
+
 /* ======================================================================
    Test blocks — three lifts, spaced so each one gets a fair attempt
    ====================================================================== */
@@ -614,6 +722,16 @@ const ROUND_TARGETS = {
  */
 const BIG_PLATE = { kg: 20, lb: 45 };
 
+/**
+ * How long a missed attempt keeps a milestone off the "go and get it" list.
+ *
+ * Three weeks is roughly a mesocycle: long enough that the app is not asking a
+ * lifter to re-run a session they just failed, short enough that it is not still
+ * bringing it up after they have trained through a whole cycle. It is a
+ * suppression, not a verdict — the milestone still shows, with the date on it.
+ */
+export const MISS_MEMORY_DAYS = 21;
+
 function plateTargets(profile) {
   const have = (profile.plates || []).filter((x) => x > 0);
   if (!have.length) return [];
@@ -632,23 +750,33 @@ function plateTargets(profile) {
  * congratulates you for a number you inferred from a triple is lying to you.
  * `inRange` uses the estimate, because that is the right basis for "go and try".
  */
-export function milestones(state, { perLift = 3 } = {}) {
+export function milestones(state, { perLift = 3, today = todayISO() } = {}) {
   const profile = state.profile;
   const units = profile.units;
   const plates = plateTargets(profile);
+  const step = units === 'kg' ? 2.5 : 5;
   const out = [];
 
   for (const lift of ['squat', 'bench', 'deadlift']) {
     const est = bestMaxFor(state, lift) || 0;
+    const misses = missedAttempts(state, { lift }).filter((m) => daysBetween(m.date, today) <= MISS_MEMORY_DAYS);
 
-    // The heaviest single this lifter has genuinely completed on this lift.
+    // The heaviest single this lifter has genuinely completed on this lift, and
+    // — separately — the heaviest bar they have completed a rep with at all,
+    // with the date on it. The second is what answers a missed attempt: a set of
+    // three at the weight you once failed for a single is proof you have moved
+    // past it in a way an estimate is not.
     let lifted = 0;
+    let bestCompleted = [];
     const tpl = templateOf(state.program);
     const keys = [`test_${lift}`];
     for (const d of tpl.days) for (const sl of d.slots) if (sl.lift === lift) keys.push(sl.key);
     for (const key of keys) {
       for (const h of slotHistory(state, key)) {
-        for (const set of h.sets) if (set.reps === 1 && set.load > lifted) lifted = set.load;
+        for (const set of h.sets) {
+          if (set.reps === 1 && set.load > lifted) lifted = set.load;
+          if (set.reps >= 1) bestCompleted.push({ load: set.load, date: h.date });
+        }
       }
     }
 
@@ -669,6 +797,30 @@ export function milestones(state, { perLift = 3 } = {}) {
       seen.add(t.load);
       const done = lifted >= t.load - 1e-9;
       const away = +(t.load - est).toFixed(1);
+
+      // Something you loaded and did not lift is not "in range", however
+      // flattering the estimate is about it. The memory expires, and it expires
+      // early if the estimate has since climbed clear of the weight — that is
+      // the difference between a bad day and a wall.
+      // Deliberately not "the estimate has since climbed past it". The estimate
+      // that put a weight in range is the same estimate that was wrong about it
+      // — a 185 kg e1RM taken off a set of five is exactly what made 180 look
+      // available on the day it was missed, and letting that same number
+      // overrule the miss puts the app straight back to suggesting it. Only a
+      // completed rep at the weight, logged after the miss, counts.
+      // The comparison runs downward, not upward. A failed 180 says nothing at
+      // all about 100 — but it says a great deal about 180 and about 200. So the
+      // miss that binds a target is the *heaviest* one at or below it; matching
+      // the other way round had one missed deadlift mark every milestone the
+      // lifter owned as unavailable.
+      const hit = misses
+        .filter((m) => m.load <= t.load + 1e-9)
+        .reduce((a, b) => (a == null || b.load > a.load ? b : a), null);
+      const outgrown = hit && bestCompleted.some((c) => c.load >= hit.load - 1e-9 && c.date > hit.date);
+      const missed = hit && !outgrown
+        ? { date: hit.date, load: hit.load, daysAgo: daysBetween(hit.date, today) }
+        : null;
+
       rows.push({
         lift,
         load: t.load,
@@ -677,8 +829,9 @@ export function milestones(state, { perLift = 3 } = {}) {
           : `${t.load} ${units}`,
         kind: t.kind,
         done,
+        missed,
         // Within one small jump of the current estimate: go and try it.
-        inRange: !done && est > 0 && away <= (units === 'kg' ? 2.5 : 5),
+        inRange: !done && !missed && est > 0 && away <= step,
         away: done ? 0 : away,
         weeksOff: done || !perWeek || away <= 0 ? null : Math.ceil(away / perWeek),
         perWeek,
@@ -971,19 +1124,70 @@ export function activeInsights(state) {
   const layoff = layoffAdvice(state);
   if (layoff) out.push({ kind: 'layoff', priority: 2, title: layoff.headline, text: layoff.advice });
 
-  const meet = program.meetDate ? relDays(program.meetDate) : null;
-  if (meet != null && meet >= 0 && meet <= 35) {
+  const peak = peakStatus(state);
+  if (peak) out.push(...meetInsights(state, peak));
+
+  return out.sort((a, b) => a.priority - b.priority);
+}
+
+const PEAK_WEEKS_LABEL = 4;
+
+/**
+ * What the peaking block has to say for itself, by where it is.
+ *
+ * The app switches into and out of the peak on its own, so these are status
+ * rather than instructions — with two exceptions, and both are cases where the
+ * app cannot know something and has to ask: a meet that is too close to peak
+ * for, and a meet date that has come and gone without a platform session logged.
+ */
+function meetInsights(state, peak) {
+  const out = [];
+  const days = peak.out;
+
+  if (peak.kind === 'running') {
+    const wk = peak.week;
+    const text = wk === 1 ? 'Peak week 1 of 4. Your strength-day mains are triples now instead of sets of five — the load goes up to meet the reps coming down. Everything else is the program you were already running.'
+      : wk === 2 ? 'Peak week 2 of 4. Doubles on the strength days. This is the last genuinely hard week; after it the work goes down and stays down.'
+      : wk === 3 ? 'Peak week 3 of 4. Everything that is not a competition lift deloads this week, and Day 4 is replaced by one opener single on each lift in meet order. Treat that day as a dress rehearsal — same kit, same order, same timing.'
+      : 'Meet week. The competition lifts come down too. Day 3 is your primer, 24 to 48 hours out; Day 4 is the meet.';
+    out.push({ kind: 'meet', priority: 1, title: days >= 0 ? `${days} days out · peak week ${wk} of ${PEAK_WEEKS_LABEL}` : `Peak week ${wk}`, text, action: 'meet' });
+
+    // The meet date has passed and no platform session was logged. The block
+    // cannot end itself on a date — only on a session — so this is the way out.
+    if (days < 0) {
+      out.push({
+        kind: 'meetStale', priority: 0,
+        title: 'Your meet date has passed',
+        text: 'Nothing was logged for meet day, so the peaking block is still running and still tapering you. If you competed, log the attempts; if you did not, close the block and a normal cycle starts from where your peak left you.',
+        action: 'closePeak',
+      });
+    }
+    return out;
+  }
+
+  if (peak.kind === 'nextWeek') {
     out.push({
       kind: 'meet', priority: 1,
-      title: `${meet} days to your meet`,
-      text: meet <= 28
-        ? 'You are inside the peaking window. Open the meet plan to switch the strength-day main lifts to 1-3 reps and schedule opener practice and the primer session.'
-        : 'Four weeks out is where the peaking cycle starts. Get ready to switch over.',
+      title: `${days} days to your meet`,
+      text: 'Inside four weeks. The peaking block takes over at the end of this training week — you do not have to switch anything, and you should not try to bring it forward by going heavy in the meantime. Finish the week as written.',
+      action: 'meet',
+    });
+  } else if (peak.kind === 'waiting' && days <= 42) {
+    out.push({
+      kind: 'meet', priority: 2,
+      title: `${days} days to your meet`,
+      text: `Normal training until four weeks out, then the peaking block starts on its own at the next week boundary — about ${peak.startsIn} day${peak.startsIn === 1 ? '' : 's'} from now. Nothing to do but train.`,
+      action: 'meet',
+    });
+  } else if (peak.kind === 'tooLate') {
+    out.push({
+      kind: 'meet', priority: 1,
+      title: `${days} days to your meet`,
+      text: `That is inside the ${PEAK_MIN_DAYS} days a peaking block needs, so the app is not going to start one — a truncated peak tapers you for a meet you never trained heavy for, which is worse than no peak at all. Train normally, then take the last four or five days easy and open conservatively.`,
       action: 'meet',
     });
   }
-
-  return out.sort((a, b) => a.priority - b.priority);
+  return out;
 }
 
 /* ======================================================================

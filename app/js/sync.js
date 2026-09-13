@@ -292,6 +292,7 @@ function labelFor(st, ses) {
   const focus = day?.label ? ` · ${day.label}` : '';
   if (ses.phase === 'deload') return `Deload · Day ${ses.day}${focus}`;
   if (ses.phase === 'painWeek') return `High-rep week · Day ${ses.day}${focus}`;
+  if (ses.phase === 'meetWeek') return `Meet week · Day ${ses.day}${focus}`;
   return `C${ses.cycle} W${ses.week} · Day ${ses.day}${focus}`;
 }
 
@@ -317,6 +318,11 @@ function setRows(st, ses) {
         loadKg: toKg(s.load, unit),
         reps: s.reps ?? null,
         rpe,
+        // An attempt that was loaded and not completed. It travels with the row
+        // rather than being dropped, because "missed 180" is a thing a training
+        // log should be able to say — but everything numeric about it is already
+        // zero, so nothing downstream has to know what the flag means.
+        failed: !!s.failed,
         // Left blank rather than guessed: an e1RM invented from a default RPE
         // would sit in the same column as measured ones and skew every chart.
         e1rmKg: rpe != null && s.load > 0 && s.reps > 0 ? round3(e1RM(convertLoad(s.load, unit, 'kg'), s.reps, rpe)) : null,
@@ -351,12 +357,16 @@ function durationMinutes(ses) {
 
 function stats(st, ses) {
   const unit = ses.units || st.profile.units;
-  const sets = ses.entries.flatMap((e) => (e.sets || []).filter((s) => s.done));
+  // A missed attempt is logged and reported, but it is not a set: counting it
+  // as one puts a session's set count above what was actually completed, which
+  // is the one number on the dashboard that has to mean exactly what it says.
+  const sets = ses.entries.flatMap((e) => (e.sets || []).filter((s) => s.done && !s.failed));
+  const missed = ses.entries.flatMap((e) => (e.sets || []).filter((s) => s.done && s.failed));
   const scored = sets.filter((s) => s.rpe != null);
   // Paired with avgRPE this is the only thing that answers "did I actually work
   // at the prescribed effort", which is the question the plan cares about.
   const targeted = ses.entries.flatMap((e) =>
-    (e.sets || []).filter((x) => x.done && e.targetRPE != null).map(() => e.targetRPE));
+    (e.sets || []).filter((x) => x.done && !x.failed && e.targetRPE != null).map(() => e.targetRPE));
   const tonnage = sets.reduce((n, s) => n + (s.load || 0) * (s.reps || 0), 0);
   return {
     unit,
@@ -366,6 +376,7 @@ function stats(st, ses) {
     tonnageKg: Math.round(convertLoad(tonnage, unit, 'kg')),
     avgRPE: scored.length ? round3(scored.reduce((n, s) => n + s.rpe, 0) / scored.length) : null,
     avgTargetRPE: targeted.length ? round3(targeted.reduce((n, v) => n + v, 0) / targeted.length) : null,
+    missed: missed.length,
     minutes: durationMinutes(ses),
   };
 }
@@ -383,6 +394,7 @@ function sessionRow(st, ses) {
     exercises: ses.entries.filter((e) => (e.sets || []).some((x) => x.done)).length,
     sets: s.sets,
     reps: s.reps,
+    missed: s.missed,
     tonnage: s.tonnage,
     unit: s.unit,
     tonnageKg: s.tonnageKg,
@@ -535,6 +547,7 @@ function discordCard(st, ses) {
     unit: s.unit,
     sets: s.sets,
     reps: s.reps,
+    missed: s.missed,
     tonnage: s.tonnage,
     avgRPE: s.avgRPE,
     avgTargetRPE: s.avgTargetRPE,
