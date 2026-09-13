@@ -1,6 +1,6 @@
 {
  "v": 1,
- "generatedAt": "2026-09-13T10:34:35.536Z",
+ "generatedAt": "2026-09-13T10:49:21.651Z",
  "athlete": {
   "firstName": null
  },
@@ -21,7 +21,7 @@
    "e1rm": 156.4,
    "e1rmDate": "2026-08-22",
    "tested": 150,
-   "testedDate": "2026-09-10",
+   "testedDate": "2026-09-13",
    "change28": 2.3,
    "trend": [
     {
@@ -85,7 +85,7 @@
    "label": "Bench press",
    "e1rm": 100,
    "e1rmDate": "2026-09-13",
-   "tested": 100,
+   "tested": 95,
    "testedDate": "2026-09-13",
    "change28": 4.4,
    "trend": [
@@ -175,7 +175,7 @@
    "e1rm": 181,
    "e1rmDate": "2026-09-08",
    "tested": 175.7,
-   "testedDate": "2026-09-10",
+   "testedDate": "2026-09-13",
    "change28": 2.2,
    "trend": [
     {
