@@ -111,6 +111,16 @@
 .set--done .set__tick { background: var(--good); border-color: var(--good); color: #06210f; }
 .set--next .set__tick { background: var(--accent); border-color: var(--accent); color: #fff; }
 
+/* A missed attempt reads as logged — it happened — but never as completed. */
+.set--failed { background: var(--bad-wash); border-color: color-mix(in srgb, var(--bad) 42%, transparent); }
+.set--failed .set__n { color: var(--bad); }
+.set--failed .set__tick { background: var(--bad); border-color: var(--bad); color: #fff; }
+.set__miss {
+  grid-column: 3 / 5; align-self: center;
+  text-align: center; font-size: .688rem; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .08em; color: var(--bad);
+}
+
 /* the big one-tap logger for the next set */
 .logbar {
   position: sticky; bottom: calc(var(--tabbar-h) + var(--safe-b));

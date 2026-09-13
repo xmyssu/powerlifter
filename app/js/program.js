@@ -201,8 +201,12 @@ export function slotHistory(state, slotKey) {
     const from = s.units || to;
     for (const e of s.entries) {
       if (e.slotKey !== slotKey) continue;
+      // A missed attempt is `done` — it happened, it cost the lifter something,
+      // and it belongs in the log. It is not a set, though: there is no rep to
+      // estimate from and nothing to compare against a prescription, so it never
+      // reaches the progression engine. `missedAttempts` is where it surfaces.
       const sets = (e.sets || [])
-        .filter((x) => x.done && x.load > 0 && x.reps > 0)
+        .filter((x) => x.done && !x.failed && x.load > 0 && x.reps > 0)
         .map((x) => (from === to ? x : { ...x, load: convertLoad(x.load, from, to) }));
       if (!sets.length) continue;
       out.push({
@@ -230,6 +234,59 @@ export function slotHistory(state, slotKey) {
     }
   }
   return out.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+}
+
+/**
+ * Every attempt this lifter loaded and did not complete, newest first.
+ *
+ * Worth keeping separate from history rather than folding in as a zero-rep set:
+ * a miss is evidence about a *weight*, not about a capability, and the two get
+ * used for opposite purposes. History answers "what can you do"; this answers
+ * "what have you already found out you cannot do today", which is the thing that
+ * should stop the app cheerfully suggesting 180 kg again the morning after.
+ */
+export function missedAttempts(state, { lift = null, since = null } = {}) {
+  const to = state.profile?.units;
+  const out = [];
+  for (const ses of state.sessions || []) {
+    if (ses.status !== 'done') continue;
+    if (since && ses.date < since) continue;
+    const from = ses.units || to;
+    for (const e of ses.entries || []) {
+      const slotLift = liftOfSlot(state, e.slotKey);
+      if (lift && slotLift !== lift) continue;
+      for (const set of e.sets || []) {
+        if (!set.done || !set.failed || !(set.load > 0)) continue;
+        out.push({
+          date: ses.date,
+          sessionId: ses.id,
+          slotKey: e.slotKey,
+          exerciseId: e.exerciseId,
+          lift: slotLift,
+          phase: ses.phase,
+          load: from === to ? set.load : convertLoad(set.load, from, to),
+          targetReps: e.targetReps ?? null,
+        });
+      }
+    }
+  }
+  return out.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+}
+
+/** Which competition lift a slot key trains, across the template and the extras. */
+function liftOfSlot(state, slotKey) {
+  const tpl = templateOf(state.program);
+  for (const d of tpl.days) {
+    const f = d.slots.find((x) => x.key === slotKey);
+    if (f) return f.lift || null;
+  }
+  const t = TEST_DAY.slots.find((x) => x.key === slotKey);
+  if (t) return t.lift;
+  for (const d of Object.values(PEAK_DAYS)) {
+    const f = d.slots.find((x) => x.key === slotKey);
+    if (f) return f.lift;
+  }
+  return null;
 }
 
 /**
@@ -1225,8 +1282,11 @@ function recordTestedMaxes(state, session) {
   for (const entry of session.entries) {
     const def = TEST_DAY.slots.find((x) => x.key === entry.slotKey);
     if (!def) continue;
+    // Reps of zero are missed attempts. They are the most important thing on a
+    // meet card and the least useful thing in a max, so they are filtered out
+    // here and kept in the log for the summary to show.
 
-    const singles = (entry.sets || []).filter((x) => x.done && x.load > 0 && x.reps >= 1);
+    const singles = (entry.sets || []).filter((x) => x.done && !x.failed && x.load > 0 && x.reps >= 1);
     if (!singles.length) continue;
 
     // The heaviest completed set, expressed as a one-rep max. A clean double at
@@ -1265,6 +1325,9 @@ export function entryStalled(entry) {
   if (!done.length) return false;
   const target = entry.targetReps;
   const planned = entry.plannedLoad;
+  // A missed attempt is the plainest stall there is: the prescribed load went on
+  // the bar and did not come back up.
+  if (done.some((s) => s.failed)) return true;
   const missedReps = done.some((s) => s.reps != null && target != null && s.reps < target);
   const droppedLoad = planned != null && done.some((s) => s.load != null && s.load < planned - 1e-6);
   const shortSets = done.length < (entry.targetSets || done.length);

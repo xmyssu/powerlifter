@@ -120,6 +120,8 @@ function exerciseCard(entry, resolved, i, st, ses) {
         ${entry.sets.map((s, si) => setRow(entry, s, si, si === nextIdx, units, !!(resolved.isTest || resolved.isMeet))).join('')}
       </div>
       <div class="row" style="gap:8px;margin-top:12px">
+        <button class="btn btn--ghost" data-rmset="${esc(entry.slotKey)}" aria-label="Remove the last set"
+                ${entry.sets.length <= 1 ? 'disabled' : ''} style="flex:0 0 auto">${icon('minus')}</button>
         <button class="btn btn--ghost grow" data-addset="${esc(entry.slotKey)}">${icon('plus')} Set</button>
         <button class="btn btn--ghost grow" data-swap="${esc(entry.slotKey)}">${icon('swap')} Swap</button>
         <button class="btn btn--ghost grow" data-exnote="${esc(entry.slotKey)}">${icon('note')}</button>
@@ -253,17 +255,16 @@ function loadStepper(entry, st) {
 const ATTEMPT_NAMES = ['1st', '2nd', '3rd'];
 
 function setRow(entry, s, si, isNext, units, isTest = false) {
-  const cls = s.done ? 'set--done' : isNext ? 'set--next' : '';
+  const cls = s.failed ? 'set--failed' : s.done ? 'set--done' : isNext ? 'set--next' : '';
   const k = `${entry.slotKey}-${si}`;
-  return `<div class="set ${cls}">
-    <div class="set__n"${isTest ? ' style="font-size:.688rem;letter-spacing:0"' : ''}>${isTest ? esc(ATTEMPT_NAMES[si] || si + 1) : si + 1}</div>
-    <div class="set__cell">
-      <span class="set__k">${esc(units)}</span>
-      <input class="set__in" type="text" inputmode="decimal"
-             value="${s.load ?? ''}" placeholder="${entry.plannedLoad ?? '—'}"
-             data-set-load="${k}" data-focus-key="sl-${k}" aria-label="Set ${si + 1} load">
-    </div>
-    <div class="set__cell">
+  const label = isTest ? esc(ATTEMPT_NAMES[si] || si + 1) : si + 1;
+
+  // A miss has no rep count and no RPE to report — the weight and the fact that
+  // it did not go up is the whole record. Collapsing those two cells says that
+  // more plainly than a zero and a 10 sitting in boxes that mean something else.
+  const body = s.failed
+    ? `<div class="set__miss">missed</div>`
+    : `<div class="set__cell">
       <span class="set__k">Reps</span>
       <input class="set__in" type="text" inputmode="numeric"
              value="${s.reps ?? ''}" placeholder="${entry.targetReps ?? '—'}"
@@ -272,8 +273,18 @@ function setRow(entry, s, si, isNext, units, isTest = false) {
     <div class="set__cell">
       <span class="set__k">RPE</span>
       <button class="set__in set__in--rpe" data-set-rpe="${k}" aria-label="Set ${si + 1} RPE">${s.rpe != null ? fmtRPE(s.rpe) : '–'}</button>
+    </div>`;
+
+  return `<div class="set ${cls}">
+    <div class="set__n"${isTest ? ' style="font-size:.688rem;letter-spacing:0"' : ''}>${label}</div>
+    <div class="set__cell">
+      <span class="set__k">${esc(units)}</span>
+      <input class="set__in" type="text" inputmode="decimal"
+             value="${s.load ?? ''}" placeholder="${entry.plannedLoad ?? '—'}"
+             data-set-load="${k}" data-focus-key="sl-${k}" aria-label="Set ${si + 1} load"${s.failed ? ' disabled' : ''}>
     </div>
-    <button class="set__tick" data-tick="${k}" aria-label="${s.done ? 'Unlog' : 'Log'} set ${si + 1}">${icon(s.done ? 'check' : 'check')}</button>
+    ${body}
+    <button class="set__tick" data-tick="${k}" aria-label="${s.done ? 'Unlog' : 'Log'} set ${si + 1}">${icon(s.failed ? 'x' : 'check')}</button>
   </div>`;
 }
 
@@ -318,6 +329,7 @@ function openRPE(ctx, key, { onPick } = {}) {
   const entry = entryOf(ses, slotKey);
   const target = entry.targetRPE ?? (entry.rpeRange ? (entry.rpeRange[0] + entry.rpeRange[1]) / 2 : null);
   const cur = entry.sets[si]?.rpe;
+  const load = entry.sets[si]?.load ?? entry.plannedLoad;
 
   sheet({
     title: 'How many reps did you leave?',
@@ -334,6 +346,14 @@ function openRPE(ctx, key, { onPick } = {}) {
       </div>
       ${target != null ? `<p class="cite">Today's target was RPE ${fmtRPE(target)}. Log what it actually was, not what it was supposed to be — the whole system runs on this number being honest.</p>` : ''}
 
+      <div class="stack-sm">
+        <button class="btn btn--danger btn--block" data-miss>${icon('x')} I missed it</button>
+        <p class="cite">RPE 10 means you finished the rep with nothing left — there is no RPE for a lift
+        that did not go up, and logging one as a ten tells the app you did something you did not do.
+        A miss is recorded as an attempt at ${load ? `${fmtLoadBare(load)} ` : ''}that failed: it counts
+        against the set, it never feeds an estimate, and the app will remember you have already found
+        out about that weight today.</p>
+      </div>
     </div>`,
     onMount(root, close) {
       for (const b of $$('[data-rpe]', root)) {
@@ -343,8 +363,36 @@ function openRPE(ctx, key, { onPick } = {}) {
           onPick ? onPick(rpe) : setRPE(ctx, slotKey, si, rpe);
         };
       }
+      $('[data-miss]', root).onclick = () => {
+        close();
+        markMissed(ctx, slotKey, si);
+      };
     },
   });
+}
+
+/**
+ * Record an attempt that did not come back up.
+ *
+ * Reps go to zero rather than staying at whatever the target was: every reader
+ * downstream — the estimate, the tested max, the tonnage — is already written to
+ * ignore a set with no reps in it, so the one honest number does all the work
+ * and nothing has to learn a new special case. The RPE is cleared for the same
+ * reason: there was no RPE.
+ */
+function markMissed(ctx, slotKey, si) {
+  ctx.store.update((s) => {
+    const e = entryOf(sessionOf(s), slotKey);
+    if (!e?.sets[si]) return;
+    e.sets[si] = {
+      ...e.sets[si],
+      load: e.sets[si].load ?? e.plannedLoad,
+      reps: 0, rpe: null, failed: true, done: true,
+      ts: e.sets[si].ts || new Date().toISOString(),
+    };
+  });
+  haptic(24);
+  toast('Logged as a miss. It will not be counted as a lift.', 'bad', 3200);
 }
 
 const splitKey = (k) => { const i = k.lastIndexOf('-'); return [k.slice(0, i), Number(k.slice(i + 1))]; };
@@ -376,6 +424,9 @@ function logSet(ctx, key) {
       const e = entryOf(sessionOf(s), slotKey);
       e.sets[si].done = false;
       e.sets[si].ts = null;
+      // Un-ticking a miss puts the row back to an empty attempt rather than to
+      // an attempt of zero reps, which is not a thing anyone logs on purpose.
+      if (e.sets[si].failed) { e.sets[si].failed = false; e.sets[si].reps = null; }
     });
     return;
   }
@@ -556,7 +607,7 @@ async function finish(ctx) {
   const ses = sessionOf(st);
   const doneSets = ses.entries.reduce((n, e) => n + e.sets.filter((s) => s.done).length, 0);
   const totalSets = ses.entries.reduce((n, e) => n + e.sets.length, 0);
-  const missingRPE = ses.entries.some((e) => e.sets.some((s) => s.done && s.rpe == null));
+  const missingRPE = ses.entries.some((e) => e.sets.some((s) => s.done && !s.failed && s.rpe == null));
 
   if (doneSets === 0) {
     const bail = await confirmSheet({
@@ -654,13 +705,18 @@ function showSummary(ctx, sessionId, notes) {
   // otherwise have this compare the session's raw numbers against a converted
   // history and invent a personal record.
   const from = ses.units || units;
-  const sets = ses.entries.flatMap((e) => e.sets.filter((s) => s.done));
+  const logged = ses.entries.flatMap((e) => e.sets.filter((s) => s.done));
+  const sets = logged.filter((s) => !s.failed);
+  const misses = ses.entries.flatMap((e) => e.sets
+    .filter((s) => s.done && s.failed)
+    .map((s) => ({ ...s, name: byId(e.exerciseId)?.short || e.slotKey })));
   const tonnage = sets.reduce((n, s) => n + convertLoad(s.load, from, units) * s.reps, 0);
   const avgRPE = sets.filter((s) => s.rpe != null);
   const dur = ses.startedAt && ses.endedAt ? (new Date(ses.endedAt) - new Date(ses.startedAt)) / 1000 : null;
 
   const prs = ses.entries.map((e) => {
-    const best = e.sets.filter((s) => s.done).map((s) => e1RM(convertLoad(s.load, from, units), s.reps, s.rpe ?? e.targetRPE ?? 8) || 0);
+    const best = e.sets.filter((s) => s.done && !s.failed)
+      .map((s) => e1RM(convertLoad(s.load, from, units), s.reps, s.rpe ?? e.targetRPE ?? 8) || 0);
     const hist = slotHistory(st, e.slotKey).filter((h) => h.sessionId !== ses.id);
     const prev = hist.length ? Math.max(...hist.map((h) => h.best1RM)) : 0;
     const now = best.length ? Math.max(...best) : 0;
@@ -677,6 +733,14 @@ function showSummary(ctx, sessionId, notes) {
         ${avgRPE.length ? `<div class="stat"><div class="stat__k">Avg RPE</div><div class="stat__v">${(avgRPE.reduce((n, s) => n + s.rpe, 0) / avgRPE.length).toFixed(1)}</div></div>` : ''}
         ${dur ? `<div class="stat"><div class="stat__k">Time</div><div class="stat__v">${Math.round(dur / 60)}<small style="font-size:.75rem"> min</small></div></div>` : ''}
       </div>
+
+      ${misses.length ? `<div class="insight insight--warn">
+        <div class="insight__icon">${icon('x')}</div>
+        <div><div class="insight__t">${misses.length} missed attempt${misses.length === 1 ? '' : 's'}</div>
+        <div class="insight__b">${misses.map((m) => `${esc(m.name)} ${fmtLoadBare(convertLoad(m.load, from, units))} ${esc(units)}`).join(' · ')}.
+        Logged as attempts, not as lifts — nothing here moves your estimate. A weight you missed once is
+        worth another go on a fresher day; a weight you have missed twice is telling you something else.</div></div>
+      </div>` : ''}
 
       ${prs.length ? `<div class="insight insight--good">
         <div class="insight__icon">${icon('trophy')}</div>
@@ -718,6 +782,32 @@ function mount(root, ctx) {
       const e = entryOf(sessionOf(s), b.dataset.addset);
       e.sets.push({ load: e.plannedLoad, reps: null, rpe: null, done: false, ts: null });
     });
+  });
+
+  // Removing takes the last set, which is the one an extra set always is. A set
+  // with something logged in it asks first: an extra set added by a mis-tap and
+  // a set with three logged reps in it are the same button and very different
+  // mistakes, and only one of them is recoverable by tapping again.
+  $$('[data-rmset]', root).forEach((b) => b.onclick = async () => {
+    const slotKey = b.dataset.rmset;
+    const entry = entryOf(sessionOf(ctx.state), slotKey);
+    if (!entry || entry.sets.length <= 1) return;
+    const last = entry.sets[entry.sets.length - 1];
+    if (last.done) {
+      const yes = await confirmSheet({
+        title: 'Delete the last set?',
+        message: last.failed
+          ? `A missed attempt at ${fmtLoadBare(last.load)} ${ctx.state.profile.units} is logged here. Deleting it removes it from your history.`
+          : `${fmtLoadBare(last.load)} ${ctx.state.profile.units} × ${last.reps} is logged here. Deleting it removes it from your history.`,
+        confirmLabel: 'Delete it', danger: true,
+      });
+      if (!yes) return;
+    }
+    ctx.store.update((s) => {
+      const e = entryOf(sessionOf(s), slotKey);
+      if (e && e.sets.length > 1) e.sets.pop();
+    });
+    haptic(8);
   });
 
   // load stepper: changing the working load updates every unlogged set too

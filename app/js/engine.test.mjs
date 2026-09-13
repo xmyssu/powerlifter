@@ -23,7 +23,7 @@ const { buildProgram, resolveDay, startSession, completeSession, resolveAssessme
         slotE1RM, slotE1RMDetail, cyclePlan, convertUnits, slotHistory, lastComparable,
         templateOf, PAIN_WEEK_REPS, RELIABLE_E1RM_REPS, resolveTestDay, attemptsFor,
         bestMaxFor, discardSession, shouldEnterPeak, enterPeak, exitPeak, peakStatus,
-        peakWeek, PEAK_WEEKS, PEAK_MIN_DAYS } = await import('./program.js');
+        peakWeek, missedAttempts, entryStalled, PEAK_WEEKS, PEAK_MIN_DAYS } = await import('./program.js');
 const { pctOf1RM, e1RM, loadFor, plateBreakdown, roundToLoadable, plateLabel, minIncrement, convertLoad,
         loadBand, RPE_TOLERANCE } = await import('./rpe.js');
 const { assessDeload, INTERMEDIATE_PL, INTERMEDIATE_PL_3DAY } = await import('./templates.js');
@@ -1746,6 +1746,71 @@ hr('17. The peaking block');
   eq(st.program.peakDoneFor, meetDate, 'which still counts as done for that date');
   ok(st.program.events.some((e) => e.kind === 'peakEnd' && e.competed === false),
     'recorded as not competed');
+}
+
+/* ======================================================================
+   18. Missed attempts
+   ====================================================================== */
+hr('18. Missed attempts');
+{
+  store.update((s) => {
+    Object.assign(s, store.defaultState());
+    s.maxes = { squat: { value: 150 }, bench: { value: 100 }, deadlift: { value: 175 } };
+    s.program = buildProgram({});
+  });
+
+  // A deadlift day where the third set is loaded and missed.
+  let st = store.getState();
+  const ses = startSession(st, { ...st.program.cursor, day: 4, phase: 'load' });
+  const dl = ses.entries.find((e) => e.slotKey === 'd4_dead');
+  dl.plannedLoad = 150;
+  dl.sets = [
+    { load: 150, reps: 5, rpe: 8, done: true, ts: new Date().toISOString() },
+    { load: 150, reps: 5, rpe: 9, done: true, ts: new Date().toISOString() },
+    { load: 180, reps: 0, rpe: null, failed: true, done: true, ts: new Date().toISOString() },
+  ];
+  for (const e of ses.entries) {
+    if (e.slotKey === 'd4_dead') continue;
+    e.sets = e.sets.map((x) => ({ load: e.plannedLoad ?? 60, reps: e.targetReps ?? 5, rpe: 8, done: true, ts: new Date().toISOString() }));
+  }
+  store.update((s) => { s.sessions.push(ses); s.activeSessionId = ses.id; });
+  store.update((s) => { completeSession(s, ses.id); s.activeSessionId = null; });
+  st = store.getState();
+
+  const hist = slotHistory(st, 'd4_dead');
+  const logged = hist.flatMap((h) => h.sets);
+  eq(logged.length, 2, 'a missed attempt never reaches the history the engine reads');
+  ok(logged.every((x) => x.load === 150), 'and the weight that was missed is not in it');
+  near(slotE1RM(st, 'd4_dead'), e1RM(150, 5, 8),
+    'the estimate is exactly what the completed sets support, and nothing more', 0.05);
+
+  const missed = missedAttempts(st, { lift: 'deadlift' });
+  eq(missed.length, 1, 'but the miss itself is recorded');
+  eq(missed[0].load, 180, 'at the weight that was attempted');
+  eq(missed[0].lift, 'deadlift', 'against the right lift');
+  eq(missedAttempts(st, { lift: 'squat' }).length, 0, 'and only that lift');
+
+  ok(entryStalled({ targetSets: 3, targetReps: 5, plannedLoad: 150, sets: [{ done: true, failed: true, load: 180, reps: 0 }] }),
+    'a miss is a stall — the bar went up and did not come back');
+
+  // A miss on a test day is not a max.
+  store.update((s) => {
+    s.program.testLifts = ['deadlift'];
+    const t = startSession(s, { ...s.program.cursor, phase: 'test' });
+    const e = t.entries[0];
+    e.sets = [
+      { load: 160, reps: 1, rpe: 8, done: true, ts: new Date().toISOString() },
+      { load: 170, reps: 1, rpe: 9, done: true, ts: new Date().toISOString() },
+      { load: 180, reps: 0, rpe: null, failed: true, done: true, ts: new Date().toISOString() },
+    ];
+    s.sessions.push(t); s.activeSessionId = t.id;
+    completeSession(s, t.id); s.activeSessionId = null;
+  });
+  st = store.getState();
+  ok(st.maxes.deadlift.fromLoad === 170, 'a tested max comes from the heaviest completed single, not the heaviest bar',
+    `${st.maxes.deadlift.fromLoad}`);
+  ok(st.maxes.deadlift.value < 180, 'a missed third is not a max');
+
 }
 
 /* ======================================================================
