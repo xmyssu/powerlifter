@@ -4,9 +4,11 @@
 
 import { html, raw, esc, icon, $, $$, toast, sheet, closeSheet, fmtDate, relDays, confirmSheet } from '../ui.js';
 import { fmtLoadBare, plateBreakdown, fmtRPE } from '../rpe.js';
-import { resolveDay, startSession, templateOf, resolveAssessment, cyclePlan, loadingWeeks, resolveTestDay, attemptsFor, discardSession } from '../program.js';
+import { resolveDay, startSession, templateOf, resolveAssessment, cyclePlan, loadingWeeks, resolveTestDay,
+         attemptsFor, discardSession, exitPeak, PEAK_WEEKS } from '../program.js';
 import { DELOAD_CHECKLIST, WARMUP, RPE_SCALE, INTERMEDIATE_PL, ADVANCED_ACCUMULATION } from '../templates.js';
-import { activeInsights, sessionBriefing, readinessVerdict, READINESS_QUESTIONS, PAIN_PROTOCOL, milestones, testReadiness, planTestBlock } from '../coach.js';
+import { activeInsights, sessionBriefing, readinessVerdict, READINESS_QUESTIONS, PAIN_PROTOCOL, milestones,
+         testReadiness, planTestBlock } from '../coach.js';
 import { byId } from '../exercises.js';
 import { buildProgram } from '../program.js';
 import { todayISO } from '../store.js';
@@ -53,7 +55,7 @@ function view(ctx) {
 
       <div class="day-head">
         <div class="day-head__meta">
-          <span class="pill pill--accent">${esc(resolved.isDeload ? 'Deload' : resolved.isPainWeek ? 'High-rep week' : `Cycle ${resolved.cycle} · Week ${resolved.week}`)}</span>
+          <span class="pill pill--accent">${esc(phaseLabel(resolved))}</span>
           <span class="pill">Day ${resolved.day}</span>
           <span class="pill ${resolved.dayDef.role === 'strength' ? 'pill--bad' : resolved.dayDef.role === 'technique' ? 'pill--info' : 'pill--warn'}">${esc(resolved.dayDef.label)}</span>
         </div>
@@ -68,8 +70,8 @@ function view(ctx) {
         ${raw(resolved.slots.map((s, i) => slotRow(s, i, units, st)).join(''))}
       </div>
 
-      <button class="btn btn--primary btn--lg btn--block" data-start>
-        ${raw(icon('play'))} ${esc(active ? 'Resume session' : 'Start session')}
+      <button class="btn ${resolved.peakKind === 'meet' ? 'btn--good' : 'btn--primary'} btn--lg btn--block" data-start>
+        ${raw(icon(resolved.peakKind === 'meet' ? 'trophy' : 'play'))} ${esc(active ? 'Resume session' : resolved.peakKind === 'meet' ? 'Start the meet' : 'Start session')}
       </button>
 
       ${raw(warmupCard(resolved))}
@@ -95,6 +97,10 @@ function view(ctx) {
 function meetDayBanner(st) {
   const d = st.program.meetDate;
   if (!d) return '';
+  // Inside a peaking block the meet is a scheduled day with its own card, its
+  // own attempts and its own start button. Two things offering to start it is
+  // one thing too many.
+  if (st.program.peak) return '';
   const out = relDays(d);
   if (out > 1 || out < 0) return '';
   return `<div class="insight insight--good">
@@ -107,6 +113,16 @@ function meetDayBanner(st) {
       ${out === 0 ? `<button class="btn btn--good btn--block" style="margin-top:10px" data-test>${icon('trophy')} Start test day</button>` : ''}
     </div>
   </div>`;
+}
+
+/** What kind of week this is, in the words the lifter is living in. */
+function phaseLabel(resolved) {
+  if (resolved.peakKind === 'meet') return 'Meet day';
+  if (resolved.peakWeek === PEAK_WEEKS || resolved.phase === 'meetWeek') return 'Meet week';
+  if (resolved.isPeak) return `Peak · week ${resolved.peakWeek} of ${PEAK_WEEKS}`;
+  if (resolved.isDeload) return 'Deload';
+  if (resolved.isPainWeek) return 'High-rep week';
+  return `Cycle ${resolved.cycle} · Week ${resolved.week}`;
 }
 
 /**
@@ -277,6 +293,7 @@ function insightCard(i) {
       <div class="insight__t">${esc(i.title)}</div>
       <div class="insight__b">${esc(i.text)}</div>
       ${i.action === 'graduate' ? `<button class="btn btn--good" style="margin-top:10px" data-graduate>Switch to the advanced program</button>` : ''}
+      ${i.action === 'closePeak' ? `<button class="btn btn--ghost" style="margin-top:10px" data-closepeak>Close the block — I did not compete</button>` : ''}
     </div>
   </div>`;
 }
@@ -549,17 +566,20 @@ function openPlan(ctx) {
   const units = st.profile.units;
 
   sheet({
-    title: `${plan.template.name} — cycle plan`,
+    title: plan.peaking ? 'Peaking block — the weeks ahead' : `${plan.template.name} — cycle plan`,
     body: `<div class="stack">
       ${plan.weeks.map((wk) => `
         <div>
-          <div class="eyebrow" style="margin-bottom:8px">Week ${wk.week}</div>
+          <div class="eyebrow" style="margin-bottom:8px">${esc(plan.peaking ? (wk.phase === 'meetWeek' ? 'Meet week' : `Peak week ${wk.week}`) : `Week ${wk.week}`)}</div>
+          ${wk.note ? `<p class="cite" style="margin:-4px 0 8px">${esc(wk.note)}</p>` : ''}
           <div class="tbl-wrap"><table class="tbl">
             <thead><tr><th>Exercise</th><th class="r">Sets</th><th class="r">Reps</th><th class="r">RPE</th></tr></thead>
             <tbody>
               ${wk.days.map((d) => `
                 <tr><td colspan="4" style="padding-top:12px"><span class="eyebrow">Day ${d.day} · ${esc(d.label)}</span></td></tr>
-                ${d.slots.map((s) => `<tr>
+                ${d.peakKind === 'meet'
+                  ? `<tr><td colspan="4" class="dim">Squat, bench, deadlift — three attempts each, off your attempt card.</td></tr>`
+                  : d.slots.map((s) => `<tr>
                   <td>${esc(s.name)}</td>
                   <td class="r mono">${s.sets}</td>
                   <td class="r mono">${s.reps ?? '—'}</td>
@@ -568,7 +588,7 @@ function openPlan(ctx) {
             </tbody>
           </table></div>
         </div>`).join('')}
-      <p class="cite">Loads are not shown here because they are set by your first-set RPE each week, not fixed in advance.</p>
+      <p class="cite">Loads are not shown here because they are set by your first-set RPE each week, not fixed in advance.${plan.peaking ? ' Meet week is a taper: the numbers on those days are deliberately small and are not a measure of anything.' : ''}</p>
     </div>`,
   });
 }
@@ -597,6 +617,18 @@ function mount(root, ctx) {
   $$('[data-pain]', root).forEach((b) => b.onclick = () => openPain());
   $$('[data-plan]', root).forEach((b) => b.onclick = () => openPlan(ctx));
   $$('[data-test]', root).forEach((b) => b.onclick = () => openTestDay(ctx));
+
+  $$('[data-closepeak]', root).forEach((b) => b.onclick = async () => {
+    const yes = await confirmSheet({
+      title: 'Close the peaking block?',
+      message: 'Nothing is recorded as a meet and no maxes are written. A normal cycle starts from the loads your peak left you on — which are the heaviest anchors you have had, so expect week 1 to bite.',
+      confirmLabel: 'Close it',
+    });
+    if (!yes) return;
+    ctx.store.update((s) => { exitPeak(s, { competed: false }); });
+    toast('Peaking block closed.');
+    ctx.refresh();
+  });
   $$('[data-discard]', root).forEach((b) => b.onclick = async () => {
     const active = ctx.state.sessions.find((x) => x.id === ctx.state.activeSessionId && x.status === 'active');
     if (!active) return;

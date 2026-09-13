@@ -10,7 +10,8 @@
    %1RM is only a reference for where that ought to land.
    ========================================================================== */
 
-import { TEMPLATES, INTERMEDIATE_PL, EMPHASIS, incrementFor, assessDeload, TEST_DAY, WARMUP } from './templates.js';
+import { TEMPLATES, INTERMEDIATE_PL, INTERMEDIATE_PEAK, PEAK_DAYS, EMPHASIS,
+         incrementFor, assessDeload, TEST_DAY, WARMUP } from './templates.js';
 import { SLOT_DEFAULTS, byId } from './exercises.js';
 import { e1RM, loadFor, roundToLoadable, pctOf1RM, normalizeRPE, convertLoad, loadBand, minIncrement, RPE_TOLERANCE, PLATE_PRESETS, KG_PER_LB } from './rpe.js';
 import { todayISO, uid } from './store.js';
@@ -279,7 +280,12 @@ function reliableOf(sets, entry) {
  *    count behind it, so callers can decline to extrapolate away from it.
  */
 export function slotE1RMDetail(state, slotKey, { lookback = 6, window = 3 } = {}) {
-  const hist = slotHistory(state, slotKey).filter((h) => h.phase !== 'deload').slice(-lookback);
+  // Meet week is a taper: its loads were chosen to be light, exactly as a
+  // deload's are, so an estimate drawn from one is a reading on the taper rather
+  // than on the lifter. The opener day is week 3 and is not excluded by this.
+  const hist = slotHistory(state, slotKey)
+    .filter((h) => h.phase !== 'deload' && h.phase !== 'meetWeek')
+    .slice(-lookback);
   if (!hist.length) return null;
   // Weight recency: take the best of the last few sessions, which smooths a
   // single bad day without letting a stale PR dominate.
@@ -345,8 +351,17 @@ export function bestMaxFor(state, lift) {
       if (e && e > best) best = e;
     }
   }
-  // A logged single beats any estimate drawn from a triple.
-  for (const key of TEST_DAY.slots.filter((x) => x.lift === lift).map((x) => x.key)) {
+  // A logged single beats any estimate drawn from a triple. Peak week 3's opener
+  // practice counts for the same reason a test day does — it is a real single,
+  // taken to a real RPE, seven days out. The primer is not in this list: RPE 4
+  // by prescription, it says nothing about what the lifter can do.
+  const singleKeys = [
+    ...TEST_DAY.slots.filter((x) => x.lift === lift).map((x) => x.key),
+    ...Object.values(PEAK_DAYS)
+      .filter((d) => d.countsForMax)
+      .flatMap((d) => d.slots.filter((x) => x.lift === lift).map((x) => x.key)),
+  ];
+  for (const key of singleKeys) {
     const e = slotE1RM(state, key);
     if (e && e > best) best = e;
   }
@@ -486,6 +501,337 @@ export function resolveTestDay(state, { lifts = null } = {}) {
   };
 }
 
+/* ---- the peaking cycle ------------------------------------------------ */
+
+/**
+ * Four weeks, ending on the platform.
+ *
+ * The book prints this as a separate program (pp. 245-246), but it is not one —
+ * it is the same template with three changes layered over it, and treating it as
+ * a template switch would throw away every wave anchor and every stall the
+ * lifter has accumulated, at the exact moment those numbers matter most. So the
+ * peak is a *mode*: `program.peak` is set, the base template is untouched, and
+ * the rules below are applied on top of it.
+ *
+ *   W1  strength-day mains at 1-3 reps instead of 3-5. The wave does the rest.
+ *   W2  the same, one rep lower and one increment heavier.
+ *   W3  everything that is not a competition lift deloads; Day 4 is replaced by
+ *       squat, bench and deadlift in meet order, one opener single each.
+ *   W4  the competition lifts deload too. Day 3 is the primer; Day 4 is the meet.
+ */
+export const PEAK_WEEKS = INTERMEDIATE_PEAK.cycleWeeks;
+
+/**
+ * How close the meet has to be before the peak takes over.
+ *
+ * Four training weeks, and the check runs at a week boundary, so a lifter who
+ * finishes a week 26 days out starts peaking the following Monday and the meet
+ * lands in week 4 — which is the whole point.
+ *
+ * The block compresses from the front when less than that is left (see
+ * `enterPeak`), because the loading weeks are the part that can be given up and
+ * the opener rehearsal and the taper are not. The floor is where even those two
+ * stop fitting: under a fortnight there is no room for an opener week followed
+ * by a taper, and what is left is not a peak but a week off before a max
+ * attempt. The app says so rather than dressing it up as a block.
+ */
+const PEAK_TRIGGER_DAYS = 28;
+export const PEAK_MIN_DAYS = 14;
+
+/** Whole days from today to an ISO date; negative once it is past. */
+export function daysUntil(iso, from = todayISO()) {
+  if (!iso) return null;
+  const a = new Date(`${from}T00:00:00`), b = new Date(`${iso}T00:00:00`);
+  if (Number.isNaN(a) || Number.isNaN(b)) return null;
+  return Math.round((b - a) / 86400000);
+}
+
+/** Only the intermediate wave has a peaking cycle written for it. */
+function peakable(program) {
+  const tpl = TEMPLATES[program?.templateId];
+  return !!tpl && tpl.trainingAge === 'intermediate' && tpl.model !== 'block';
+}
+
+/**
+ * Should the cycle about to start be the peaking cycle?
+ *
+ * Asked at week boundaries only. `peakDoneFor` stops a meet that has been and
+ * gone — or one the lifter has already peaked for and then kept training past —
+ * from launching a second block off the same date.
+ */
+export function shouldEnterPeak(state, { today = todayISO() } = {}) {
+  const program = state?.program;
+  if (!program || program.peak) return false;
+  if (!program.meetDate || program.peakDoneFor === program.meetDate) return false;
+  if (!peakable(program)) return false;
+  const d = daysUntil(program.meetDate, today);
+  return d != null && d <= PEAK_TRIGGER_DAYS && d >= PEAK_MIN_DAYS;
+}
+
+/**
+ * Why the peak has not started, in words, when the lifter asks.
+ *
+ * Returns null when it either has started or has nothing to say.
+ */
+export function peakStatus(state, { today = todayISO() } = {}) {
+  const program = state?.program;
+  if (!program?.meetDate) return null;
+  const out = daysUntil(program.meetDate, today);
+  if (program.peak) {
+    const week = peakWeek(program);
+    return { kind: 'running', week, out, weeks: PEAK_WEEKS };
+  }
+  if (out == null) return null;
+  if (out < 0) return { kind: 'past', out };
+  if (program.peakDoneFor === program.meetDate) return { kind: 'done', out };
+  if (!peakable(program)) return { kind: 'unsupported', out };
+  if (out < PEAK_MIN_DAYS) return { kind: 'tooLate', out };
+  if (out > PEAK_TRIGGER_DAYS) return { kind: 'waiting', out, startsIn: out - PEAK_TRIGGER_DAYS };
+  return { kind: 'nextWeek', out };
+}
+
+/**
+ * Where the peak's three special days land in a given template.
+ *
+ * The book writes the peak against the four-day program and names the days by
+ * number — openers and the meet on Day 4, the primer on Day 3. Taken literally
+ * that is a rule about a template rather than about training, and on the
+ * three-day week it names days that do not exist: the block would resolve every
+ * meet-week day as a taper, never reach a competition day, and never end.
+ *
+ * What the numbers actually mean is "last day of the week" and "the day before
+ * it", which is a statement about the taper and survives the translation.
+ */
+export function peakDayNumbers(tpl) {
+  const days = tpl.days.map((d) => d.n).sort((a, b) => a - b);
+  const last = days[days.length - 1];
+  return {
+    openersDay: last,
+    competitionDay: last,
+    primerDay: days.length > 1 ? days[days.length - 2] : last,
+  };
+}
+
+/** Which of the four peak weeks the cursor is in, or null. */
+export function peakWeek(program) {
+  if (!program?.peak) return null;
+  if (program.cursor.phase === 'meetWeek') return PEAK_WEEKS;
+  return Math.min(PEAK_WEEKS - 1, Math.max(1, program.cursor.week));
+}
+
+/** The three lifts as they are contested, as opposed to trained around. */
+const COMP_SLOT_TYPES = new Set(['squat', 'bench', 'deadlift']);
+export const isCompetitionSlot = (slot) => !!slot?.lift && COMP_SLOT_TYPES.has(slot.slotType);
+
+/**
+ * What the peak does to a given day — the single place the four weeks are
+ * turned into instructions, so the resolver, the schedule and the coach cannot
+ * drift apart.
+ *
+ * Returns null when the peak is not running or the day is untouched by it
+ * (weeks 1-2 need nothing here: the rep-range override in `repRangeFor` is the
+ * whole change, and the wave carries it).
+ */
+export function peakPlanFor(program, { week, day, phase }) {
+  if (!program?.peak) return null;
+  const pd = peakDayNumbers(TEMPLATES[program.templateId] || INTERMEDIATE_PL);
+
+  if (phase === 'meetWeek') {
+    if (day === pd.competitionDay) return { kind: 'meet', week: PEAK_WEEKS };
+    if (day === pd.primerDay) return { kind: 'primer', week: PEAK_WEEKS };
+    return { kind: 'taper', week: PEAK_WEEKS };
+  }
+  if (week === INTERMEDIATE_PEAK.deloadWeek) {
+    if (day === pd.openersDay) return { kind: 'openers', week };
+    return { kind: 'week3', week };
+  }
+  return { kind: 'load', week };
+}
+
+/**
+ * The opener day and the primer day, resolved the way a test day is.
+ *
+ * Both sit outside the wave, so they are built here rather than threaded through
+ * `resolveDay`'s anchor machinery: there is no week-1 load to progress from and
+ * nothing either day could stall. The loads come from the same `attemptsFor`
+ * the meet plan and the test day use, so the opener rehearsed on Sunday is the
+ * opener printed on the attempt card, to the kilo.
+ */
+function resolvePeakDay(state, kind, { week, day, phase }) {
+  const program = state.program;
+  const dayDef = kind === 'openers' ? PEAK_DAYS.openers : PEAK_DAYS.primer;
+  const loadOpts = {
+    barWeight: state.profile.barWeight,
+    plates: state.profile.plates,
+    microplates: state.profile.microplates,
+  };
+
+  const slots = dayDef.slots.map((slot, i) => {
+    const a = attemptsFor(state, slot.lift);
+    const exId = competitionChoice(state, slot.lift) || SLOT_DEFAULTS[slot.slotType] || null;
+    // The primer is a fraction of the opener, not of a max: it is the same ramp
+    // the lifter will walk on meet day, stopped early. Expressing it off the
+    // opener keeps the two days on the same scale even when the estimate moves.
+    const load = !a ? null
+      : kind === 'openers' ? a.opener
+      : roundToLoadable(a.opener * 0.85, loadOpts);
+
+    return {
+      index: i,
+      slot,
+      slotKey: slot.key,
+      exerciseId: exId,
+      exercise: byId(exId),
+      role: 'main',
+      sets: slot.sets,
+      reps: 1,
+      targetRPE: slot.rpe ?? null,
+      rpeRange: slot.rpeRange ? [...slot.rpeRange] : null,
+      rpeMax: slot.rpeMax ?? null,
+      pct: null,
+      timed: false,
+      prescription: null,
+      plannedLoad: load,
+      loadRange: null,
+      loadSource: a ? 'peak' : 'discover',
+      loadNote: !a
+        ? 'No estimate for this lift yet — work up by feel and stop well short.'
+        : kind === 'openers'
+          ? `Your opener: ${a.opener}. Ramp to it and take one. If it does not move like a warm-up, it is not your opener — lower it now, while lowering it is free.`
+          : 'One easy single. If you are thinking about whether to add weight, you have finished.',
+      rpeCheckLoad: null,
+      increment: null,
+      lastTime: lastComparable(state, slot.key, { reps: 1 }),
+      attempts: kind === 'openers' ? a : null,
+    };
+  });
+
+  return {
+    template: templateOf(program),
+    dayDef,
+    cycle: program.cursor.cycle,
+    week, day, phase,
+    isDeload: false,
+    isPainWeek: false,
+    isTest: false,
+    isPeak: true,
+    peakKind: kind,
+    peakWeek: kind === 'openers' ? week : PEAK_WEEKS,
+    label: kind === 'openers' ? `Peak week ${week} · Openers` : 'Meet week · Primer',
+    scheduleNote: dayDef.note || null,
+    why: dayDef.why,
+    title: dayDef.title,
+    slots,
+  };
+}
+
+/**
+ * Meet day.
+ *
+ * Three attempts a lift, in meet order, off the same `attemptsFor` the plan has
+ * been printing for four weeks — so this is a test day with a date on it, and it
+ * is built as one deliberately. What it does not share with a test day is the
+ * aftermath: logging it is what ends the peak.
+ */
+function resolveMeetDay(state, { week, day, phase }) {
+  const base = resolveTestDay(state, { lifts: ['squat', 'bench', 'deadlift'] });
+  return {
+    ...base,
+    // Its own day definition: inheriting the test day's would have every pill
+    // and heading on the biggest day of the block read "Test".
+    dayDef: { n: day, role: 'meet', label: 'Meet', meet: true, slots: [] },
+    week, day, phase,
+    isTest: false,
+    isMeet: true,
+    isPeak: true,
+    peakKind: 'meet',
+    peakWeek: PEAK_WEEKS,
+    label: 'Meet day',
+    title: 'The meet',
+    why: 'Nine attempts, three that count. Open with something you could triple — the opener is insurance, not a statement. Take the second only if the opener moved, and the third only if the second did. Going three for three beats going one for three with a bigger number on the card.',
+  };
+}
+
+/**
+ * Turn the cycle that is starting into the peaking cycle.
+ *
+ * Called instead of `startNextCycle`, not after it — the anchor roll is the part
+ * that has to change. A slot whose rep range drops from 3-5 to 1-3 is being
+ * asked for a triple where it did a set of five at the same RPE, and the bar has
+ * to go up for that to still be RPE 8. The conversion runs through the RPE table
+ * off the lifter's own anchor, exactly as the high-rep week does in the other
+ * direction, and it *replaces* the weekly increment rather than stacking on top
+ * of it: the rep drop is this slot's progression for the week.
+ */
+export function enterPeak(state, { today = todayISO() } = {}) {
+  const program = state.program;
+  startNextCycle(state, { intoPeak: true });
+
+  // How much of the block actually fits. A lifter who answers the deload
+  // checklist honestly four weeks out spends a week on the deload and arrives
+  // here with three, and running the block from its own week 1 regardless would
+  // put meet week after the meet. Starting partway in gives up the loading
+  // weeks — which is the right thing to give up, because the taper and the
+  // opener rehearsal are the parts that cannot be shortened.
+  const days = daysUntil(program.meetDate, today);
+  // Meet week is the last week and the meet sits partway through it, on the
+  // week's final training day. So the weeks that fit are meet week plus however
+  // many whole weeks clear the days before it — counted from the meet's own
+  // position in the week rather than from a round seven, which would put the
+  // opener rehearsal on the morning of the meet.
+  const tpl = templateOf(program);
+  const meetDayOffset = tpl.days.findIndex((d) => d.n === peakDayNumbers(tpl).competitionDay) + 1;
+  const weeksLeft = days == null
+    ? PEAK_WEEKS
+    : 1 + Math.floor(Math.max(0, days - meetDayOffset) / 7);
+  const start = Math.min(INTERMEDIATE_PEAK.deloadWeek, Math.max(1, PEAK_WEEKS - weeksLeft + 1));
+  if (start > 1) {
+    program.cursor.week = start;
+    program.peak.startedAtWeek = start;
+  }
+
+  program.events.push({
+    date: todayISO(), kind: 'peakStart', meetDate: program.meetDate,
+    week: start, weeks: PEAK_WEEKS,
+  });
+  return program.peak;
+}
+
+function peakAnchor(slot, program, slotState) {
+  const override = INTERMEDIATE_PEAK.rules.repRangeOverrides[slot.key];
+  if (!override || !slotState.week1Load) return null;
+  const rpe = slot.rpe ?? (slot.rpeRange ? (slot.rpeRange[0] + slot.rpeRange[1]) / 2 : null);
+  const fromReps = repsForWeek(slot, program, 1);
+  const toReps = override[1];
+  if (!rpe || !fromReps || !toReps || fromReps === toReps) return null;
+  const a = pctOf1RM(fromReps, rpe);
+  const b = pctOf1RM(toReps, rpe);
+  if (!a || !b) return null;
+  return +((slotState.week1Load * b) / a).toFixed(2);
+}
+
+/**
+ * The peak is over the moment the meet is logged.
+ *
+ * `peakDoneFor` is stamped with the date rather than cleared, so a lifter who
+ * keeps training afterwards without changing the meet date does not get a second
+ * peaking cycle out of a meet they have already lifted.
+ */
+export function exitPeak(state, { competed = true } = {}) {
+  const program = state.program;
+  if (!program?.peak) return null;
+  const meetDate = program.peak.meetDate || program.meetDate;
+  program.peakDoneFor = meetDate;
+  program.peak = null;
+  program.events.push({ date: todayISO(), kind: 'peakEnd', meetDate, competed });
+  // Meet week was a taper and the meet itself is three singles: the lifter is
+  // beaten up but not accumulating fatigue, so the deload counter starts clean
+  // rather than dragging the pre-meet cycles into the next block.
+  program.cyclesSinceDeload = 0;
+  startNextCycle(state);
+  return { meetDate, competed };
+}
+
 /* ---- prescription ---------------------------------------------------- */
 
 /**
@@ -503,9 +849,19 @@ export function resolveDay(state, { cycle, week, day, phase } = {}) {
 
   if (phase === 'test') return resolveTestDay(state, { lifts: state.program?.testLifts });
 
+  // The peaking cycle replaces two of its sixteen days outright and deloads
+  // part of a third. Everything it does not name falls through to the wave.
+  const peak = peakPlanFor(program, { week, day, phase });
+  if (peak?.kind === 'openers' || peak?.kind === 'primer') {
+    return resolvePeakDay(state, peak.kind, { week, day, phase });
+  }
+  if (peak?.kind === 'meet') return resolveMeetDay(state, { week, day, phase });
+
   const units = state.profile.units;
   const dayDef = tpl.days.find((d) => d.n === day) || tpl.days[0];
-  const isDeload = phase === 'deload';
+  // Meet week is a deload the lifter does not get a vote on: the competition
+  // lifts come down too, which is the one week of the year that is true.
+  const isDeload = phase === 'deload' || peak?.kind === 'taper';
   const isPainWeek = phase === 'painWeek';
   const loadOpts = {
     barWeight: state.profile.barWeight,
@@ -535,7 +891,12 @@ export function resolveDay(state, { cycle, week, day, phase } = {}) {
     let pct = pctForWeek(slot, program, waveWeek);
     let repsRaised = false;
 
-    if (isDeload) {
+    // Peak week 3 deloads everything that is not contested — the variants
+    // included — while the competition lifts keep climbing to their opener.
+    // That is a per-slot decision, so it cannot ride on the day-level flag.
+    const slotDeload = isDeload || (peak?.kind === 'week3' && !isCompetitionSlot(slot));
+
+    if (slotDeload) {
       // Intermediate: lowest reps and lowest load of the wave, two-thirds of the sets.
       // Advanced: repeat week 3 at two-thirds sets, RPE -1, %1RM -5.
       sets = Math.max(1, Math.floor((slot.sets * 2) / 3));
@@ -575,7 +936,7 @@ export function resolveDay(state, { cycle, week, day, phase } = {}) {
       }
     }
 
-    if (isPainWeek && !slot.technique && !slot.timed && !slot.fixedReps && reps != null) {
+    if (isPainWeek && !slotDeload && !slot.technique && !slot.timed && !slot.fixedReps && reps != null) {
       // Same sets, same RPE, reps raised until the bar load comes down. Only the
       // reps move: dropping the RPE too would make this a deload, which is the
       // thing the checklist just decided against, and cutting sets would give up
@@ -590,7 +951,7 @@ export function resolveDay(state, { cycle, week, day, phase } = {}) {
     }
 
     // --- load --------------------------------------------------------
-    const plan = plannedLoad({ state, program, slot, week: waveWeek, isDeload, repsRaised, inc, pct, reps, targetRPE, rpeRange });
+    const plan = plannedLoad({ state, program, slot, week: waveWeek, isDeload: slotDeload, repsRaised, inc, pct, reps, targetRPE, rpeRange });
     const planned = plan.load == null ? null : roundToLoadable(plan.load, loadOpts);
     const loadRange = bandFor(planned, reps, targetRPE, rpeRange, loadOpts);
 
@@ -626,7 +987,10 @@ export function resolveDay(state, { cycle, week, day, phase } = {}) {
     isDeload,
     isPainWeek,
     isTest: false,
-    label: dayLabel(tpl, dayDef, { week, cycle, phase }),
+    isPeak: !!peak,
+    peakKind: peak?.kind || null,
+    peakWeek: peak?.week || null,
+    label: dayLabel(tpl, dayDef, { week, cycle, phase, peak }),
     scheduleNote: tpl.scheduleNote || null,
     why: dayDef.why || null,
     title: dayDef.title || null,
@@ -773,9 +1137,11 @@ function bandFor(load, reps, targetRPE, rpeRange, loadOpts) {
   return { low: Math.min(low, high), high: Math.max(low, high), exact: low === high };
 }
 
-function dayLabel(tpl, dayDef, { week, cycle, phase }) {
+function dayLabel(tpl, dayDef, { week, cycle, phase, peak }) {
   if (dayDef.off) return 'Rest day';
   if (dayDef.meet) return 'Meet day';
+  if (peak?.kind === 'taper') return `Meet week · Day ${dayDef.n} · Taper`;
+  if (peak) return `Peak week ${peak.week} · Day ${dayDef.n} · ${dayDef.label}`;
   if (phase === 'deload') return `Deload · Day ${dayDef.n}`;
   if (phase === 'painWeek') return `High-rep week · Day ${dayDef.n}`;
   return `${tpl.name.includes('Advanced') ? tpl.block ? cap(tpl.block) : 'Block' : 'Week'} ${week} · Day ${dayDef.n} · ${dayDef.label}`;
@@ -859,6 +1225,7 @@ function recordTestedMaxes(state, session) {
   for (const entry of session.entries) {
     const def = TEST_DAY.slots.find((x) => x.key === entry.slotKey);
     if (!def) continue;
+
     const singles = (entry.sets || []).filter((x) => x.done && x.load > 0 && x.reps >= 1);
     if (!singles.length) continue;
 
@@ -926,6 +1293,22 @@ export function completeSession(state, sessionId) {
   // the app will ever get about this lifter, so it writes the maxes.
   if (session.phase === 'test') {
     notes.push(...recordTestedMaxes(state, session));
+    return { state, notes };
+  }
+
+  // Meet day is a test day that also closes the block. Recording the maxes and
+  // ending the peak have to happen together: a lifter who logs the platform and
+  // then opens the app the next morning must not be shown the meet again.
+  if (session.phase === 'meetWeek' && session.day === peakDayNumbers(tpl).competitionDay) {
+    notes.push(...recordTestedMaxes(state, session));
+    const ended = exitPeak(state, { competed: true });
+    if (ended) {
+      notes.push({
+        kind: 'meetDone',
+        title: 'That is the meet',
+        text: 'Your peaking block is closed and a fresh cycle is waiting. Do not start it tomorrow — take the rest of the week off, eat, sleep, and let the next block begin when you actually want to train again. The attempts you just logged are now the maxes every load in it is built from.',
+      });
+    }
     return { state, notes };
   }
 
@@ -1036,15 +1419,43 @@ export function advanceCursor(state) {
   // end of a training week
   cur.day = days[0];
 
+  // The peaking cycle is four fixed weeks with a date at the end of it. There is
+  // no checklist to run and no decision to make: the deload is week 3 whether or
+  // not the lifter feels they need one, because the meet is on Saturday.
+  if (program.peak) {
+    if (cur.phase === 'meetWeek') { exitPeak(state); return; }
+
+    // The block is counted in training weeks; the meet is on a date. A lifter
+    // who trains three times in a week rather than four falls behind the
+    // calendar, and carrying on by week number would have the app prescribing
+    // heavy doubles two days before they compete. The date wins.
+    const out = daysUntil(program.meetDate);
+    if (out != null && out <= 7) { cur.phase = 'meetWeek'; cur.week = PEAK_WEEKS; return; }
+    if (out != null && out <= 14 && cur.week < INTERMEDIATE_PEAK.deloadWeek) {
+      cur.week = INTERMEDIATE_PEAK.deloadWeek;   // straight to the opener week
+      return;
+    }
+
+    if (cur.week < INTERMEDIATE_PEAK.deloadWeek) { cur.week += 1; return; }
+    cur.phase = 'meetWeek';
+    cur.week = PEAK_WEEKS;
+    return;
+  }
+
   // Both of the checklist's non-proceed answers are a single week that stands in
   // for the normal cycle break, so both roll into the next cycle when they are
   // done. Without this the cursor stayed pinned to the pain week and re-asked
   // the checklist every time it came round, with no way out but answering
   // differently.
   if (cur.phase === 'deload' || cur.phase === 'painWeek') {
-    startNextCycle(state);
+    if (shouldEnterPeak(state)) enterPeak(state); else startNextCycle(state);
     return;
   }
+
+  // A meet inside the next four weeks outranks the rest of the cycle. The peak
+  // is its own mesocycle and starts at its own week 1, so this cuts the current
+  // cycle short rather than peaking from wherever the wave happened to be.
+  if (shouldEnterPeak(state)) { enterPeak(state); return; }
 
   const weeks = loadingWeeks(program);
   if (cur.week < weeks) {
@@ -1085,6 +1496,8 @@ export function resolveAssessment(state, answers) {
   } else if (action === 'painWeek') {
     program.cursor.phase = 'painWeek';
     program.cursor.week = loadingWeeks(program) + 1;
+  } else if (shouldEnterPeak(state)) {
+    enterPeak(state);
   } else {
     startNextCycle(state);
   }
@@ -1092,11 +1505,15 @@ export function resolveAssessment(state, answers) {
 }
 
 /** Roll the wave anchors forward and begin the next cycle. */
-export function startNextCycle(state) {
+export function startNextCycle(state, { intoPeak = false } = {}) {
   const program = state.program;
   const tpl = templateOf(program);
   const units = state.profile.units;
-  const wasDeload = program.cursor.phase === 'deload';
+  // Meet week counts as a deload for this purpose, because that is what it is:
+  // two-thirds of the sets at the wave's lightest load, then a primer at RPE 4.
+  // Without this a lifter came out of a meet one cycle closer to a mandatory
+  // deload than they went in, having just taken the easiest week of the year.
+  const wasDeload = program.cursor.phase === 'deload' || program.cursor.phase === 'meetWeek';
 
   for (const day of tpl.days) {
     for (const slot of day.slots) {
@@ -1124,6 +1541,11 @@ export function startNextCycle(state) {
           date: todayISO(), kind: 'stallReset', slotKey: slot.key,
           text: `Restarting ${slot.key} about 7.5% lighter with smaller weekly jumps.`,
         });
+      } else if (st.week1Load && intoPeak && peakAnchor(slot, program, st) != null) {
+        // Peaking: this slot's rep range is dropping, and the rep drop is its
+        // progression for the week. See `peakAnchor`. Safe to read the old rep
+        // range here — `program.peak` is not set until the loop has finished.
+        st.week1Load = peakAnchor(slot, program, st);
       } else if (st.week1Load) {
         // Deliberately NOT snapped to the plate grid, unlike the stall reset
         // above. After a stall the weekly increment is halved (2.5 kg, 5 lb),
@@ -1144,6 +1566,15 @@ export function startNextCycle(state) {
   program.forcedDeload = false;
   program.cyclesSinceDeload = wasDeload ? 0 : program.cyclesSinceDeload + 1;
   program.events.push({ date: todayISO(), kind: 'cycleStart', cycle: program.cursor.cycle });
+
+  if (intoPeak) {
+    program.peak = {
+      meetDate: program.meetDate,
+      startedAt: todayISO(),
+      cycle: program.cursor.cycle,
+      repRangeOverrides: { ...INTERMEDIATE_PEAK.rules.repRangeOverrides },
+    };
+  }
 }
 
 /* ---- graduation signal ------------------------------------------------ */
@@ -1187,28 +1618,68 @@ export function cyclePlan(state) {
   const program = state.program;
   const tpl = templateOf(program);
   const weeks = loadingWeeks(program);
+  const peaking = !!program.peak;
+
+  const planSlot = (slot, w) => ({
+    key: slot.key,
+    name: byId(program.choices[slot.key] || SLOT_DEFAULTS[slot.slotType])?.short || slot.slotType,
+    sets: slot.sets,
+    reps: repsForWeek(slot, program, w),
+    pct: pctForWeek(slot, program, w),
+    rpe: slot.rpe ?? null,
+    rpeRange: slot.rpeRange || null,
+  });
+
+  // A compressed block starts partway in, and the weeks it skipped are not part
+  // of anyone's plan. Showing them would have the schedule promise two loading
+  // weeks to a lifter who is going straight to opener practice.
+  const from = peaking ? (program.peak.startedAtWeek || 1) : 1;
+
   const out = [];
-  for (let w = 1; w <= weeks; w++) {
+  for (let w = from; w <= weeks; w++) {
+    const plan = peaking ? peakPlanFor(program, { week: w, day: tpl.days[0].n, phase: 'load' }) : null;
     out.push({
       week: w,
       phase: 'load',
-      days: tpl.days.map((d) => ({
-        day: d.n,
-        label: d.label,
-        role: d.role,
-        slots: d.slots.map((slot) => ({
-          key: slot.key,
-          name: byId(program.choices[slot.key])?.short || slot.slotType,
-          sets: slot.sets,
-          reps: repsForWeek(slot, program, w),
-          pct: pctForWeek(slot, program, w),
-          rpe: slot.rpe ?? null,
-          rpeRange: slot.rpeRange || null,
-        })),
-      })),
+      // The schedule is the one screen whose whole job is to say what is coming,
+      // so a peaking week that swaps a day out has to say so here or the sheet
+      // is quietly wrong for a month.
+      peakKind: plan?.kind || null,
+      note: plan?.kind === 'week3'
+        ? 'Everything that is not a competition lift deloads this week, and Day 4 is replaced by opener singles.'
+        : null,
+      days: tpl.days.map((d) => {
+        if (peaking && peakPlanFor(program, { week: w, day: d.n, phase: 'load' })?.kind === 'openers') {
+          return { day: d.n, label: PEAK_DAYS.openers.label, role: 'strength', peakKind: 'openers',
+                   slots: PEAK_DAYS.openers.slots.map((slot) => planSlot(slot, w)) };
+        }
+        return { day: d.n, label: d.label, role: d.role, peakKind: null, slots: d.slots.map((slot) => planSlot(slot, w)) };
+      }),
     });
   }
-  return { weeks: out, template: tpl };
+
+  if (peaking) {
+    const pd = peakDayNumbers(tpl);
+    out.push({
+      week: PEAK_WEEKS,
+      phase: 'meetWeek',
+      peakKind: 'taper',
+      note: 'The competition lifts come down too. Everything before the primer is there to keep you moving, not to train you.',
+      days: tpl.days.map((d) => {
+        if (d.n === pd.competitionDay) {
+          return { day: d.n, label: 'Meet day', role: 'meet', peakKind: 'meet', slots: [] };
+        }
+        if (d.n === pd.primerDay) {
+          return { day: d.n, label: PEAK_DAYS.primer.label, role: 'primer', peakKind: 'primer',
+                   slots: PEAK_DAYS.primer.slots.map((slot) => planSlot(slot, weeks)) };
+        }
+        return { day: d.n, label: `${d.label} · taper`, role: d.role, peakKind: 'taper',
+                 slots: d.slots.map((slot) => planSlot(slot, weeks)) };
+      }),
+    });
+  }
+
+  return { weeks: out, template: tpl, peaking };
 }
 
 /** Weekly set counts per movement category, to check against the book's targets. */

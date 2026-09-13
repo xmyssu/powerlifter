@@ -4,7 +4,8 @@
    cited so you can go read the argument rather than trust the app.
    ========================================================================== */
 
-import { templateOf, graduationCheck, slotHistory, slotE1RM, volumeAudit, loadingWeeks, bestMaxFor } from './program.js';
+import { templateOf, graduationCheck, slotHistory, slotE1RM, volumeAudit, loadingWeeks, bestMaxFor,
+         peakStatus, PEAK_MIN_DAYS } from './program.js';
 import { e1RM, fmtLoad, convertLoad } from './rpe.js';
 import { byId } from './exercises.js';
 import { relDays } from './ui.js';
@@ -330,7 +331,11 @@ export function sessionBriefing(resolved, state) {
     });
   }
 
-  if (resolved.dayDef.role === 'strength') {
+  // Opener and primer days are strength-shaped and are not strength days. Telling
+  // a lifter to push on the day whose entire purpose is to not push would be the
+  // worst-placed sentence in the app.
+  const peaking = resolved.isPeak && resolved.peakKind && resolved.peakKind !== 'load';
+  if (resolved.dayDef.role === 'strength' && !peaking) {
     notes.push({
       kind: 'strength',
       title: 'Strength day — this is where you push',
@@ -338,10 +343,14 @@ export function sessionBriefing(resolved, state) {
     });
   }
 
+  if (resolved.isPeak) notes.push(...peakBriefing(resolved));
+
   const layoff = layoffAdvice(state);
   if (layoff) notes.push({ kind: 'layoff', title: layoff.headline, text: layoff.advice, cite: layoff.cite });
 
-  if (resolved.week === 1 && resolved.cycle > 1 && !resolved.isDeload) {
+  // Not during a peak: its week 1 is the opposite of an ordinary one — the reps
+  // came *down* and the bar went up to meet them.
+  if (resolved.week === 1 && resolved.cycle > 1 && !resolved.isDeload && !resolved.isPeak) {
     notes.push({
       kind: 'cycle',
       title: `Cycle ${resolved.cycle}, week 1`,
@@ -351,6 +360,44 @@ export function sessionBriefing(resolved, state) {
 
   const rest = tpl.days.find((d) => d.n === resolved.day)?.role === 'strength' ? 150 : 90;
   return { notes, restSeconds: rest };
+}
+
+/** What this particular day of the peaking block is for. */
+function peakBriefing(resolved) {
+  switch (resolved.peakKind) {
+    case 'openers':
+      return [{
+        kind: 'cycle',
+        title: 'Dress rehearsal, not a test',
+        text: 'One single each, in meet order, at the opener. Do it in the kit you will compete in, with the commands you will hear, at roughly the time of day the meet starts. If the opener does not move like a warm-up, lower it — today is the last day changing it is free, and an opener you miss is a meet you are already losing.',
+      }];
+    case 'primer':
+      return [{
+        kind: 'deload',
+        title: 'This cannot make you stronger. It can make you worse.',
+        text: 'Two easy singles on squat and bench and one on the deadlift, at RPE 4, and then you leave. Nothing here is training — it exists so the platform is not the first bar you have touched in four days. The only way to get this wrong is to do more.',
+      }];
+    case 'meet':
+      return [{
+        kind: 'cycle',
+        title: 'Nine attempts, three that count',
+        text: 'Openers are insurance. Take the second only if the opener moved and the third only if the second did, and change any of them on the spot if the day is not going the way the numbers said. Three for three is a better meet than one for three with a bigger number on the card.',
+      }];
+    case 'week3':
+      return [{
+        kind: 'deload',
+        title: 'Peak week 3 — everything but the big three comes down',
+        text: 'Your variations and accessories deload this week; the competition lifts do not. That split is the whole idea — shed the fatigue that is not making you better at squat, bench and deadlift, and keep the practice that is.',
+      }];
+    case 'taper':
+      return [{
+        kind: 'deload',
+        title: 'Meet week — the work is done',
+        text: 'The competition lifts come down too now. Nothing you do this week can add strength by the weekend, and plenty of it can take some away. Sleep, eat, keep moving, and stay off the bar beyond what is written.',
+      }];
+    default:
+      return [];
+  }
 }
 
 /* ======================================================================
@@ -669,6 +716,11 @@ export function milestones(state, { perLift = 3 } = {}) {
       seen.add(t.load);
       const done = lifted >= t.load - 1e-9;
       const away = +(t.load - est).toFixed(1);
+
+      // Something you loaded and did not lift is not "in range", however
+      // flattering the estimate is about it. The memory expires, and it expires
+      // early if the estimate has since climbed clear of the weight — that is
+      // the difference between a bad day and a wall.
       rows.push({
         lift,
         load: t.load,
@@ -971,19 +1023,70 @@ export function activeInsights(state) {
   const layoff = layoffAdvice(state);
   if (layoff) out.push({ kind: 'layoff', priority: 2, title: layoff.headline, text: layoff.advice });
 
-  const meet = program.meetDate ? relDays(program.meetDate) : null;
-  if (meet != null && meet >= 0 && meet <= 35) {
+  const peak = peakStatus(state);
+  if (peak) out.push(...meetInsights(state, peak));
+
+  return out.sort((a, b) => a.priority - b.priority);
+}
+
+const PEAK_WEEKS_LABEL = 4;
+
+/**
+ * What the peaking block has to say for itself, by where it is.
+ *
+ * The app switches into and out of the peak on its own, so these are status
+ * rather than instructions — with two exceptions, and both are cases where the
+ * app cannot know something and has to ask: a meet that is too close to peak
+ * for, and a meet date that has come and gone without a platform session logged.
+ */
+function meetInsights(state, peak) {
+  const out = [];
+  const days = peak.out;
+
+  if (peak.kind === 'running') {
+    const wk = peak.week;
+    const text = wk === 1 ? 'Peak week 1 of 4. Your strength-day mains are triples now instead of sets of five — the load goes up to meet the reps coming down. Everything else is the program you were already running.'
+      : wk === 2 ? 'Peak week 2 of 4. Doubles on the strength days. This is the last genuinely hard week; after it the work goes down and stays down.'
+      : wk === 3 ? 'Peak week 3 of 4. Everything that is not a competition lift deloads this week, and Day 4 is replaced by one opener single on each lift in meet order. Treat that day as a dress rehearsal — same kit, same order, same timing.'
+      : 'Meet week. The competition lifts come down too. Day 3 is your primer, 24 to 48 hours out; Day 4 is the meet.';
+    out.push({ kind: 'meet', priority: 1, title: days >= 0 ? `${days} days out · peak week ${wk} of ${PEAK_WEEKS_LABEL}` : `Peak week ${wk}`, text, action: 'meet' });
+
+    // The meet date has passed and no platform session was logged. The block
+    // cannot end itself on a date — only on a session — so this is the way out.
+    if (days < 0) {
+      out.push({
+        kind: 'meetStale', priority: 0,
+        title: 'Your meet date has passed',
+        text: 'Nothing was logged for meet day, so the peaking block is still running and still tapering you. If you competed, log the attempts; if you did not, close the block and a normal cycle starts from where your peak left you.',
+        action: 'closePeak',
+      });
+    }
+    return out;
+  }
+
+  if (peak.kind === 'nextWeek') {
     out.push({
       kind: 'meet', priority: 1,
-      title: `${meet} days to your meet`,
-      text: meet <= 28
-        ? 'You are inside the peaking window. Open the meet plan to switch the strength-day main lifts to 1-3 reps and schedule opener practice and the primer session.'
-        : 'Four weeks out is where the peaking cycle starts. Get ready to switch over.',
+      title: `${days} days to your meet`,
+      text: 'Inside four weeks. The peaking block takes over at the end of this training week — you do not have to switch anything, and you should not try to bring it forward by going heavy in the meantime. Finish the week as written.',
+      action: 'meet',
+    });
+  } else if (peak.kind === 'waiting' && days <= 42) {
+    out.push({
+      kind: 'meet', priority: 2,
+      title: `${days} days to your meet`,
+      text: `Normal training until four weeks out, then the peaking block starts on its own at the next week boundary — about ${peak.startsIn} day${peak.startsIn === 1 ? '' : 's'} from now. Nothing to do but train.`,
+      action: 'meet',
+    });
+  } else if (peak.kind === 'tooLate') {
+    out.push({
+      kind: 'meet', priority: 1,
+      title: `${days} days to your meet`,
+      text: `That is inside the ${PEAK_MIN_DAYS} days a peaking block needs, so the app is not going to start one — a truncated peak tapers you for a meet you never trained heavy for, which is worse than no peak at all. Train normally, then take the last four or five days easy and open conservatively.`,
       action: 'meet',
     });
   }
-
-  return out.sort((a, b) => a.priority - b.priority);
+  return out;
 }
 
 /* ======================================================================

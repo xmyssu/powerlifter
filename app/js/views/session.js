@@ -55,7 +55,7 @@ function view(ctx) {
     <div class="row-between" style="margin-bottom:14px">
       <button class="btn btn--bare" data-home aria-label="Back">${raw(icon('back'))}</button>
       <div class="center grow">
-        <div class="eyebrow">${esc(resolved.isTest ? 'Test day' : resolved.isDeload ? 'Deload' : resolved.isPainWeek ? 'High-rep week' : `Cycle ${ses.cycle} · Week ${ses.week} · Day ${ses.day}`)}</div>
+        <div class="eyebrow">${esc(resolved.isMeet ? 'Meet day' : resolved.isTest ? 'Test day' : resolved.isPeak ? resolved.label : resolved.isDeload ? 'Deload' : resolved.isPainWeek ? 'High-rep week' : `Cycle ${ses.cycle} · Week ${ses.week} · Day ${ses.day}`)}</div>
         <div class="tiny dim" style="margin-top:2px">${doneSets} / ${totalSets} sets</div>
       </div>
       <button class="btn btn--bare" data-notes aria-label="Session notes">${raw(icon('note'))}</button>
@@ -90,7 +90,7 @@ function exerciseCard(entry, resolved, i, st, ses) {
   const nextIdx = entry.sets.findIndex((s) => !s.done);
 
   const a = slot?.attempts;
-  const targetStr = resolved.isTest
+  const targetStr = resolved.isTest || resolved.isMeet
     ? (a ? `<b>${fmtLoadBare(a.opener)}</b> · <b>${fmtLoadBare(a.second)}</b> · <b>${fmtLoadBare(a.third)}</b> ${esc(units)}`
          : '<b>Work up by feel</b>')
     : `<b>${entry.targetSets} × ${entry.targetReps ?? '—'}</b>`
@@ -112,12 +112,12 @@ function exerciseCard(entry, resolved, i, st, ses) {
 
     ${isOpen ? `<div class="ex__body">
       ${rxStrip(entry, slot, st)}
-      ${resolved.isTest ? rampStrip(slot, units) : lastTimeStrip(st, entry, slot)}
+      ${(resolved.isTest || resolved.isMeet) ? rampStrip(slot, units) : lastTimeStrip(st, entry, slot)}
       ${slot?.loadNote && nextIdx === 0 ? `<p class="cite" style="margin-bottom:10px">${esc(slot.loadNote)}</p>` : ''}
       ${rpeCheckNote(slot, entry, units)}
       ${loadStepper(entry, st)}
       <div class="sets">
-        ${entry.sets.map((s, si) => setRow(entry, s, si, si === nextIdx, units, !!resolved.isTest)).join('')}
+        ${entry.sets.map((s, si) => setRow(entry, s, si, si === nextIdx, units, !!(resolved.isTest || resolved.isMeet))).join('')}
       </div>
       <div class="row" style="gap:8px;margin-top:12px">
         <button class="btn btn--ghost grow" data-addset="${esc(entry.slotKey)}">${icon('plus')} Set</button>
@@ -333,6 +333,7 @@ function openRPE(ctx, key, { onPick } = {}) {
           `<div class="rpe-scale"><b class="mono">${fmtRPE(r.rpe)}</b> — ${esc(r.meaning)}</div>`).join('')}
       </div>
       ${target != null ? `<p class="cite">Today's target was RPE ${fmtRPE(target)}. Log what it actually was, not what it was supposed to be — the whole system runs on this number being honest.</p>` : ''}
+
     </div>`,
     onMount(root, close) {
       for (const b of $$('[data-rpe]', root)) {

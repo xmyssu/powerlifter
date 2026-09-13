@@ -205,39 +205,83 @@ export const INTERMEDIATE_PEAK = {
   name: 'Intermediate Peaking (4 weeks out)',
   extends: 'intermediate-pl',
   cycleWeeks: 4,
+  /** Which of the four weeks the deload and the meet fall in. */
+  deloadWeek: 3,
+  meetWeek: 4,
   rules: {
     // 1. Strength-day main lifts drop from 3-5 to 1-3 reps for the whole cycle.
+    //    The wave then walks 3, 2, 1 across the three training weeks, which is
+    //    what makes week 3's opener practice a single rather than a special case.
     repRangeOverrides: {
       d3_squat: [1, 3],
       d3_bench: [1, 3],
       d4_dead:  [1, 3],
     },
-    // 2. Week 3 (index 2): deload everything that is not a competition lift,
-    //    including squat/bench/deadlift variants.
+    // 2. Week 3: deload everything that is not a competition lift, including
+    //    the squat/bench/deadlift variants.
     week3DeloadNonComp: true,
-    // 3. Week 3 reshuffle: Day 4 becomes squat, bench, deadlift in meet order,
-    //    working up to a single at your opener on each.
-    week3Reshuffle: {
-      day: 4,
-      slots: ['squat', 'bench', 'deadlift'],
-      prescription: { sets: 1, reps: 1, rpeRange: [7.5, 8.5], note: 'Work up to your opener for one rep. Opener ≈ your current 3RM.' },
-    },
-    // 4. Meet week: Day 3 is the primer 24-48 h out; Day 4 is the meet.
-    meetWeek: {
-      primerDay: 3,
-      primer: [
-        { lift: 'squat',    sets: 2, reps: 1, rpe: 4 },
-        { lift: 'bench',    sets: 2, reps: 1, rpe: 4 },
-        { lift: 'deadlift', sets: 1, reps: 1, rpe: 4 },
-      ],
-      primerNote: 'Do this 24-48 hours before you lift. Work up to these singles and do nothing else.',
-      competitionDay: 4,
-    },
+    // 3. Week 3 reshuffle: the week's last day becomes squat, bench, deadlift in
+    //    meet order, working up to a single at your opener on each.
+    // 4. Meet week: the day before the last is the primer, 24-48 h out; the last
+    //    day is the meet.
+    //
+    // The book names these as Day 4 and Day 3 because it writes the peak against
+    // the four-day program. `peakDayNumbers` resolves them per template instead,
+    // so the three-day week gets a meet day rather than a block with no end.
   },
   attemptSelection: {
     opener: { basis: '3RM', pctOf1RM: [87.5, 92.5], rpe: [7.5, 8.5] },
     second: { basis: '2RM' },
     third:  { basis: 'PR',  note: 'Next incremental PR if it is there — typically +2.5 kg. Otherwise a conservative jump.' },
+  },
+};
+
+/**
+ * The two days the peaking cycle inserts that the base template has no slot for.
+ *
+ * They carry their own keys rather than borrowing the training slots', for two
+ * reasons that pull the same way: a slot's key is what its wave anchor and its
+ * stall history hang off, and neither of these days is part of a wave. An opener
+ * single is a rehearsal, and a primer single at RPE 4 is a warm-up with a date
+ * on it — writing either into `d3_squat`'s history would have the next cycle
+ * prescribe loads from them.
+ *
+ * `countsForMax` marks the opener day: a single at RPE 7.5-8.5, seven days out,
+ * is the best read on current strength the app will get before the platform, so
+ * it is allowed to inform the estimate. The primer is not — it is RPE 4 by
+ * design and says nothing about capability.
+ */
+const peakSlot = (key, lift, sets, rpe, extra = {}) => ({
+  key, slotType: lift, lift, role: 'main', sets, fixedReps: 1, rpe,
+  repRange: null, pctBase: null, inc: lift === 'bench' ? 'other' : 'lower', ...extra,
+});
+
+export const PEAK_DAYS = {
+  openers: {
+    n: 4,
+    role: 'strength',
+    label: 'Openers',
+    title: 'Squat, bench, deadlift — one single each, at your opener',
+    why: 'Seven days out, in meet order, in your meet gear. The point is not the weight — it is walking through the day once so nothing on the platform is new. Your opener is a weight you could triple: it should move like a warm-up and it should feel almost disappointing.',
+    countsForMax: true,
+    slots: [
+      peakSlot('peak_open_squat', 'squat', 1, null, { rpeRange: [7.5, 8.5] }),
+      peakSlot('peak_open_bench', 'bench', 1, null, { rpeRange: [7.5, 8.5] }),
+      peakSlot('peak_open_dead',  'deadlift', 1, null, { rpeRange: [7.5, 8.5] }),
+    ],
+  },
+  primer: {
+    n: 3,
+    role: 'primer',
+    label: 'Primer',
+    title: 'The primer — 24 to 48 hours out',
+    why: 'Singles at RPE 4, then leave. This is not training and it cannot make you stronger by Friday; it exists so the first attempt is not the first time you have touched a barbell in four days. If any of it feels like work, you have already done enough — rack it and go home.',
+    note: 'Work up to these singles and do nothing else. No accessories, no extra sets, no "one more because it felt light".',
+    slots: [
+      peakSlot('peak_primer_squat', 'squat', 2, 4, { rpeMax: 4 }),
+      peakSlot('peak_primer_bench', 'bench', 2, 4, { rpeMax: 4 }),
+      peakSlot('peak_primer_dead',  'deadlift', 1, 4, { rpeMax: 4 }),
+    ],
   },
 };
 

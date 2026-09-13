@@ -5,8 +5,9 @@
 import { html, raw, esc, icon, $, $$, sheet, toast, confirmSheet, fmtDate, relDays } from '../ui.js';
 import { fmtLoadBare } from '../rpe.js';
 import { activeInsights, PLATEAU_TREE, PAIN_PROTOCOL, FAULTS, STICKING_POINT_PREAMBLE, trainingAgeReport } from '../coach.js';
-import { graduationCheck, templateOf, slotHistory, slotE1RM, loadingWeeks, attemptsFor } from '../program.js';
-import { INTERMEDIATE_PEAK, DELOAD_CHECKLIST } from '../templates.js';
+import { graduationCheck, templateOf, slotHistory, slotE1RM, loadingWeeks, attemptsFor,
+         peakStatus, PEAK_MIN_DAYS } from '../program.js';
+import { DELOAD_CHECKLIST } from '../templates.js';
 import { byId, optionsForSlot } from '../exercises.js';
 import { todayISO } from '../store.js';
 
@@ -62,7 +63,9 @@ function view(ctx) {
         </button>
         <button class="pick" data-tool="meet">
           <div class="pick__body"><div class="pick__title">Peak for a meet</div>
-            <div class="pick__sub">${esc(program.meetDate ? `${fmtDate(program.meetDate)} — ${relDays(program.meetDate)} days out` : 'The four-week cycle, opener practice and the primer session.')}</div></div>
+            <div class="pick__sub">${esc(program.meetDate
+              ? `${fmtDate(program.meetDate)} — ${relDays(program.meetDate)} days out${program.peak ? ' · block running' : ''}`
+              : 'Set a date and the four-week block starts itself when you get there.')}</div></div>
           ${raw(icon('chevron', 'dim'))}
         </button>
         <button class="pick" data-tool="checklist">
@@ -367,6 +370,19 @@ function openMeet(ctx) {
   const p = st.program;
   const units = st.profile.units;
   const out = relDays(p.meetDate);
+  const status = peakStatus(st);
+
+  // The block is not a leaflet any more — the app runs it. So the sheet's job is
+  // to say where in it you are and what happens next, not to hand you a plan to
+  // execute yourself.
+  const statusLine = !status ? null
+    : status.kind === 'running' ? { cls: 'good', t: `Peaking block running — week ${status.week} of ${status.weeks}`, b: 'Your program has already switched. Strength-day mains are at 1-3 reps, week 3 deloads everything that is not contested, and meet week is a taper into the platform. There is nothing for you to turn on.' }
+    : status.kind === 'nextWeek' ? { cls: 'accent', t: 'The peak starts at the end of this week', b: 'Finish the week you are on as written. The switch happens on its own when the week rolls over — no setting to change, and no reason to bring it forward by going heavy early.' }
+    : status.kind === 'waiting' ? { cls: 'info', t: `Normal training for about ${status.startsIn} more day${status.startsIn === 1 ? '' : 's'}`, b: 'The peaking block takes over automatically at the first week boundary inside four weeks. Train the program you are on until then.' }
+    : status.kind === 'tooLate' ? { cls: 'warn', t: 'Too close to peak for', b: `A four-week block needs ${PEAK_MIN_DAYS} days of runway and there are ${status.out}. The app will not start a truncated one — it would taper you for a meet you never trained heavy for. Train normally, take the last four or five days easy, and open conservatively.` }
+    : status.kind === 'done' ? { cls: 'info', t: 'This meet has been peaked for', b: 'Set a new date to arm the next block.' }
+    : status.kind === 'past' ? { cls: 'info', t: 'That date has passed', b: 'Set a new one to arm the next block.' }
+    : null;
 
   // The same function the test day uses, so the sheet and the day the lifter
   // actually walks into cannot disagree — and so every number here is one that
@@ -379,15 +395,20 @@ function openMeet(ctx) {
       <div class="field">
         <label class="field__label" for="md">Meet date</label>
         <input class="input" id="md" type="date" value="${esc(p.meetDate || '')}" data-md>
-        ${p.meetDate ? `<div class="field__hint">${out >= 0 ? `${out} days away` : `${-out} days ago`}. The peaking cycle starts 4 weeks out.</div>` : ''}
+        ${p.meetDate ? `<div class="field__hint">${out >= 0 ? `${out} days away` : `${-out} days ago`}. The peaking cycle starts itself 4 weeks out.</div>` : ''}
       </div>
 
+      ${statusLine ? `<div class="insight insight--${statusLine.cls}">
+        <div class="insight__icon">${icon('bolt')}</div>
+        <div><div class="insight__t">${esc(statusLine.t)}</div><div class="insight__b">${esc(statusLine.b)}</div></div>
+      </div>` : ''}
+
       <div class="stack-sm">
-        <div class="eyebrow">The four-week cycle</div>
+        <div class="eyebrow">The four-week cycle — what the app will do</div>
         ${[
-          ['Weeks 1-2', 'Normal program, except Day 3 squat and bench and Day 4 deadlift drop from 3-5 reps to 1-3. The wave still runs: 3 reps, then 2, then 1.'],
-          ['Week 3', 'Deload everything that is not a competition lift — including your squat and bench variations. Then reshuffle: Day 4 becomes squat, bench, deadlift in meet order, working up to a single at your opener on each. That single lands about 7 days out at RPE 7.5-8.5.'],
-          ['Week 4 (meet week)', 'Deload the competition lifts too. Day 3 is your primer, 24-48 hours out: two singles at RPE 4 on squat, two on bench, one on deadlift, and nothing else. Day 4 is the meet.'],
+          ['Weeks 1-2', 'Your normal program, except Day 3 squat and bench and Day 4 deadlift drop from 3-5 reps to 1-3 — and the bar goes up to meet them, converted off your own week-1 anchor. The wave runs 3 reps, then 2, then 1.'],
+          ['Week 3', 'Everything that is not a competition lift deloads, your squat and bench variations included. Day 4 is replaced: squat, bench, deadlift in meet order, one single at your opener on each, about 7 days out at RPE 7.5-8.5.'],
+          ['Week 4 (meet week)', 'The competition lifts come down too. Day 3 is your primer, 24-48 hours out: two singles at RPE 4 on squat, two on bench, one on deadlift, and nothing else. Day 4 is the meet — nine attempts, logged like a test day, and logging it is what closes the block.'],
         ].map(([k, v]) => `<div class="card card--flat">
           <div class="insight__t" style="font-size:.875rem">${esc(k)}</div>
           <div class="insight__b" style="margin-top:4px">${esc(v)}</div>
@@ -404,7 +425,7 @@ function openMeet(ctx) {
                     : `<td class="r dim" colspan="3">no data</td>`}
           </tr>`).join('')}</tbody>
         </table></div>
-        <p class="cite">Open with your current 3RM, second attempt at your current 2RM, third at the next incremental PR if it is there. Computed from your logged estimated maxes, in ${esc(units)}, and rounded onto your own plates. The Test day button on Today runs exactly these.</p>
+        <p class="cite">Open with your current 3RM, second attempt at your current 2RM, third at the next incremental PR if it is there. Computed from your logged estimated maxes, in ${esc(units)}, and rounded onto your own plates. Week 3's opener rehearsal and meet day itself run exactly these numbers, recomputed on the day.</p>
       </div>
 
       <button class="btn btn--primary btn--block" data-savemeet>Save meet date</button>
