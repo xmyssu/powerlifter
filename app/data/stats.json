@@ -1,18 +1,18 @@
 {
  "v": 1,
- "generatedAt": "2026-09-13T10:49:21.651Z",
+ "generatedAt": "2026-09-14T05:08:58.066Z",
  "athlete": {
   "firstName": null
  },
  "unit": "kg",
  "displayUnit": "kg",
  "totals": {
-  "sessions": 19,
-  "sets": 162,
-  "reps": 835,
-  "tonnage": 66076,
+  "sessions": 20,
+  "sets": 171,
+  "reps": 916,
+  "tonnage": 72070,
   "firstDate": "2026-08-05",
-  "lastDate": "2026-09-13"
+  "lastDate": "2026-09-14"
  },
  "lifts": [
   {
@@ -166,6 +166,12 @@
      "value": 100,
      "deload": false,
      "soft": false
+    },
+    {
+     "date": "2026-09-14",
+     "value": 88.2,
+     "deload": false,
+     "soft": true
     }
    ]
   },
@@ -294,24 +300,34 @@
   }
  ],
  "lastSession": {
-  "date": "2026-09-13",
-  "label": "C2 W1 · Day 0",
+  "date": "2026-09-14",
+  "label": "C2 W1 · Day 1 · Volume",
   "cycle": 2,
   "week": 1,
-  "day": 0,
-  "phase": "test",
-  "sets": 2,
-  "reps": 2,
-  "tonnage": 193,
-  "avgRPE": 9.5,
-  "avgTargetRPE": null,
-  "minutes": 167,
+  "day": 1,
+  "phase": "load",
+  "sets": 9,
+  "reps": 81,
+  "tonnage": 5994,
+  "avgRPE": 7.2,
+  "avgTargetRPE": 7.3,
+  "minutes": 60,
   "unit": "kg",
   "lifts": [
    {
+    "exercise": "Explosive / Speed Squat",
+    "detail": "90×9@7, 90×9@7, 90×9@7",
+    "topKg": 90
+   },
+   {
     "exercise": "Bench Press",
-    "detail": "92.5×1@9, 100×1@10",
-    "topKg": 100
+    "detail": "60×9@7, 60×9@7, 60×9@7",
+    "topKg": 60
+   },
+   {
+    "exercise": "Lat Pulldown",
+    "detail": "72×9@7, 72×9@8, 72×9@8",
+    "topKg": 72
    }
   ],
   "prs": []
@@ -582,6 +598,20 @@
    "avgRPE": 9.5,
    "avgTargetRPE": null,
    "minutes": 167
+  },
+  {
+   "date": "2026-09-14",
+   "label": "C2 W1 · Day 1 · Volume",
+   "cycle": 2,
+   "week": 1,
+   "day": 1,
+   "phase": "load",
+   "sets": 9,
+   "reps": 81,
+   "tonnage": 5994,
+   "avgRPE": 7.2,
+   "avgTargetRPE": 7.3,
+   "minutes": 60
   }
  ],
  "bodyweight": [
