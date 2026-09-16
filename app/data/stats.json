@@ -1,18 +1,18 @@
 {
  "v": 1,
- "generatedAt": "2026-09-15T17:53:03.204Z",
+ "generatedAt": "2026-09-16T05:36:43.552Z",
  "athlete": {
   "firstName": null
  },
  "unit": "kg",
  "displayUnit": "kg",
  "totals": {
-  "sessions": 20,
-  "sets": 171,
-  "reps": 916,
-  "tonnage": 72070,
+  "sessions": 21,
+  "sets": 183,
+  "reps": 960,
+  "tonnage": 75215,
   "firstDate": "2026-08-05",
-  "lastDate": "2026-09-14"
+  "lastDate": "2026-09-16"
  },
  "lifts": [
   {
@@ -75,6 +75,12 @@
     {
      "date": "2026-09-10",
      "value": 150,
+     "deload": false,
+     "soft": false
+    },
+    {
+     "date": "2026-09-16",
+     "value": 144.8,
      "deload": false,
      "soft": false
     }
@@ -172,17 +178,23 @@
      "value": 88.2,
      "deload": false,
      "soft": true
+    },
+    {
+     "date": "2026-09-16",
+     "value": 98.6,
+     "deload": false,
+     "soft": false
     }
    ]
   },
   {
    "lift": "deadlift",
    "label": "Deadlift",
-   "e1rm": 181,
-   "e1rmDate": "2026-09-08",
+   "e1rm": 184.5,
+   "e1rmDate": "2026-09-16",
    "tested": 175.7,
    "testedDate": "2026-09-13",
-   "change28": 1.8,
+   "change28": 5.3,
    "trend": [
     {
      "date": "2026-08-07",
@@ -237,6 +249,12 @@
      "value": 181,
      "deload": false,
      "soft": false
+    },
+    {
+     "date": "2026-09-16",
+     "value": 184.5,
+     "deload": false,
+     "soft": false
     }
    ]
   }
@@ -244,11 +262,11 @@
  "prs": [
   {
    "exercise": "Deadlift",
-   "e1rm": 181,
-   "date": "2026-09-08",
-   "load": 170,
-   "reps": 1,
-   "rpe": 8.5
+   "e1rm": 184.5,
+   "date": "2026-09-16",
+   "load": 145,
+   "reps": 3,
+   "rpe": 5
   },
   {
    "exercise": "Low-Bar Back Squat",
@@ -300,37 +318,53 @@
   }
  ],
  "lastSession": {
-  "date": "2026-09-14",
-  "label": "C2 W1 · Day 1 · Volume",
+  "date": "2026-09-16",
+  "label": "C2 W1 · Day 2 · Technique",
   "cycle": 2,
   "week": 1,
-  "day": 1,
+  "day": 2,
   "phase": "load",
-  "sets": 9,
-  "reps": 81,
-  "tonnage": 5994,
-  "avgRPE": 7.2,
-  "avgTargetRPE": 7.3,
-  "minutes": 60,
+  "sets": 12,
+  "reps": 44,
+  "tonnage": 3145,
+  "avgRPE": 6.5,
+  "avgTargetRPE": 5.8,
+  "minutes": 65,
   "unit": "kg",
   "lifts": [
    {
-    "exercise": "Explosive / Speed Squat",
-    "detail": "90×9@7, 90×9@7, 90×9@7",
-    "topKg": 90
+    "exercise": "Low-Bar Back Squat",
+    "detail": "125×3@8, 110×3@5, 110×3@5",
+    "topKg": 125
    },
    {
     "exercise": "Bench Press",
-    "detail": "60×9@7, 60×9@7, 60×9@7",
-    "topKg": 60
+    "detail": "80×3@6, 80×3@7, 75×3@6",
+    "topKg": 80
    },
    {
-    "exercise": "Lat Pulldown",
-    "detail": "72×9@7, 72×9@8, 72×9@8",
-    "topKg": 72
+    "exercise": "Deadlift",
+    "detail": "145×3@5, 145×3@5, 145×3@5",
+    "topKg": 145
+   },
+   {
+    "exercise": "Dips",
+    "detail": "20×5@10, 0×6@8, 0×6@8",
+    "topKg": 20
    }
   ],
-  "prs": []
+  "prs": [
+   {
+    "exercise": "Bench Press",
+    "gain": 3.064,
+    "e1rm": 98.644
+   },
+   {
+    "exercise": "Deadlift",
+    "gain": 5.267,
+    "e1rm": 184.478
+   }
+  ]
  },
  "sessions": [
   {
@@ -612,6 +646,20 @@
    "avgRPE": 7.2,
    "avgTargetRPE": 7.3,
    "minutes": 60
+  },
+  {
+   "date": "2026-09-16",
+   "label": "C2 W1 · Day 2 · Technique",
+   "cycle": 2,
+   "week": 1,
+   "day": 2,
+   "phase": "load",
+   "sets": 12,
+   "reps": 44,
+   "tonnage": 3145,
+   "avgRPE": 6.5,
+   "avgTargetRPE": 5.8,
+   "minutes": 65
   }
  ],
  "bodyweight": [
