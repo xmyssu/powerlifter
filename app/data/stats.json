@@ -1,18 +1,18 @@
 {
  "v": 1,
- "generatedAt": "2026-09-19T09:28:35.148Z",
+ "generatedAt": "2026-09-21T17:16:45.121Z",
  "athlete": {
   "firstName": null
  },
  "unit": "kg",
  "displayUnit": "kg",
  "totals": {
-  "sessions": 23,
-  "sets": 204,
-  "reps": 1111,
-  "tonnage": 87585,
+  "sessions": 24,
+  "sets": 213,
+  "reps": 1192,
+  "tonnage": 93858,
   "firstDate": "2026-08-05",
-  "lastDate": "2026-09-19"
+  "lastDate": "2026-09-21"
  },
  "lifts": [
   {
@@ -22,7 +22,7 @@
    "e1rmDate": "2026-08-22",
    "tested": 150,
    "testedDate": "2026-09-13",
-   "change28": 1.1,
+   "change28": -6.4,
    "trend": [
     {
      "date": "2026-08-07",
@@ -99,7 +99,7 @@
    "e1rmDate": "2026-09-13",
    "tested": 95,
    "testedDate": "2026-09-13",
-   "change28": 4.4,
+   "change28": 1.5,
    "trend": [
     {
      "date": "2026-08-05",
@@ -196,6 +196,12 @@
      "value": 98.6,
      "deload": false,
      "soft": false
+    },
+    {
+     "date": "2026-09-21",
+     "value": 95.6,
+     "deload": false,
+     "soft": true
     }
    ]
   },
@@ -336,51 +342,41 @@
   }
  ],
  "lastSession": {
-  "date": "2026-09-19",
-  "label": "C2 W1 · Day 4 · Strength",
-  "cycle": 2,
+  "date": "2026-09-21",
+  "label": "C3 W1 · Day 1 · Volume",
+  "cycle": 3,
   "week": 1,
-  "day": 4,
+  "day": 1,
   "phase": "load",
   "sets": 9,
-  "reps": 75,
-  "tonnage": 6690,
-  "avgRPE": 7.8,
-  "avgTargetRPE": 8,
-  "minutes": 72,
+  "reps": 81,
+  "tonnage": 6273,
+  "avgRPE": 7.3,
+  "avgTargetRPE": 7.3,
+  "minutes": 91,
   "unit": "kg",
   "lifts": [
    {
-    "exercise": "Close-Grip Bench Press",
-    "detail": "70×8@7.5, 70×8@7.5, 70×8@8",
-    "topKg": 70
+    "exercise": "Explosive / Speed Squat",
+    "detail": "90×9@7, 90×9@7, 90×9@7",
+    "topKg": 90
    },
    {
-    "exercise": "Deadlift",
-    "detail": "150×5@8, 150×5@8, 150×5@8",
-    "topKg": 150
+    "exercise": "Bench Press",
+    "detail": "65×9@7, 65×9@7, 65×9@7",
+    "topKg": 65
    },
    {
-    "exercise": "Cable Row",
-    "detail": "70×12@6, 80×12@8, 80×12@9.5",
+    "exercise": "Lat Pulldown",
+    "detail": "72×9@7.5, 80×9@8, 80×9@8.5",
     "topKg": 80
    }
   ],
   "prs": [
    {
-    "exercise": "Close-Grip Bench Press",
-    "gain": 1.399,
-    "e1rm": 96.819
-   },
-   {
-    "exercise": "Deadlift",
-    "gain": 5.351,
-    "e1rm": 184.957
-   },
-   {
-    "exercise": "Cable Row",
-    "gain": 5.284,
-    "e1rm": 127.796
+    "exercise": "Lat Pulldown",
+    "gain": 4.9,
+    "e1rm": 113.154
    }
   ]
  },
@@ -706,6 +702,20 @@
    "avgRPE": 7.8,
    "avgTargetRPE": 8,
    "minutes": 72
+  },
+  {
+   "date": "2026-09-21",
+   "label": "C3 W1 · Day 1 · Volume",
+   "cycle": 3,
+   "week": 1,
+   "day": 1,
+   "phase": "load",
+   "sets": 9,
+   "reps": 81,
+   "tonnage": 6273,
+   "avgRPE": 7.3,
+   "avgTargetRPE": 7.3,
+   "minutes": 91
   }
  ],
  "bodyweight": [
