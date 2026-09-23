@@ -93,8 +93,18 @@ function strengthTab(st) {
         </div>` : ''}
       </div>
 
-      ${points.some((p) => p.estimatedFromHighReps)
-        ? `<p class="cite" style="margin-top:10px">Some points come from sets above six reps. The book only trusts estimates from about a five-rep set or heavier — read those with suspicion.</p>` : ''}
+      ${points.some((p) => p.estimatedFromHighReps || p.submax || p.deload) ? `<p class="cite" style="margin-top:10px">${
+        [points.some((p) => p.estimatedFromHighReps)
+          ? 'Some points come from sets above six reps, and the book only trusts estimates from about a five-rep set or heavier.'
+          : null,
+         points.some((p) => p.submax)
+          ? 'Some come from technique or primer work, which is prescribed at RPE 5 and so reads a max by extrapolating a long way — a half-point misjudgement there moves the estimate more than a hard triple ever would.'
+          : null,
+         points.some((p) => p.deload)
+          ? 'Deload weeks are light by design and dip for that reason.'
+          : null,
+        ].filter(Boolean).map(esc).join(' ')
+      } They are all plotted, and none of them count towards the change, trend or best above.</p>` : ''}
 
       <button class="btn btn--ghost btn--block" style="margin-top:12px" data-detail="${key}">All sets</button>
     </div>`;

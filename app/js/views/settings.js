@@ -4,7 +4,7 @@
 
 import { html, raw, esc, icon, $, $$, sheet, toast, confirmSheet, fmtDate, restoreSheet } from '../ui.js';
 import { PLATE_PRESETS, fmtLoadBare, plateLabel, minIncrement, isLadder, e1RM, normalizeRPE, parseNum } from '../rpe.js';
-import { templateOf, buildProgram, volumeAudit, convertUnits } from '../program.js';
+import { templateOf, buildProgram, volumeAudit, convertUnits, workingMaxDetail } from '../program.js';
 import { EMPHASIS, TEMPLATES, INTERMEDIATE_PL, INTERMEDIATE_PL_3DAY, ADVANCED_ACCUMULATION, ADVANCED_INTENSIFICATION } from '../templates.js';
 import { optionsForSlot, SLOT_INFO, byId } from '../exercises.js';
 import { todayISO } from '../store.js';
@@ -16,6 +16,33 @@ const LIFTS = [
   { key: 'bench', label: 'Bench press' },
   { key: 'deadlift', label: 'Deadlift' },
 ];
+
+/**
+ * One lift: the max on record, and what the engine is actually prescribing from.
+ *
+ * Shown side by side on purpose. They are usually the same and occasionally are
+ * not, and the times they are not are exactly the times a lifter needs to see
+ * it — the app holding a number down under a missed attempt is the right
+ * behaviour, but only if it says so where the number lives.
+ */
+function maxRow(st, key, label, units) {
+  const rec = st.maxes[key] || {};
+  const wm = workingMaxDetail(st, key);
+  const same = wm && Math.abs(wm.value - (rec.value ?? NaN)) < 0.05;
+  // A max is an estimate, not something anyone loads, so it is shown to a tenth
+  // rather than put through the plate formatter — which renders a 175.7 kg
+  // deadlift as "175.70".
+  const tenth = (v) => (v == null || !Number.isFinite(Number(v)) ? '—' : String(+Number(v).toFixed(1)));
+  const why = wm?.basis === 'miss' ? `held under the ${tenth(wm.cappedBy.load)} you missed`
+    : wm?.basis === 'tested' ? 'held to your tested max'
+    : 'from your recent sets';
+  return `<div class="kv">
+    <span class="kv__k">${esc(label)}
+      <span class="tiny dim">${rec.date ? esc(fmtDate(rec.date)) : ''}</span></span>
+    <span class="kv__v mono">${esc(tenth(rec.value))} ${esc(units)}
+      ${wm && !same ? `<span class="tiny dim">working ${esc(tenth(wm.value))} — ${esc(why)}</span>` : ''}</span>
+  </div>`;
+}
 
 function view(ctx) {
   const st = ctx.state;
@@ -54,14 +81,13 @@ function view(ctx) {
       <div class="stack-sm">
         <div class="eyebrow">Your maxes</div>
         <div class="card">
-          ${raw(LIFTS.map(({ key, label }) => `<div class="kv">
-            <span class="kv__k">${esc(label)}</span>
-            <span class="kv__v mono">${fmtLoadBare(st.maxes[key]?.value)} ${esc(p.units)}
-              <span class="tiny dim">${st.maxes[key]?.date ? esc(fmtDate(st.maxes[key].date)) : ''}</span></span>
-          </div>`).join(''))}
+          ${raw(LIFTS.map(({ key, label }) => maxRow(st, key, label, p.units)).join(''))}
         </div>
         <button class="btn btn--ghost btn--block" data-act="maxes">Update maxes</button>
-        <p class="cite">These only seed your very first week. After that every load comes from what you have logged.</p>
+        <p class="cite">Every load in the program is built from these. What the app is <em>working</em> from is on the
+          right: it starts from your own recent sets, is held to what a tested max can have grown into since the day
+          you tested it, and is held under anything you have loaded and missed in the last three weeks. If a working
+          number looks wrong, the max above it is the thing to correct.</p>
       </div>
 
       <div class="stack-sm">

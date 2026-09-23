@@ -200,6 +200,7 @@ function exerciseCard(entry, resolved, i, st, ses) {
       ${nextIdx === 0 && !resolved.isTest && !resolved.isMeet ? warmupStrip(entry, st) : ''}
       ${slot?.loadNote && nextIdx === 0 ? `<p class="cite" style="margin-bottom:10px">${esc(slot.loadNote)}</p>` : ''}
       ${coarseNote(slot, st)}
+      ${impliedRPENote(slot, entry, units)}
       ${rpeCheckNote(slot, entry, units)}
       ${loadStepper(entry, st, { attempts: resolved.isTest || resolved.isMeet, index: Math.max(0, nextIdx), platform: !!resolved.isMeet })}
       <div class="sets">
@@ -359,6 +360,39 @@ function coarseNote(slot, st) {
   if (slot.gridStep <= slot.increment + 1e-9) return '';
   const weeks = Math.ceil(slot.gridStep / slot.increment);
   return `<p class="cite" style="margin-bottom:10px">The smallest jump here is ${fmtLoadBare(slot.gridStep)} ${esc(st.profile.units)} — about ${weeks} weeks of this lift's ${fmtLoadBare(slot.increment)} ${esc(st.profile.units)} increment. The weight holds and then steps; that is the progression working, not stalling. Add reps inside the range rather than weight while it holds.</p>`;
+}
+
+/** How far above its own target RPE a prescribed load may sit before it is worth saying. */
+const IMPLIED_RPE_SLACK = 1;
+
+/**
+ * If the weight on the card is heavier than the RPE on the card, say so before
+ * the set.
+ *
+ * Every other check on this screen compares the prescription against the
+ * lifter's logged RPEs, which is the wrong way round when the logged RPEs are
+ * the thing that has drifted. A load prescribed at RPE 5, completed, and then
+ * logged at RPE 5 agrees with itself perfectly while being an RPE 8 triple.
+ * This compares it against the working max instead — the one figure the program
+ * cannot talk itself into — and does it before the bar is loaded rather than
+ * three cycles later.
+ *
+ * Only in the heavy direction. "Your recent sets say you could do more" is a
+ * real thing to tell someone, but `rpeCheckNote` already tells them, off this
+ * slot's own comparable sets rather than off a cross-slot max, which is the
+ * better comparison for it. Firing here as well turned one competition-lift slot
+ * in ten into a warning; kept to the direction nothing else covers, it is three
+ * in a thousand, and every one of them is a load the lifter should question.
+ */
+function impliedRPENote(slot, entry, units) {
+  const target = entry.targetRPE ?? (entry.rpeRange ? (entry.rpeRange[0] + entry.rpeRange[1]) / 2 : null);
+  if (!slot?.impliedRPE || target == null || !entry.plannedLoad) return '';
+  if (slot.impliedRPE - target <= IMPLIED_RPE_SLACK) return '';
+  return `<div class="banner banner--warn" style="margin-bottom:12px">
+    <b>Check this weight.</b> ${fmtLoadBare(entry.plannedLoad)} ${esc(units)} × ${entry.targetReps} is RPE
+    ${fmtRPE(slot.impliedRPE)} against your current max, and this slot is asking for RPE ${fmtRPE(target)}.
+    Take it down until the two agree — the RPE is the prescription and the weight is only the app's guess at it.
+  </div>`;
 }
 
 /** If the lifter's own RPE data disagrees with the wave, say so plainly. */

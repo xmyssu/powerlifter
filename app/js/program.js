@@ -14,7 +14,8 @@ import { TEMPLATES, INTERMEDIATE_PL, INTERMEDIATE_PEAK, PEAK_DAYS, EMPHASIS,
          incrementFor, assessDeload, TEST_DAY, WARMUP } from './templates.js';
 import { SLOT_DEFAULTS, byId } from './exercises.js';
 import { e1RM, loadFor, roundToLoadable, pctOf1RM, normalizeRPE, convertLoad, loadBand, minIncrement,
-         loadStep, gridFloor, isLadder, RPE_TOLERANCE, PLATE_PRESETS, KG_PER_LB } from './rpe.js';
+         loadStep, gridFloor, isLadder, rpeFor, fmtLoadBare, RPE_TOLERANCE, PLATE_PRESETS,
+         KG_PER_LB } from './rpe.js';
 import { todayISO, uid } from './store.js';
 
 /* ---- construction ----------------------------------------------------- */
@@ -284,10 +285,11 @@ export function slotHistory(state, slotKey) {
       // and it belongs in the log. It is not a set, though: there is no rep to
       // estimate from and nothing to compare against a prescription, so it never
       // reaches the progression engine. `missedAttempts` is where it surfaces.
-      const sets = (e.sets || [])
+      const logged = (e.sets || [])
         .filter((x) => x.done && !x.failed && x.load > 0 && x.reps > 0)
         .map((x) => (from === to ? x : { ...x, load: convertLoad(x.load, from, to) }));
-      if (!sets.length) continue;
+      if (!logged.length) continue;
+      const sets = gradeSets(logged, e);
       out.push({
         sessionId: s.id,
         date: s.date,
@@ -303,7 +305,7 @@ export function slotHistory(state, slotKey) {
         sets,
         topSet: sets.reduce((a, b) => (b.load > a.load ? b : a), sets[0]),
         firstSet: sets[0],
-        best1RM: Math.max(...sets.map((x) => e1RM(x.load, x.reps, x.rpe ?? e.targetRPE ?? 8) || 0)),
+        best1RM: Math.max(...sets.map((x) => e1RM(x.load, x.reps, x.effRPE) || 0)),
         // The same figure restricted to sets short enough to estimate from, plus
         // the rep count it came off. Callers that are about to prescribe a load
         // need both: an estimate drawn from a set of twelve is only good for
@@ -352,20 +354,109 @@ export function missedAttempts(state, { lift = null, since = null } = {}) {
   return out.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
 }
 
-/** Which competition lift a slot key trains, across the template and the extras. */
-function liftOfSlot(state, slotKey) {
+/** Where a slot lives — its day and its definition — across the template, the peak and the test day. */
+function slotContext(state, slotKey) {
   const tpl = templateOf(state.program);
   for (const d of tpl.days) {
     const f = d.slots.find((x) => x.key === slotKey);
-    if (f) return f.lift || null;
+    if (f) return { day: d, slot: f };
   }
   const t = TEST_DAY.slots.find((x) => x.key === slotKey);
-  if (t) return t.lift;
+  if (t) return { day: TEST_DAY, slot: t };
   for (const d of Object.values(PEAK_DAYS)) {
     const f = d.slots.find((x) => x.key === slotKey);
-    if (f) return f.lift;
+    if (f) return { day: d, slot: f };
   }
   return null;
+}
+
+/** Which competition lift a slot key trains, across the template and the extras. */
+function liftOfSlot(state, slotKey) {
+  return slotContext(state, slotKey)?.slot.lift || null;
+}
+
+/** The RPE a slot is actually asked for: a single target, a cap, or the middle of a range. */
+export function slotTargetRPE(slot) {
+  if (slot?.rpeMax != null) return slot.rpeMax;
+  if (slot?.rpe != null) return slot.rpe;
+  if (slot?.rpeRange) return (slot.rpeRange[0] + slot.rpeRange[1]) / 2;
+  return null;
+}
+
+/**
+ * At or below this, the program is asking for easy work rather than for an
+ * effort. RPE 6 is four or more reps in reserve; the intermediate technique day
+ * is written at 5 and the primer at 4, while the lightest thing that is actually
+ * trying — the volume day — sits at 7.
+ */
+export const SUBMAXIMAL_RPE = 6;
+
+/**
+ * Work the program prescribes to be easy, and therefore cannot learn anything
+ * from.
+ *
+ * Technique days, primer days, and anything a template flags `technique`. Two
+ * things follow, and they are one fact seen from either side:
+ *
+ *  - **It can never be a stall.** `completeSession` already says exactly this:
+ *    the work is "meant to stay submaximal forever", so coming up short of it
+ *    means nothing about the lifter.
+ *  - **It can never be a max.** A set prescribed at RPE 5 is not a measurement
+ *    of what someone can do, for precisely the reason `slotE1RMDetail` already
+ *    gives for a deload week and for meet week.
+ *
+ * The first half was implemented and the second was not, and the gap between
+ * them is what broke. See `plannedLoad` and `bestEstimateFor`.
+ */
+export function isSubmaximalSlot(state, slotKey) {
+  const ctx = slotContext(state, slotKey);
+  return ctx ? isSubmaximalWork(ctx.day, ctx.slot) : false;
+}
+
+const SUBMAXIMAL_ROLES = new Set(['technique', 'primer']);
+
+/** The same question asked with the day and slot already in hand. */
+function isSubmaximalWork(day, slot) {
+  // The opener day is a technique-adjacent single at RPE 8 seven days out, and
+  // it says so itself. It is the one light-looking day that does measure.
+  if (day?.countsForMax) return false;
+  if (slot?.technique) return true;
+  if (!SUBMAXIMAL_ROLES.has(day?.role)) return false;
+  // An accessory that happens to share a day with technique work is not
+  // technique work: a row at RPE 6-8 on day 3 is trying, and it can stall.
+  const rpe = slotTargetRPE(slot);
+  return rpe != null && rpe <= SUBMAXIMAL_RPE;
+}
+
+/**
+ * The same sets, each RPE read in the light of the ones that came before it.
+ *
+ * Fatigue only accumulates inside a session. A set at the same load as an
+ * earlier one — or heavier — cannot have been *easier* than that set was, so
+ * when one is logged as easier, one of the two ratings is wrong. The earlier one
+ * is the one to believe: it was made fresher, against the same bar.
+ *
+ * This is not hypothetical. A deadlift slot logged `140x3 @5, 150x3 @7,
+ * 150x3 @5` and the engine read the third set as the best of the three,
+ * estimating a 190.8 kg max eleven days after 180 kg was loaded and missed. The
+ * squat in the same session went `130x3 @5, 130x3 @7.5, 120x3 @5`. Taking the
+ * maximum across sets does not average that kind of noise out — it selects for
+ * it every time, because the mis-rating is always the flattering one.
+ *
+ * `effRPE` is what every estimate is computed from; `rpe` is left exactly as it
+ * was logged. This corrects a reading, it does not rewrite the lifter's log.
+ */
+export function gradeSets(sets, entry) {
+  const fallback = entry?.targetRPE ?? 8;
+  const out = [];
+  for (const set of sets) {
+    let eff = set.rpe ?? fallback;
+    for (const prev of out) {
+      if (prev.load <= set.load + 1e-9 && prev.effRPE > eff) eff = prev.effRPE;
+    }
+    out.push({ ...set, effRPE: eff });
+  }
+  return out;
 }
 
 /**
@@ -379,7 +470,7 @@ function liftOfSlot(state, slotKey) {
  * estimate go down.
  */
 function reliableOf(sets, entry) {
-  const est = (x) => e1RM(x.load, x.reps, x.rpe ?? entry.targetRPE ?? 8) || 0;
+  const est = (x) => e1RM(x.load, x.reps, x.effRPE ?? x.rpe ?? entry.targetRPE ?? 8) || 0;
   const good = sets.filter((x) => x.reps <= RELIABLE_E1RM_REPS);
   if (good.length) {
     return {
@@ -469,22 +560,28 @@ export function lastComparable(state, slotKey, { reps = null, excludeSessionId =
 /* ---- max testing ------------------------------------------------------ */
 
 /**
- * The best current estimate for a competition lift, across every slot that
- * trains it.
+ * The best estimate a competition lift's *measuring* work supports.
  *
  * A lift is trained in more than one place — the squat appears on the technique
- * day and the strength day — and the strength day is the one that knows what you
- * can actually do. Taking the best across slots picks that up without having to
- * name which slot matters.
+ * day and the strength day — and only some of those places can measure it.
+ * The strength day is the one that knows what you can actually do; the technique
+ * day was written to be easy, so what it says about the lifter is whatever the
+ * RPE guess says, divided by a number close to 0.78. See `isSubmaximalSlot`.
  */
-export function bestMaxFor(state, lift) {
+export function bestEstimateDetail(state, lift) {
   const tpl = templateOf(state.program);
-  let best = 0;
+  let best = null;
+  const consider = (key) => {
+    const d = slotE1RMDetail(state, key);
+    if (!d?.value) return;
+    // A reliable reading beats an unreliable one outright, however big the
+    // unreliable one is — that is the whole point of the distinction.
+    if (!best || (d.reliable && !best.reliable) || (d.reliable === best.reliable && d.value > best.value)) best = d;
+  };
   for (const d of tpl.days) {
     for (const slot of d.slots) {
-      if (slot.lift !== lift) continue;
-      const e = slotE1RM(state, slot.key);
-      if (e && e > best) best = e;
+      if (slot.lift !== lift || isSubmaximalWork(d, slot)) continue;
+      consider(slot.key);
     }
   }
   // A logged single beats any estimate drawn from a triple. Peak week 3's opener
@@ -497,11 +594,167 @@ export function bestMaxFor(state, lift) {
       .filter((d) => d.countsForMax)
       .flatMap((d) => d.slots.filter((x) => x.lift === lift).map((x) => x.key)),
   ];
-  for (const key of singleKeys) {
-    const e = slotE1RM(state, key);
-    if (e && e > best) best = e;
+  for (const key of singleKeys) consider(key);
+  return best;
+}
+
+/** The estimate alone, without the reconciliation `workingMaxDetail` does. */
+export function bestEstimateFor(state, lift) {
+  return bestEstimateDetail(state, lift)?.value ?? null;
+}
+
+/**
+ * How long a missed attempt stands as evidence about a weight.
+ *
+ * Three weeks is roughly a mesocycle: long enough that the app is not handing
+ * back a weight the lifter has just failed, short enough that it is not still
+ * holding it against them after a whole cycle of training.
+ */
+export const MISS_MEMORY_DAYS = 21;
+
+/**
+ * Which recorded maxes count as observations rather than as estimates.
+ *
+ * `tested` is written by a logged test day or meet; `entered` is the lifter
+ * saying, at onboarding, that they know this number because they have done it.
+ * `estimated` is an e1RM — the app's or theirs — and is not in the same class.
+ */
+const MEASURED_MAX = new Set(['tested', 'entered']);
+
+/** How fast this lift moves, in the program's own opinion, per week. */
+function driftPerWeek(state, lift) {
+  const tpl = templateOf(state.program);
+  let slot = null;
+  for (const d of tpl.days) {
+    for (const x of d.slots) {
+      if (x.lift !== lift || isSubmaximalWork(d, x)) continue;
+      if (d.role === 'strength' && x.role === 'main') slot = slot || x;
+    }
   }
-  return best || state.maxes?.[lift]?.value || null;
+  if (!slot) return 0;
+  // One weekly increment per completed cycle at a matched rep target — which is
+  // not a guess, it is literally what `startNextCycle` adds and what the engine
+  // test pins: "one cycle = +5 kg at the same rep target".
+  return incrementOf(slot, state.program, state.profile.units) / Math.max(1, loadingWeeks(state.program));
+}
+
+/** Every completed set on a lift, across every slot that trains it. */
+function completedOn(state, lift) {
+  const tpl = templateOf(state.program);
+  const keys = [...TEST_DAY.slots, ...Object.values(PEAK_DAYS).flatMap((d) => d.slots),
+                ...tpl.days.flatMap((d) => d.slots)]
+    .filter((x) => x.lift === lift).map((x) => x.key);
+  const out = [];
+  for (const key of new Set(keys)) {
+    for (const h of slotHistory(state, key)) for (const set of h.sets) out.push({ ...set, date: h.date });
+  }
+  return out;
+}
+
+/**
+ * The max every prescription is built from — and the one number in this app
+ * that is not allowed to flatter the lifter.
+ *
+ * `bestEstimateFor` is an extrapolation: it takes a set of three and a rating
+ * out of ten and reads a one-rep max off a table. That is fine for a trend line
+ * and dangerous as a prescription, because the errors are not symmetric. Every
+ * way an RPE can be wrong in the lifter's favour — calling a hard triple RPE 5,
+ * a good day, warming into the third set — raises the estimate; the raised
+ * estimate then picks the next load; and that load is graded on the same
+ * optimistic scale. Nothing inside that loop ever pushes back on it.
+ *
+ * Two things from outside it do push back, and both are already on record:
+ *
+ *  - **A tested max.** A weight that went up under a measured attempt — logged
+ *    on a test day, or stated by the lifter as something they have actually
+ *    done. It is the only figure here that was observed rather than inferred, so
+ *    it sets the ceiling: the working max may pass it, but only by as much as
+ *    the program itself claims this lift can gain in the time since, which is
+ *    one weekly increment per cycle. A figure the app or the lifter *estimated*
+ *    is a starting point and not a ceiling — it is the same kind of guess as the
+ *    number it would be constraining, and freezing one guess behind another is
+ *    how a lifter who never runs a test day stops being able to progress at all.
+ *
+ *  - **A missed attempt.** A bar that was loaded and did not move is proof of the
+ *    opposite kind, and it outranks any estimate: you cannot have a 190.8 kg max
+ *    eleven days after failing 180. `milestones` already refuses to call a
+ *    recently-missed weight "in range", and says why at length; this applies the
+ *    same finding to the number that chooses the loads. A miss stops counting
+ *    once it expires, or once the lifter completes a rep at that weight or more
+ *    — that is the difference between a bad day and a wall.
+ *
+ * Returns { value, basis, estimate, reliable, tested, recorded, ceiling, cappedBy }
+ * or null — `value` is the figure to prescribe from and `basis` says which of
+ * the three arguments above won.
+ */
+export function workingMaxDetail(state, lift, { today = todayISO() } = {}) {
+  const est = bestEstimateDetail(state, lift);
+  const rec = state.maxes?.[lift];
+  const known = rec?.value > 0 ? { ...rec, value: Number(rec.value) } : null;
+  // Only a measured attempt with a date on it can act as a ceiling: without the
+  // date there is no elapsed time to allow progress over, and a value that was
+  // itself estimated has no more authority than the estimate it would be capping.
+  const tested = known && known.date && MEASURED_MAX.has(known.source) ? known : null;
+  if (!est && !known) return null;
+
+  // An estimate drawn from a set too long to estimate from does not get to
+  // overrule a measured attempt. `slotE1RMDetail` already marks those `soft` and
+  // explains why; a nine-rep bench read as a 1RM is a reading on the lifter's
+  // endurance, and it has no business moving the number that picks their singles.
+  const usable = est && (est.reliable || !tested) ? est.value : null;
+
+  let value = usable ?? known.value;
+  let basis = usable ? 'estimate' : 'tested';
+  let ceiling = null;
+
+  if (tested) {
+    const weeks = tested.date ? Math.max(0, -daysUntil(tested.date, today)) / 7 : 0;
+    ceiling = tested.value + driftPerWeek(state, lift) * weeks;
+    if (value > ceiling) { value = ceiling; basis = 'tested'; }
+  }
+
+  // The lowest recent miss that the lifter has not since answered with a rep.
+  let cappedBy = null;
+  const step = state.profile?.units === 'lb' ? 5 : 2.5;
+  const recent = missedAttempts(state, { lift }).filter((m) => -daysUntil(m.date, today) <= MISS_MEMORY_DAYS);
+  const completed = recent.length ? completedOn(state, lift) : [];
+  for (const miss of recent) {
+    if (completed.some((x) => x.date > miss.date && x.load >= miss.load - 1e-9)) continue;
+    const cap = miss.load - step;
+    if (cap < value) { value = cap; basis = 'miss'; cappedBy = miss; }
+  }
+
+  return { value: +value.toFixed(2), basis, estimate: est?.value ?? null, reliable: !!est?.reliable,
+           tested, recorded: known, ceiling, cappedBy };
+}
+
+/**
+ * The best current figure for a competition lift, honest about what it rests on.
+ *
+ * Every load and every attempt in the app is built from this. See
+ * `workingMaxDetail` for why it is not simply the largest estimate on record.
+ */
+export function bestMaxFor(state, lift) {
+  return workingMaxDetail(state, lift)?.value ?? null;
+}
+
+/**
+ * Where a working max came from, as a phrase that fits inside the note under a
+ * load — because a lifter who is handed a number is owed the reason for it, and
+ * because the reason is the only way they can tell the app it is wrong.
+ */
+export function maxBasisLabel(detail, lift) {
+  if (!detail) return null;
+  // A max is an estimate rather than something anyone loads, so it is shown to a
+  // tenth and is not snapped to the plate grid.
+  const v = String(+detail.value.toFixed(1));
+  if (detail.basis === 'miss') {
+    return `your ${lift} max, ${v} — held under the ${fmtLoadBare(detail.cappedBy.load)} you loaded and missed on ${detail.cappedBy.date}`;
+  }
+  if (detail.basis === 'tested') {
+    return `your tested ${lift} max, ${v}${detail.tested?.date ? ` from ${detail.tested.date}` : ''}`;
+  }
+  return `your ${lift} max, ${v}, estimated from your recent sets`;
 }
 
 /**
@@ -1193,7 +1446,8 @@ export function resolveDay(state, { cycle, week, day, phase } = {}) {
     if (peakThinned) sets = peakSetsFor(slot, program, peak?.kind);
 
     // --- load --------------------------------------------------------
-    const plan = plannedLoad({ state, program, slot, week: waveWeek, isDeload: slotDeload, repsRaised, inc, pct, reps, targetRPE, rpeRange });
+    const plan = plannedLoad({ state, program, slot, week: waveWeek, isDeload: slotDeload, repsRaised,
+                               inc, pct, reps, targetRPE, rpeRange, submaximal: isSubmaximalWork(dayDef, slot) });
     const planned = plan.load == null ? null : roundToLoadable(plan.load, loadOpts);
     const loadRange = bandFor(planned, reps, targetRPE, rpeRange, loadOpts);
 
@@ -1227,6 +1481,29 @@ export function resolveDay(state, { cycle, week, day, phase } = {}) {
        * says otherwise.
        */
       gridStep: loadStep(loadOpts),
+      /**
+       * What the prescribed load actually asks for, measured against the
+       * lifter's working max rather than against the machinery that produced it.
+       *
+       * The two can drift apart, and when they do nothing downstream notices: a
+       * load is prescribed, the lifter completes it, the target RPE is written
+       * into the log beside it, and the app reads its own prescription back as
+       * evidence. That is how a day written at RPE 5 came to be asking for 87%
+       * of a tested max. The engine no longer produces that particular drift,
+       * but the check is cheap and it is the only thing in here that can catch
+       * the next one.
+       *
+       * Only computed up to `RELIABLE_E1RM_REPS`, and for the same reason that
+       * constant exists everywhere else: past about six reps the table stops
+       * describing individuals. Rep endurance varies far more between lifters
+       * than maximal strength does, so a nine-rep set the lifter has settled on
+       * by feel reads as RPE 4 against a max the table derived from their
+       * triples. Left unrestricted this fired on one competition-lift slot in
+       * six, almost all of them the volume day's bench, and a warning that
+       * common is one nobody reads by the time it is true.
+       */
+      impliedRPE: slot.lift && planned && reps && reps <= RELIABLE_E1RM_REPS
+        ? rpeFor(bestMaxFor(state, slot.lift), planned, reps) : null,
       loadSource: plan.source,
       loadNote: plan.note,
       rpeCheckLoad: plan.rpeCheck == null ? null : roundToLoadable(plan.rpeCheck, loadOpts),
@@ -1255,12 +1532,15 @@ export function resolveDay(state, { cycle, week, day, phase } = {}) {
 
 /**
  * Where the suggested load comes from, in priority order:
+ *   0. work that is submaximal by prescription: a percentage of the working max,
+ *      recomputed every week and never waved
  *   1. the wave anchor from this cycle's week 1, plus one increment per week
- *   2. the %1RM reference against a known competition max
+ *   2. the %1RM reference against the working max
  *   3. what your own recent RPE data implies for these reps at this RPE
  *   4. nothing — you work up by feel and the app learns from it
  */
-function plannedLoad({ state, program, slot, week, isDeload, repsRaised, inc, pct, reps, targetRPE, rpeRange }) {
+function plannedLoad({ state, program, slot, week, isDeload, repsRaised, inc, pct, reps, targetRPE, rpeRange,
+                       submaximal = false }) {
   const st = program.slots[slot.key] || {};
   const hist = slotHistory(state, slot.key);
   const last = hist.length ? hist[hist.length - 1] : null;
@@ -1279,9 +1559,45 @@ function plannedLoad({ state, program, slot, week, isDeload, repsRaised, inc, pc
   //    the reps you measured and compounds when you do not, so an unreliable
   //    estimate may only speak near its own rep count.
   const canCheck = detail && (detail.reliable || Math.abs(detail.fromReps - reps) <= 2);
-  const rpeCheck = !isDeload && canCheck && est && reps && targetForRPE
+  const rpeCheck = !isDeload && !submaximal && canCheck && est && reps && targetForRPE
     ? loadFor(est, reps, targetForRPE)
     : null;
+
+  // 0. Work the program prescribes to be easy is pinned to the lifter's max and
+  //    recomputed from scratch every week. It is never waved.
+  //
+  //    A wave is a ratchet. It adds an increment a week and relies on a set
+  //    failing to tell it when to stop — which is why `completeSession` can
+  //    afford to exempt this work from stalls: three triples at RPE 8 are
+  //    perfectly completable, so there is nothing here that *can* fail. What
+  //    that leaves is a ratchet with nothing pushing back on it. Left alone it
+  //    climbed 5 kg a week and another 5 kg a cycle against a max that moves
+  //    about 5 kg a cycle in total, and three cycles in, a day labelled "RPE 5 —
+  //    deliberately easy" was asking for triples at 87% of a tested max: RPE 8,
+  //    on the day whose entire purpose is to add skill without adding fatigue.
+  //
+  //    Pinned to the max it finally behaves the way the day is described. The
+  //    load moves when the lifter gets stronger, and not because a week passed.
+  if (submaximal && slot.lift) {
+    const max = workingMaxDetail(state, slot.lift);
+    // Two ceilings, and the lower one wins. `pct` is the book's printed band for
+    // the slot; `rpePct` is what the slot's own RPE target allows. They disagree
+    // by half a point of RPE at the top of the range, and on a day that exists
+    // to stay at RPE 5 the RPE is the promise being made.
+    const rpePct = reps && targetForRPE ? pctOf1RM(reps, targetForRPE) : null;
+    const p = pct == null ? rpePct : (rpePct == null ? pct : Math.min(pct, rpePct));
+    if (max?.value && p != null) {
+      return {
+        load: (max.value * p) / 100,
+        source: 'submax',
+        note: `${+p.toFixed(1)}% of ${maxBasisLabel(max, slot.lift)}. This work is meant to stay at RPE `
+            + `${normalizeRPE(targetForRPE)} forever, so it tracks your max rather than climbing week to week — `
+            + `it moves when you get stronger, not when a week goes by.`,
+        rpeCheck: null,
+        lastTime: last,
+      };
+    }
+  }
 
   // A high-rep week has to leave the wave behind: the anchor was chosen for a
   // set of five, and this is a set of twelve at the same RPE. Scale it through
@@ -1326,14 +1642,14 @@ function plannedLoad({ state, program, slot, week, isDeload, repsRaised, inc, pc
     };
   }
 
-  // 2. %1RM reference against a tested max
+  // 2. %1RM reference against the working max
   if (pct != null && slot.lift) {
-    const max = state.maxes[slot.lift]?.value;
-    if (max) {
+    const max = workingMaxDetail(state, slot.lift);
+    if (max?.value) {
       return {
-        load: (max * pct) / 100,
+        load: (max.value * pct) / 100,
         source: 'pct',
-        note: `${pct}% of your ${slot.lift} max — a reference. Adjust so set 1 lands on the target RPE.`,
+        note: `${pct}% of ${maxBasisLabel(max, slot.lift)} — a reference. Adjust so set 1 lands on the target RPE.`,
         rpeCheck,
         lastTime: last,
       };
@@ -1640,6 +1956,8 @@ export function completeSession(state, sessionId) {
     return { state, notes };
   }
 
+  const sessionDay = tpl.days.find((d) => d.n === session.day);
+
   for (const entry of session.entries) {
     const slot = findSlot(tpl, entry.slotKey);
     if (!slot) continue;
@@ -1651,8 +1969,11 @@ export function completeSession(state, sessionId) {
 
     const grid = loadOptsFor(state, entry.exerciseId);
 
-    // The week-1 load of a cycle is the anchor the whole wave is built from.
-    if (session.week === 1 && session.phase === 'load') {
+    // The week-1 load of a cycle is the anchor the whole wave is built from —
+    // for the work that waves. Submaximal work is prescribed off the max every
+    // week (see `plannedLoad`), so it has no anchor to set, and writing one
+    // anyway would leave a stale number for `startNextCycle` to march upward.
+    if (session.week === 1 && session.phase === 'load' && !isSubmaximalWork(sessionDay, slot)) {
       // Only overwritten when the lifter actually chose a different weight.
       // The anchor is carried unrounded on purpose (see `startNextCycle`): a
       // halved increment, or a weekly increment smaller than one notch of a
@@ -1669,7 +1990,7 @@ export function completeSession(state, sessionId) {
       // Technique work is meant to stay submaximal forever, so falling short of
       // it is never a stall. On the 4-day that is a whole day; on the 3-day the
       // same sets are folded into other days, so the slot flag has to count too.
-      const isTechniqueDay = tpl.days.find((d) => d.n === session.day)?.role === 'technique';
+      const isTechniqueDay = sessionDay?.role === 'technique';
       if (!isTechniqueDay && !slot.technique) {
         const short = entryShortfall(entry, { step: loadStep(grid) });
         const name = byId(entry.exerciseId)?.short || entry.slotKey;
@@ -1983,6 +2304,11 @@ export function startNextCycle(state, { intoPeak = false } = {}) {
         // progression for the week. See `peakAnchor`. Safe to read the old rep
         // range here — `program.peak` is not set until the loop has finished.
         st.week1Load = peakAnchor(slot, program, st);
+      } else if (st.week1Load && isSubmaximalWork(day, slot)) {
+        // Submaximal work does not progress on a calendar: it is a percentage of
+        // the lifter's max and it moves when the max does. Adding an increment
+        // here is what turned "RPE 5 — deliberately easy" into an RPE 8 triple
+        // over three cycles, with nothing able to stall and pull it back.
       } else if (st.week1Load) {
         // Deliberately NOT snapped to the plate grid, unlike the stall reset
         // above. After a stall the weekly increment is halved (2.5 kg, 5 lb),

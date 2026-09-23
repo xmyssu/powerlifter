@@ -19,7 +19,7 @@
 import * as store from './store.js';
 import { todayISO } from './store.js';
 import { convertLoad, e1RM, fmtLoadBare, fmtRPE, loadStep } from './rpe.js';
-import { templateOf, slotHistory, entryStalled, loadOptsFor } from './program.js';
+import { templateOf, slotHistory, entryStalled, loadOptsFor, isSubmaximalSlot, gradeSets } from './program.js';
 import { strengthTrend } from './coach.js';
 import { nameOf } from './exercises.js';
 
@@ -781,17 +781,30 @@ function change(points, days) {
   return round1(now - was);
 }
 
-/** Best estimate per exercise, and the day it happened. */
+/**
+ * Best estimate per exercise, and the day it happened.
+ *
+ * Two kinds of set are not eligible, and it is the same objection both times:
+ * the estimate has to be extrapolated too far to call the result a record. Above
+ * six reps the table is guessing. And work the program prescribed to be easy is
+ * guessing harder still — a triple at RPE 5 is read as a 1RM by dividing by
+ * 0.786, so it turns a half-point misjudgement into 1.6% and a three-point one
+ * into 13%. That is how a technique day meant to add skill without adding
+ * fatigue announced a squat record of 165.4 kg against a tested max of 150, and
+ * a deadlift record above a weight that had been loaded and missed nine days
+ * earlier. A day designed to be easy cannot produce a personal best.
+ */
 function prTable(st, done) {
   const best = new Map();
   for (const ses of done) {
     const u = ses.units || st.profile.units;
     for (const e of ses.entries) {
-      for (const s of e.sets) {
-        if (!s.done || !(s.load > 0) || !(s.reps > 0) || s.rpe == null) continue;
+      if (isSubmaximalSlot(st, e.slotKey)) continue;
+      for (const s of gradeSets(e.sets.filter((x) => x.done && !x.failed && x.load > 0 && x.reps > 0), e)) {
+        if (s.rpe == null) continue;
         // Above six reps the estimate is not trustworthy enough to call a record.
         if (s.reps > 6) continue;
-        const est = e1RM(convertLoad(s.load, u, 'kg'), s.reps, s.rpe);
+        const est = e1RM(convertLoad(s.load, u, 'kg'), s.reps, s.effRPE);
         if (!(est > 0)) continue;
         const cur = best.get(e.exerciseId);
         if (!cur || est > cur.e1rm) {
@@ -802,6 +815,9 @@ function prTable(st, done) {
             load: round1(convertLoad(s.load, u, 'kg')),
             reps: s.reps,
             rpe: s.rpe,
+            // What the estimate was actually computed from, when the log and the
+            // session disagreed about how hard the set was. See `gradeSets`.
+            ...(s.effRPE !== s.rpe ? { readAs: s.effRPE } : {}),
           });
         }
       }

@@ -94,6 +94,25 @@ export function repsAt(max, load, rpe) {
   return 20;
 }
 
+/**
+ * The RPE a load actually represents for `reps`, given a max — `loadFor` read
+ * backwards.
+ *
+ * Returns the hardest RPE the table will support at that weight, snapped to the
+ * half point the table is written in. This is what lets the app say "the set you
+ * called RPE 5 was RPE 8 against your own tested max" rather than silently
+ * believing one of the two numbers and prescribing off it.
+ */
+export function rpeFor(max, load, reps) {
+  const m = Number(max), l = Number(load), r = Number(reps);
+  if (!(m > 0) || !(l > 0) || !(r >= 1)) return null;
+  const target = (l / m) * 100;
+  for (let rpe = RPE_MAX; rpe >= RPE_MIN; rpe -= 0.5) {
+    if (pctOf1RM(r, rpe) <= target) return rpe;
+  }
+  return RPE_MIN;
+}
+
 /** How far either side of the target RPE still counts as the prescribed set. */
 export const RPE_TOLERANCE = 0.5;
 

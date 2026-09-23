@@ -37,6 +37,7 @@ const {
   repsForWeek, pctForWeek, loadingWeeks, slotE1RM, slotE1RMDetail, slotHistory,
   lastComparable, convertUnits, templateOf, entryStalled, entryShortfall, enterPeak, peakPlanFor,
   loadOptsFor, loadOptsForSlot, startNextCycle, warmupFor, attemptsFor,
+  bestMaxFor, isSubmaximalSlot, slotTargetRPE,
   RELIABLE_E1RM_REPS, PAIN_WEEK_REPS, DELOAD_RPE_FLOOR, PEAK_WEEKS,
 } = await import('./program.js');
 const { meetProgress, targetLine, attemptAdvice } = await import('./meet.js');
@@ -531,6 +532,52 @@ for (let seed = 1; seed <= SEEDS; seed++) {
     ok(tpl.days.some((d) => d.n === cur.day), `the cursor points at a real day (${tag}, ${JSON.stringify(cur)})`);
     ok(cur.week >= 1 && cur.week <= loadingWeeks(st.program) + 1,
       `the cursor's week is inside the cycle (${tag})`, `${cur.week}`);
+
+    /* ------------------------------------------------------------------
+       The load on the card must not contradict the RPE on the card.
+
+       This is the invariant the reported bug violated, and it took three
+       cycles of ordinary training to do it — which is why it belongs here
+       rather than in a fixture. Nothing in a single session looks wrong; the
+       wave simply adds an increment a week to a slot that cannot stall, and by
+       cycle three a day written "RPE 5" is asking for a triple at RPE 8.
+
+       Submaximal work is held to one notch of its own grid, because it is
+       pinned to the max and there is nothing it is allowed to drift by.
+
+       A wave is held to something looser and differently shaped. It is *meant*
+       to run ahead of the estimate — that is what the weekly increment is for,
+       and failing the set is how the stall protocol finds the ceiling — so the
+       question is not whether it passes its target RPE but whether it has left
+       the lifter behind entirely. It is checked against this slot's own recent
+       work rather than against the lift's working max, and only where that
+       reading is one the engine would itself act on: `plannedLoad` will only let
+       an estimate argue with the wave when it is reliable and drawn from near
+       these reps, because a 1RM read off a set of nine says nothing useful about
+       a triple. The same restraint has to apply to the assertion, or the sweep
+       fails on a prescription the app was right to make.
+       ------------------------------------------------------------------ */
+    for (const sl of resolveDay(st, cur).slots) {
+      if (!sl.slot?.lift || sl.plannedLoad == null || !sl.reps) continue;
+      const max = bestMaxFor(st, sl.slot.lift);
+      const target = slotTargetRPE(sl.slot) == null ? null
+        : (sl.rpeRange ? (sl.rpeRange[0] + sl.rpeRange[1]) / 2 : sl.targetRPE);
+      if (!max || target == null) continue;
+      const want = loadFor(max, sl.reps, target);
+      const at = `${tag}/${sl.slotKey}/w${cur.week}/${cur.phase}`;
+      if (isSubmaximalSlot(st, sl.slotKey)) {
+        ok(sl.plannedLoad <= want + sl.gridStep + 1e-6,
+          `submaximal work stays at the RPE it promises (${at})`,
+          `${sl.plannedLoad} vs ${want.toFixed(1)} for ${sl.reps} @ RPE ${target}`);
+        continue;
+      }
+      const own = slotE1RMDetail(st, sl.slotKey);
+      if (!own?.reliable || Math.abs(own.fromReps - sl.reps) > 2) continue;
+      const ceiling = loadFor(own.value, sl.reps, 10) + 2 * (sl.increment ?? 0) + sl.gridStep;
+      ok(sl.plannedLoad <= ceiling + 1e-6,
+        `a wave never runs more than two increments past a maximal effort (${at})`,
+        `${sl.plannedLoad} vs ${ceiling.toFixed(1)} (${sl.reps} reps, slot max ${own.value.toFixed(1)})`);
+    }
 
     const ses = startSession(st, cur);
     for (const e of ses.entries) {

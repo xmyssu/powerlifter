@@ -5,8 +5,9 @@
    ========================================================================== */
 
 import { templateOf, graduationCheck, slotHistory, slotE1RM, volumeAudit, loadingWeeks, bestMaxFor,
+         MISS_MEMORY_DAYS, workingMaxDetail, isSubmaximalSlot, gradeSets, RELIABLE_E1RM_REPS,
          missedAttempts, peakStatus, PEAK_MIN_DAYS } from './program.js';
-import { e1RM, fmtLoad, convertLoad } from './rpe.js';
+import { e1RM, fmtLoad, fmtLoadBare, fmtRPE, rpeFor, convertLoad } from './rpe.js';
 import { byId } from './exercises.js';
 import { relDays } from './ui.js';
 import { todayISO } from './store.js';
@@ -816,12 +817,13 @@ const BIG_PLATE = { kg: 20, lb: 45 };
 /**
  * How long a missed attempt keeps a milestone off the "go and get it" list.
  *
- * Three weeks is roughly a mesocycle: long enough that the app is not asking a
- * lifter to re-run a session they just failed, short enough that it is not still
- * bringing it up after they have trained through a whole cycle. It is a
- * suppression, not a verdict — the milestone still shows, with the date on it.
+ * The same window the working max uses to hold a recently-failed weight over the
+ * estimate, and deliberately the same number: a miss either still counts as
+ * evidence or it does not, and the chart and the prescription must not disagree
+ * about which. It is a suppression, not a verdict — the milestone still shows,
+ * with the date on it.
  */
-export const MISS_MEMORY_DAYS = 21;
+export { MISS_MEMORY_DAYS } from './program.js';
 
 function plateTargets(profile) {
   const have = (profile.plates || []).filter((x) => x > 0);
@@ -1096,13 +1098,19 @@ export function strengthTrend(state, lift) {
     const from = s.units || to;
     for (const e of s.entries) {
       if (!keys.includes(e.slotKey)) continue;
-      const sets = (e.sets || []).filter((x) => x.done && x.load > 0 && x.reps > 0);
-      if (!sets.length) continue;
+      const raw = (e.sets || []).filter((x) => x.done && x.load > 0 && x.reps > 0);
+      if (!raw.length) continue;
+      // Read through the same grading the engine uses, or the chart and the
+      // prescription disagree about what a session was worth — and the chart is
+      // the one the lifter looks at when deciding whether to believe the app.
+      const sets = gradeSets(raw, e);
       // Only sets of about 5 reps or fewer give a trustworthy 1RM estimate.
       const usable = sets.filter((x) => x.reps <= 6);
       const pool = usable.length ? usable : sets;
-      const best = Math.max(...pool.map((x) => e1RM(convertLoad(x.load, from, to), x.reps, x.rpe ?? e.targetRPE ?? 8) || 0));
-      if (best > 0) points.push({ date: s.date, value: +best.toFixed(1), cycle: s.cycle, week: s.week, day: s.day, deload: s.phase === 'deload', estimatedFromHighReps: !usable.length });
+      const best = Math.max(...pool.map((x) => e1RM(convertLoad(x.load, from, to), x.reps, x.effRPE) || 0));
+      if (best > 0) points.push({ date: s.date, value: +best.toFixed(1), cycle: s.cycle, week: s.week, day: s.day,
+                                  deload: s.phase === 'deload', submax: isSubmaximalSlot(state, e.slotKey),
+                                  estimatedFromHighReps: !usable.length });
     }
   }
   // Two points on the same date must compare equal, or a stable sort is asked to
@@ -1130,9 +1138,17 @@ export function trendSummary(points) {
   // three times steeper than the lifter's real rate, because it was measuring
   // recovery from a deload rather than strength.
   //
-  // Both stay in the chart, where the dip is honest and the caveat beneath
-  // explains the loose points. If filtering leaves too little, take what there is.
-  const trusted = points.filter((p) => !p.estimatedFromHighReps && !p.deload);
+  // Technique and primer work is excluded for the deload's reason, in the other
+  // direction. Prescribed at RPE 5, its estimate is the RPE guess divided by
+  // 0.786, so a call half a point light lands 1.6% high and a call three points
+  // light lands 13% high — which is how a day written to be easy produced a
+  // squat "PR" of 165.4 against a tested 150 and a deadlift best above a weight
+  // that had been loaded and missed the week before.
+  //
+  // All of them stay in the chart, where the dip is honest and the caveat
+  // beneath explains the loose points. If filtering leaves too little, take what
+  // there is.
+  const trusted = points.filter((p) => !p.estimatedFromHighReps && !p.deload && !p.submax);
   const pool = trusted.length >= 2 ? trusted : points;
 
   const first = pool[0], last = pool[pool.length - 1];
@@ -1176,6 +1192,160 @@ function daysBetween(a, b) {
   return Math.round((new Date(y2, m2 - 1, d2) - new Date(y1, m1 - 1, d1)) / 86400000);
 }
 
+/* ======================================================================
+   RPE calibration — does what you call an 8 weigh what an 8 weighs?
+   ====================================================================== */
+
+/** At least this many rated sets before the app is willing to claim a pattern. */
+const CALIBRATION_MIN_SETS = 4;
+/** An average gap this big, in RPE points, is a habit worth naming. */
+const CALIBRATION_MIN_GAP = 1;
+/** A single call this far out is a mistake rather than a habit... */
+const CALIBRATION_BAD_CALL = 2;
+/** ...and this many mistakes is also worth naming, however good the average looks. */
+const CALIBRATION_BAD_CALLS = 2;
+/** How far back to look. Long enough to cover a cycle, short enough to be current. */
+const CALIBRATION_DAYS = 35;
+
+/**
+ * How this lifter's RPE calls compare with what the bar actually weighs.
+ *
+ * The whole program is autoregulated off RPE, which means every load in it rests
+ * on the lifter's own judgement of how close a set was to failure. That
+ * judgement is a skill, it is learned, and it is systematically wrong in one
+ * direction for most people before it is right — which the app can measure,
+ * because it also holds a weight that lifter demonstrably could and could not
+ * do on a given day.
+ *
+ * So: for every rated set on a competition lift, what RPE does the working max
+ * say that weight and that rep count *was*, and what did the lifter call it? The
+ * gap is `calls light` when they rate sets easier than the bar says they were.
+ *
+ * Deliberately only computed where there is a tested max. Measured against a
+ * number that was itself inferred from these same RPE calls, this would be
+ * circular and would report a gap of zero no matter how far off the calls were.
+ * Against a weight that went up under an attempt, it means what it says.
+ *
+ * Only sets inside `RELIABLE_E1RM_REPS` are read this way, for the reason that
+ * constant exists: the table stops describing individuals past about six reps,
+ * where rep endurance varies far more between lifters than strength does. A set
+ * of nine the lifter settled on by feel reads as RPE 4 against a max derived
+ * from their triples, and folding that into the average hides the calls this is
+ * looking for.
+ *
+ * Returns, per lift and biggest gap first:
+ *   { lift, sets, gap, worst, badCalls, contradictions, light, max, tested }
+ */
+export function rpeCalibration(state, { today = todayISO(), lifts = ['squat', 'bench', 'deadlift'] } = {}) {
+  const tpl = templateOf(state.program);
+  const out = [];
+
+  for (const lift of lifts) {
+    const max = workingMaxDetail(state, lift, { today });
+    if (!max?.tested || max.tested.source !== 'tested' || !max.value) continue;
+
+    const keys = tpl.days.flatMap((d) => d.slots).filter((x) => x.lift === lift).map((x) => x.key);
+    const gaps = [];
+    const contradictions = [];
+    let badCalls = 0;
+    let worst = null;
+
+    for (const key of keys) {
+      // Work prescribed to be easy is not excluded here, and should not be:
+      // a technique triple called RPE 5 that was really an 8 is the single most
+      // legible case of the thing this function is looking for.
+      const submax = isSubmaximalSlot(state, key);
+      for (const h of slotHistory(state, key)) {
+        if (h.phase === 'deload' || h.phase === 'meetWeek') continue;
+        if (daysBetween(h.date, today) > CALIBRATION_DAYS) continue;
+        for (const set of h.sets) {
+          if (set.rpe == null) continue;               // never guess at an unrated set
+          if (set.reps > RELIABLE_E1RM_REPS) continue; // and never argue off a set of nine
+          const was = rpeFor(max.value, set.load, set.reps);
+          if (was == null) continue;
+          const gap = was - set.rpe;
+          gaps.push(gap);
+          if (gap >= CALIBRATION_BAD_CALL) badCalls++;
+          if (!worst || gap > worst.gap) {
+            worst = { gap, date: h.date, load: set.load, reps: set.reps, called: set.rpe, was, slotKey: key, submax };
+          }
+        }
+
+        // The other kind of evidence, and the more certain one: two sets at the
+        // same bar in the same session, rated differently. No max is needed to
+        // know one of those calls is wrong — fatigue only goes one way, so a
+        // later set at the same weight cannot have been the easier of the two.
+        // `gradeSets` already refuses to estimate off the flattering reading;
+        // this is what says so to the lifter.
+        for (let i = 1; i < h.sets.length; i++) {
+          for (let j = 0; j < i; j++) {
+            const a = h.sets[j], b = h.sets[i];
+            if (a.rpe == null || b.rpe == null) continue;
+            if (b.load < a.load - 1e-9 || b.rpe >= a.rpe) continue;
+            contradictions.push({ date: h.date, load: b.load, reps: b.reps, first: a.rpe, then: b.rpe, slotKey: key });
+          }
+        }
+      }
+    }
+
+    if (gaps.length < CALIBRATION_MIN_SETS) continue;
+    const gap = gaps.reduce((a, b) => a + b, 0) / gaps.length;
+    out.push({ lift, sets: gaps.length, gap: +gap.toFixed(2), worst, badCalls, contradictions,
+               light: gap > 0, max: max.value, tested: max.tested.value, testedDate: max.tested.date });
+  }
+
+  return out.sort((a, b) => Math.abs(b.gap) - Math.abs(a.gap));
+}
+
+/** "yesterday" / "9 days ago" / the date, for quoting one set back at the lifter. */
+function whenAgo(iso) {
+  const d = -relDays(iso);
+  if (d == null || Number.isNaN(d)) return iso;
+  if (d <= 0) return 'today';
+  if (d === 1) return 'yesterday';
+  return d <= 60 ? `${d} days ago` : `on ${iso}`;
+}
+
+/** A max is an estimate, so it is shown to a tenth rather than to a plate. */
+const fmtMax = (v) => String(+Number(v).toFixed(1));
+
+/** The calibration finding, phrased for the home screen — or null if there is nothing to say. */
+function calibrationInsight(state) {
+  // Either a standing habit, or a handful of calls that were simply wrong. The
+  // second matters on its own: an average hides it, and "sometimes" is exactly
+  // how a lifter describes it.
+  const worthSaying = rpeCalibration(state)
+    .filter((c) => c.gap >= CALIBRATION_MIN_GAP || c.badCalls >= CALIBRATION_BAD_CALLS || c.contradictions.length);
+  if (!worthSaying.length) return null;
+  const c = worthSaying[0];
+  const w = c.worst;
+  const units = state.profile.units;
+
+  const habit = worthSaying.filter((x) => x.gap >= CALIBRATION_MIN_GAP);
+  const clash = worthSaying.flatMap((x) => x.contradictions);
+
+  const parts = [];
+  if (habit.length) {
+    parts.push(`Against your tested maxes the sets you have rated lately were harder than you called them — `
+             + `${habit.map((x) => `${x.lift} by ${x.gap.toFixed(1)}`).join(', ')} on average.`);
+  }
+  if (w && w.gap >= CALIBRATION_BAD_CALL) {
+    parts.push(`The clearest single call: ${fmtLoadBare(w.load)} ${units} × ${w.reps} ${whenAgo(w.date)}, logged RPE `
+             + `${fmtRPE(w.called)}, which is RPE ${fmtRPE(w.was)} against a ${c.lift} max of ${fmtMax(c.tested)}.`);
+  }
+  if (clash.length) {
+    const k = clash[0];
+    parts.push(`And ${clash.length === 1 ? 'once' : `${clash.length} times`} you rated the same bar twice in one session and `
+             + `called the second one easier — ${fmtLoadBare(k.load)} ${units} × ${k.reps} ${whenAgo(k.date)}, RPE `
+             + `${fmtRPE(k.first)} and then RPE ${fmtRPE(k.then)}. Fatigue only runs one way, so the app reads the harder of the two.`);
+  }
+  parts.push(`Nothing is broken and nothing needs undoing: every load you are given comes off your tested max, not off these ratings, `
+           + `so a light call costs you no weight on the bar. They are still worth getting right, because they are what the app reads `
+           + `when it decides you are ready for more. RPE 5 means four to six reps left — if the fourth one was not there, it was not a 5.`);
+
+  return { kind: 'rpeCalibration', priority: 2, title: 'Your RPE calls are running light', text: parts.join(' ') };
+}
+
 /** Anything the coach wants to raise, unprompted, on the home screen. */
 export function activeInsights(state) {
   const out = [];
@@ -1214,6 +1384,9 @@ export function activeInsights(state) {
 
   const layoff = layoffAdvice(state);
   if (layoff) out.push({ kind: 'layoff', priority: 2, title: layoff.headline, text: layoff.advice });
+
+  const calibration = calibrationInsight(state);
+  if (calibration) out.push(calibration);
 
   const peak = peakStatus(state);
   if (peak) out.push(...meetInsights(state, peak));

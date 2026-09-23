@@ -22,16 +22,17 @@ const { buildProgram, resolveDay, startSession, completeSession, resolveAssessme
         repsForWeek, pctForWeek, loadingWeeks, graduationCheck, volumeAudit,
         slotE1RM, slotE1RMDetail, cyclePlan, convertUnits, slotHistory, lastComparable,
         templateOf, PAIN_WEEK_REPS, RELIABLE_E1RM_REPS, resolveTestDay, attemptsFor,
-        bestMaxFor, discardSession, shouldEnterPeak, enterPeak, exitPeak, peakStatus,
+        bestMaxFor, bestEstimateFor, workingMaxDetail, isSubmaximalSlot, gradeSets, maxBasisLabel,
+        MISS_MEMORY_DAYS, discardSession, shouldEnterPeak, enterPeak, exitPeak, peakStatus,
         peakWeek, missedAttempts, entryStalled, entryShortfall, daysUntil, resolvePeakPrompt,
         startPeakNow, loadOptsFor, peakSetsFor, warmupFor, PEAK_WEEKS, PEAK_MIN_DAYS } = await import('./program.js');
 const { meetProgress, targetLine, attemptAdvice, MEET_ORDER } = await import('./meet.js');
 const { pctOf1RM, e1RM, loadFor, plateBreakdown, roundToLoadable, plateLabel, minIncrement, convertLoad,
-        loadBand, loadStep, gridFloor, isLadder, RPE_TOLERANCE } = await import('./rpe.js');
+        loadBand, loadStep, gridFloor, isLadder, rpeFor, RPE_TOLERANCE } = await import('./rpe.js');
 const { assessDeload, INTERMEDIATE_PL, INTERMEDIATE_PL_3DAY } = await import('./templates.js');
 const { strengthTrend, trendSummary, sessionBriefing, trainingAgeReport, TRAINING_AGE_BANDS, milestones,
         testReadiness, planTestBlock, testPromotion, activeInsights, restAdvice, trainingRhythm,
-        MISS_MEMORY_DAYS, TEST_PROMPT_QUIET_DAYS } = await import('./coach.js');
+        rpeCalibration, TEST_PROMPT_QUIET_DAYS } = await import('./coach.js');
 
 let pass = 0, fail = 0;
 const problems = [];
@@ -2557,6 +2558,242 @@ hr('25. Rest between sessions');
   });
   const meetDay = resolveDay(store.getState(), { ...store.getState().program.cursor, day: 4 });
   eq(restAdvice(store.getState(), meetDay), null, 'the day of the meet is not a spacing lecture');
+}
+
+/* ======================================================================
+   26. Loads that match the RPE printed next to them
+   ----------------------------------------------------------------------
+   The reported bug: a day written "3 x 3 @ RPE 5 — deliberately easy" was
+   prescribing 150 kg to a lifter whose tested deadlift was 170 and who had
+   loaded and missed 180 the week before. Three separate faults compounded.
+   ====================================================================== */
+hr('26. Loads that match the RPE on the card');
+{
+  const iso = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return store.todayISO(d); };
+  const S = (load, reps, rpe, extra = {}) => ({ load, reps, rpe, done: true, ts: '2026-01-01T00:00:00Z', ...extra });
+
+  /* ---- the RPE table, read backwards --------------------------------- */
+  eq(rpeFor(150, 117.9, 3), 5, 'a triple at 78.6% of max is RPE 5');
+  eq(rpeFor(150, 130, 3), 8, 'and a triple at 86.7% is RPE 8 — the gap Daniel felt');
+  eq(rpeFor(170, 150, 3), 8.5, '150 x 3 on a 170 deadlift is RPE 8.5, not the 5 it was prescribed at');
+  eq(rpeFor(150, 130, 3), 8, 'and 130 x 3 on a 150 squat is RPE 8 — both of the loads Daniel queried');
+  for (const reps of [1, 3, 5, 8]) {
+    for (const rpe of [5, 6.5, 8, 9.5]) {
+      eq(rpeFor(200, loadFor(200, reps, rpe), reps), rpe, `rpeFor inverts loadFor at ${reps} x RPE ${rpe}`);
+    }
+  }
+  eq(rpeFor(0, 100, 3), null, 'no max, no reading');
+
+  /* ---- fatigue only runs one way ------------------------------------- */
+  // The literal set list from the session that prompted this.
+  const graded = gradeSets([S(140, 3, 5), S(150, 3, 7), S(150, 3, 5)], { targetRPE: 5 });
+  eq(graded[0].effRPE, 5, 'the opening set is read as logged');
+  eq(graded[1].effRPE, 7, 'so is a set that was rated harder');
+  eq(graded[2].effRPE, 7, 'but the same bar called easier afterwards is read at the earlier rating');
+  eq(graded[2].rpe, 5, 'and the log itself is left exactly as the lifter wrote it');
+  near(e1RM(graded[2].load, 3, graded[2].effRPE), 179.2, 'which reads 179.2 rather than 190.8', 0.2);
+
+  const lighter = gradeSets([S(130, 3, 8), S(110, 3, 5)], { targetRPE: 8 });
+  eq(lighter[1].effRPE, 5, 'a genuinely lighter set afterwards is still allowed to be easier');
+
+  const unrated = gradeSets([S(100, 5, 9), S(100, 5, null)], { targetRPE: 6 });
+  eq(unrated[1].effRPE, 9, 'an unrated set at the same bar inherits the rating rather than the target');
+
+  /* ---- who is allowed to say how strong you are ----------------------- */
+  store.resetAll();
+  store.update((s) => {
+    s.profile.units = 'kg';
+    s.profile.barWeight = 20;
+    s.profile.plates = [25, 20, 15, 10, 5, 2.5, 1.25];
+    s.program = buildProgram({ templateId: INTERMEDIATE_PL.id, startDate: iso(-50) });
+    s.maxes.squat    = { value: 150, date: iso(-10), source: 'tested', reps: 1, fromLoad: 150 };
+    s.maxes.bench    = { value: 100, date: iso(-10), source: 'tested', reps: 1, fromLoad: 100 };
+    s.maxes.deadlift = { value: 170, date: iso(-10), source: 'tested', reps: 1, fromLoad: 170 };
+    s.onboarded = true;
+  });
+
+  ok(isSubmaximalSlot(store.getState(), 'd2_squat'), 'the technique day is submaximal work');
+  ok(isSubmaximalSlot(store.getState(), 'd2_dead'), 'on every lift it touches');
+  ok(!isSubmaximalSlot(store.getState(), 'd3_squat'), 'the strength day is not');
+  ok(!isSubmaximalSlot(store.getState(), 'd1_bench'), 'and neither is the volume day');
+  ok(!isSubmaximalSlot(store.getState(), 'd2_verpush'), 'an accessory at RPE 8 sharing the technique day is not either');
+  ok(isSubmaximalSlot(store.getState(), 'peak_primer_squat'), 'the primer is');
+  ok(!isSubmaximalSlot(store.getState(), 'peak_open_squat'), 'the opener rehearsal is not — it says so itself');
+
+  // A technique day logged exactly as Daniel logged his.
+  store.update((s) => {
+    s.sessions.push({
+      id: 'tech1', date: iso(-1), status: 'done', units: 'kg', phase: 'load', cycle: 3, week: 1, day: 2,
+      entries: [
+        { slotKey: 'd2_squat', exerciseId: 'lowBarSquat', targetReps: 3, targetRPE: 5,
+          sets: [S(130, 3, 5), S(130, 3, 7.5), S(120, 3, 5)] },
+        { slotKey: 'd2_dead', exerciseId: 'deadlift', targetReps: 3, targetRPE: 5,
+          sets: [S(140, 3, 5), S(150, 3, 7), S(150, 3, 5)] },
+      ],
+    });
+  });
+
+  eq(bestEstimateFor(store.getState(), 'squat'), null, 'a technique day is not evidence of a squat max');
+  eq(bestEstimateFor(store.getState(), 'deadlift'), null, 'nor of a deadlift one');
+  eq(bestMaxFor(store.getState(), 'squat'), 150, 'so the working squat max is still the tested one');
+  eq(workingMaxDetail(store.getState(), 'squat').basis, 'tested', 'and it says that is where it came from');
+
+  /* ---- a tested max is a ceiling, not a fallback ---------------------- */
+  store.update((s) => {
+    s.sessions.push({
+      id: 'str1', date: iso(-2), status: 'done', units: 'kg', phase: 'load', cycle: 3, week: 1, day: 4,
+      entries: [{ slotKey: 'd4_dead', exerciseId: 'deadlift', targetReps: 3, targetRPE: 8,
+                  sets: [S(160, 3, 8)] }],
+    });
+  });
+  let wm = workingMaxDetail(store.getState(), 'deadlift');
+  near(wm.estimate, 185.4, 'the strength day estimates a 185 kg deadlift off a triple at 160', 0.5);
+  ok(wm.value < wm.estimate, 'the working max does not simply take it');
+  ok(wm.value <= wm.ceiling + 1e-9, 'it is held at the ceiling the tested max allows');
+  near(wm.ceiling, 170 + (5 / 3) * (10 / 7), 'which is one increment per cycle since the test', 0.1);
+  eq(wm.basis, 'tested', 'and it reports the tested max as its basis');
+
+  /* ---- a miss outranks an estimate ------------------------------------ */
+  // An old test, an estimate that has since run away from it, and a recent miss.
+  // Without the miss the ceiling alone would allow 184 kg here.
+  store.update((s) => {
+    s.maxes.deadlift = { value: 170, date: iso(-60), source: 'tested', reps: 1, fromLoad: 170 };
+    s.sessions.push({
+      id: 'test1', date: iso(-9), status: 'done', units: 'kg', phase: 'test', cycle: 2, week: 3, day: 0,
+      entries: [{ slotKey: 'test_deadlift', exerciseId: 'deadlift', targetReps: 1, targetRPE: 10,
+                  sets: [S(170, 1, 10), S(180, 0, null, { failed: true })] }],
+    });
+  });
+  wm = workingMaxDetail(store.getState(), 'deadlift');
+  ok(wm.ceiling > 180, 'the tested ceiling has drifted past 180 in two months', `got ${wm.ceiling}`);
+  eq(wm.basis, 'miss', 'but a bar that did not move nine days ago outranks both it and the estimate');
+  eq(wm.value, 177.5, 'and holds the max one platform step under the weight that was missed');
+  eq(wm.cappedBy.load, 180, 'naming that weight');
+  ok(/missed/.test(maxBasisLabel(wm, 'deadlift')), 'which the note under the load says out loud');
+
+  // ...until it expires, or until it is answered with a rep.
+  const later = store.todayISO(new Date(Date.now() + (MISS_MEMORY_DAYS + 2) * 86400000));
+  ok(workingMaxDetail(store.getState(), 'deadlift', { today: later }).basis !== 'miss',
+     'a miss stops counting once it is three weeks old');
+  store.update((s) => {
+    s.sessions.push({
+      id: 'answer', date: iso(0), status: 'done', units: 'kg', phase: 'load', cycle: 3, week: 2, day: 4,
+      entries: [{ slotKey: 'd4_dead', exerciseId: 'deadlift', targetReps: 1, targetRPE: 9,
+                  sets: [S(180, 1, 9)] }],
+    });
+  });
+  ok(workingMaxDetail(store.getState(), 'deadlift').basis !== 'miss',
+     'and it stops counting the moment the lifter puts a rep on that weight');
+
+  /* ---- the technique day, prescribed --------------------------------- */
+  store.resetAll();
+  store.update((s) => {
+    s.profile.units = 'kg';
+    s.profile.barWeight = 20;
+    s.profile.plates = [25, 20, 15, 10, 5, 2.5, 1.25];
+    s.program = buildProgram({ templateId: INTERMEDIATE_PL.id, startDate: iso(-50) });
+    s.maxes.squat    = { value: 150, date: iso(-10), source: 'tested', reps: 1, fromLoad: 150 };
+    s.maxes.bench    = { value: 100, date: iso(-10), source: 'tested', reps: 1, fromLoad: 100 };
+    s.maxes.deadlift = { value: 170, date: iso(-10), source: 'tested', reps: 1, fromLoad: 170 };
+    s.onboarded = true;
+  });
+
+  const techDay = (st) => resolveDay(st, { ...st.program.cursor, day: 2, phase: 'load' });
+  let d2sq = techDay(store.getState()).slots.find((x) => x.slotKey === 'd2_squat');
+  eq(d2sq.loadSource, 'submax', 'the technique squat is prescribed off the max, not off a wave');
+  eq(d2sq.plannedLoad, 117.5, '78.6% of a 150 kg squat, on the plate grid');
+  ok(Math.abs(d2sq.impliedRPE - 5) <= 0.5, 'which is the RPE 5 the card promises', `got ${d2sq.impliedRPE}`);
+  ok(/tested squat max/.test(d2sq.loadNote), 'and the note says which max it came from');
+
+  // The book's printed band is kept where it is the stricter of the two.
+  const d2sqW3 = resolveDay(store.getState(), { cycle: 1, week: 3, day: 2 }).slots.find((x) => x.slotKey === 'd2_squat');
+  eq(d2sqW3.reps, 1, 'week 3 of the technique wave is a single');
+  ok(d2sqW3.plannedLoad > d2sq.plannedLoad, 'and it is heavier, because the reps came down');
+  ok(Math.abs(d2sqW3.impliedRPE - 5) <= 0.5, 'still at RPE 5', `got ${d2sqW3.impliedRPE}`);
+  ok(d2sqW3.plannedLoad <= 150 * 0.85 + 1e-9, 'and never above the book\'s 85% band');
+
+  /* ---- and it does not ratchet --------------------------------------- */
+  function trainDay(overrides = {}) {
+    const s0 = store.getState();
+    const ses = startSession(s0, { ...s0.program.cursor });
+    for (const entry of ses.entries) {
+      const o = overrides[entry.slotKey] || {};
+      entry.sets = entry.sets.map(() => ({
+        load: o.load ?? entry.plannedLoad ?? 60, reps: o.reps ?? entry.targetReps,
+        rpe: o.rpe ?? entry.targetRPE ?? 8, done: true, ts: new Date().toISOString(),
+      }));
+    }
+    store.update((s) => { s.sessions.push(ses); s.activeSessionId = ses.id; });
+    store.update((s) => { completeSession(s, ses.id); s.activeSessionId = null; });
+  }
+
+  const techLoad = () => techDay(store.getState()).slots.find((x) => x.slotKey === 'd2_dead').plannedLoad;
+  const techLoads = [techLoad()];
+  for (let cyc = 0; cyc < 3; cyc++) {
+    for (let w = 0; w < 3; w++) [1, 2, 3, 4].forEach(() => trainDay());
+    if (store.getState().program.pendingAssessment) store.update((s) => { resolveAssessment(s, {}); });
+    // The book's backstop deloads every third cycle whatever the checklist says.
+    if (store.getState().program.cursor.phase === 'deload') [1, 2, 3, 4].forEach(() => trainDay());
+    techLoads.push(techLoad());
+  }
+  eq(store.getState().program.cursor.cycle, 4, 'three clean cycles run');
+  eq(store.getState().program.cursor.phase, 'load', 'and we come out of them on a loading week');
+  eq(store.getState().program.slots.d2_dead.week1Load, null,
+     'submaximal work never records a wave anchor, so there is nothing to march upward');
+
+  // Before the fix this sequence was 135, 140, 145, 150 — the reported bug.
+  const st26 = store.getState();
+  for (const [i, load] of techLoads.entries()) {
+    const implied = rpeFor(st26.maxes.deadlift.value, load, 3);
+    ok(Math.abs(implied - 5) <= 0.5,
+       `cycle ${i + 1}: the RPE 5 technique triple is still RPE 5 against the tested max`,
+       `${load} kg reads RPE ${implied}`);
+  }
+  ok(Math.max(...techLoads) - Math.min(...techLoads) <= 5,
+     'and the load barely moves across three cycles, because the max did not',
+     `spread ${Math.max(...techLoads) - Math.min(...techLoads)}`);
+
+  // The strength day is untouched: it can stall, so it is still allowed to wave.
+  ok(store.getState().program.slots.d3_squat.week1Load > 0, 'the strength day still keeps a wave anchor');
+  const w1 = resolveDay(store.getState(), { week: 1, day: 3 }).slots.find((x) => x.slotKey === 'd3_squat');
+  const w2 = resolveDay(store.getState(), { week: 2, day: 3 }).slots.find((x) => x.slotKey === 'd3_squat');
+  eq(w2.plannedLoad - w1.plannedLoad, 5, 'and still climbs one increment a week');
+  eq(w1.loadSource, 'wave', 'off the anchor, as before');
+
+  /* ---- what the meet card says --------------------------------------- */
+  store.update((s) => {
+    s.maxes.deadlift = { value: 170, date: iso(-10), source: 'tested', reps: 1, fromLoad: 170 };
+    s.sessions.push({
+      id: 'miss2', date: iso(-9), status: 'done', units: 'kg', phase: 'test', cycle: 1, week: 1, day: 0,
+      entries: [{ slotKey: 'test_deadlift', exerciseId: 'deadlift', targetReps: 1, targetRPE: 10,
+                  sets: [S(170, 1, 10), S(180, 0, null, { failed: true })] }],
+    });
+  });
+  const att = attemptsFor(store.getState(), 'deadlift');
+  ok(att.opener < 180, 'the opener is not the weight that was just missed', `got ${att.opener}`);
+  ok(att.opener <= 170, 'it is a weight already lifted for a triple', `got ${att.opener}`);
+  ok(att.third > att.second, 'while the third still asks for something new', `got ${att.third}`);
+  ok(att.third >= 170, 'at or above the weight already on record', `got ${att.third}`);
+
+  /* ---- and the app says so ------------------------------------------- */
+  const cal = rpeCalibration(store.getState()).find((c) => c.lift === 'deadlift');
+  ok(cal, 'the deadlift has enough rated sets to calibrate against the tested max');
+  ok(cal.contradictions.length === 0 || cal.contradictions.every((c) => c.first > c.then),
+     'a contradiction is always the harder call followed by the easier one');
+
+  store.update((s) => {
+    s.sessions.push({
+      id: 'clash', date: iso(0), status: 'done', units: 'kg', phase: 'load', cycle: 4, week: 1, day: 2,
+      entries: [{ slotKey: 'd2_dead', exerciseId: 'deadlift', targetReps: 3, targetRPE: 5,
+                  sets: [S(140, 3, 5), S(150, 3, 7), S(150, 3, 5)] }],
+    });
+  });
+  const cal2 = rpeCalibration(store.getState()).find((c) => c.lift === 'deadlift');
+  ok(cal2.contradictions.some((c) => c.load === 150 && c.first === 7 && c.then === 5),
+     'and the same bar rated 7 then 5 is reported as one');
+  const note = activeInsights(store.getState()).find((x) => x.kind === 'rpeCalibration');
+  ok(note, 'which reaches the home screen');
+  ok(/RPE 5 means four to six reps left/.test(note.text), 'with the definition it is asking the lifter to apply');
 }
 
 /* ======================================================================
