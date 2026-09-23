@@ -18,14 +18,15 @@ if (!globalThis.navigator) globalThis.navigator = {};
 globalThis.CustomEvent = class { constructor(t, o) { this.type = t; Object.assign(this, o); } };
 
 const store = await import('./store.js');
-const { buildProgram, resolveDay, startSession, completeSession, resolveAssessment,
+const { buildProgram, resolveDay, startSession, completeSession, resolveAssessment, startNextCycle,
         repsForWeek, pctForWeek, loadingWeeks, graduationCheck, volumeAudit,
         slotE1RM, slotE1RMDetail, cyclePlan, convertUnits, slotHistory, lastComparable,
         templateOf, PAIN_WEEK_REPS, RELIABLE_E1RM_REPS, resolveTestDay, attemptsFor,
         bestMaxFor, discardSession, shouldEnterPeak, enterPeak, exitPeak, peakStatus,
-        peakWeek, missedAttempts, entryStalled, daysUntil, PEAK_WEEKS, PEAK_MIN_DAYS } = await import('./program.js');
+        peakWeek, missedAttempts, entryStalled, entryShortfall, daysUntil, resolvePeakPrompt,
+        startPeakNow, loadOptsFor, peakSetsFor, PEAK_WEEKS, PEAK_MIN_DAYS } = await import('./program.js');
 const { pctOf1RM, e1RM, loadFor, plateBreakdown, roundToLoadable, plateLabel, minIncrement, convertLoad,
-        loadBand, RPE_TOLERANCE } = await import('./rpe.js');
+        loadBand, loadStep, gridFloor, isLadder, RPE_TOLERANCE } = await import('./rpe.js');
 const { assessDeload, INTERMEDIATE_PL, INTERMEDIATE_PL_3DAY } = await import('./templates.js');
 const { strengthTrend, trendSummary, sessionBriefing, trainingAgeReport, TRAINING_AGE_BANDS, milestones,
         testReadiness, planTestBlock, testPromotion, activeInsights,
@@ -1525,9 +1526,10 @@ hr('17. The peaking block');
   const iso = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return store.todayISO(d); };
 
   /** A lifter mid-programme with anchors in place and a meet `out` days away. */
-  const lifterWithMeet = (out) => {
+  const lifterWithMeet = (out, { confirm = false } = {}) => {
     store.update((s) => {
       Object.assign(s, store.defaultState());
+      s.settings.confirmPeak = confirm;
       s.maxes = { squat: { value: 150 }, bench: { value: 100 }, deadlift: { value: 170 } };
       s.program = buildProgram({ meetDate: out == null ? null : iso(out) });
       for (const k of Object.keys(s.program.slots)) s.program.slots[k].week1Load = 60;
@@ -1598,15 +1600,45 @@ hr('17. The peaking block');
   eq(mainReps(2), 2, 'peak week 2 is doubles');
   eq(mainReps(3), 1, 'peak week 3 is singles');
 
-  /* ---- week 3 deloads what is not contested, and only that ---- */
+  /* ---- the block is a taper from week 1, not only from week 3 ---- */
+  // p. 140: begin tapering 1-4 weeks out, reduce volume by a third up to two
+  // thirds, maintain or slightly increase intensity. The rep-range override is
+  // the intensity half; this is the volume half.
+  for (const wk of [1, 2]) {
+    const d1 = resolveDay(store.getState(), { week: wk, day: 1, phase: 'load' });
+    const d3 = resolveDay(store.getState(), { week: wk, day: 3, phase: 'load' });
+    const d2 = resolveDay(store.getState(), { week: wk, day: 2, phase: 'load' });
+    eq(d1.slots.find((x) => x.slotKey === 'd1_sqvar').sets, 2, `peak week ${wk}: the volume day runs at two-thirds of its sets`);
+    eq(d1.slots.find((x) => x.slotKey === 'd1_bench').sets, 2, `peak week ${wk}: including the volume day's bench`);
+    eq(d3.slots.find((x) => x.slotKey === 'd3_legcurl').sets, 2, `peak week ${wk}: and the isolation work`);
+    eq(d3.slots.find((x) => x.slotKey === 'd3_squat').sets, 3, `peak week ${wk}: the strength-day mains keep every set`);
+    eq(d2.slots.find((x) => x.slotKey === 'd2_squat').sets, 3, `peak week ${wk}: so does the technique work`);
+    ok(d1.slots.find((x) => x.slotKey === 'd1_sqvar').peakThinned, `peak week ${wk}: and the thinning is visible to the UI`);
+    ok(!d3.slots.find((x) => x.slotKey === 'd3_squat').peakThinned, `peak week ${wk}: while the mains are not marked as tapered`);
+  }
+  // The load is untouched by the volume cut — intensity is the half that stays.
+  {
+    const wave = resolveDay(store.getState(), { week: 1, day: 1, phase: 'load' }).slots.find((x) => x.slotKey === 'd1_sqvar');
+    eq(wave.reps, 9, 'the thinned slots still run their own wave');
+    eq(wave.loadSource, 'wave', 'off their own anchor');
+  }
+
+  /* ---- week 3 deloads everything the block is not made of ---- */
   const w3d1 = resolveDay(store.getState(), { week: 3, day: 1, phase: 'load' });
   eq(w3d1.peakKind, 'week3', 'week 3 knows what it is');
   const sqvar = w3d1.slots.find((x) => x.slotKey === 'd1_sqvar');
-  const benchComp = w3d1.slots.find((x) => x.slotKey === 'd1_bench');
+  const benchVol = w3d1.slots.find((x) => x.slotKey === 'd1_bench');
+  const benchStr = resolveDay(store.getState(), { week: 3, day: 3, phase: 'load' }).slots.find((x) => x.slotKey === 'd3_bench');
+  const techBench = resolveDay(store.getState(), { week: 3, day: 2, phase: 'load' }).slots.find((x) => x.slotKey === 'd2_bench');
   ok(sqvar.sets < 3, 'the squat variation deloads in week 3', `${sqvar.sets} sets`);
-  eq(benchComp.sets, 3, 'the competition bench does not');
-  ok(benchComp.targetRPE >= 7, 'and keeps its loading-week RPE', `${benchComp.targetRPE}`);
-  ok(sqvar.targetRPE < 7, 'while the variation drops its RPE with the load', `${sqvar.targetRPE}`);
+  ok(sqvar.targetRPE < 7, 'and drops its RPE with the load', `${sqvar.targetRPE}`);
+  // The book draws this line at "not a competition lift", which leaves seven
+  // reps at RPE 7 on the bar seven days out. The line that matters is between
+  // the peak and everything else.
+  ok(benchVol.targetRPE < 7, 'the volume day comes down too, competition lift or not', `${benchVol.targetRPE}`);
+  eq(benchStr.sets, 3, 'the strength-day bench keeps every set');
+  ok(benchStr.targetRPE >= 8, 'and its loading-week RPE', `${benchStr.targetRPE}`);
+  eq(techBench.targetRPE, 5, 'and the technique singles carry on untouched');
 
   /* ---- week 3 day 4 is the opener rehearsal ---- */
   const openers = resolveDay(store.getState(), { week: 3, day: 4, phase: 'load' });
@@ -1618,7 +1650,28 @@ hr('17. The peaking block');
     eq(sl.sets, 1, `${sl.slotKey} is one attempt, not three`);
     eq(JSON.stringify(sl.rpeRange), '[7.5,8.5]', `${sl.slotKey} sits at opener RPE`);
     eq(roundToLoadable(sl.plannedLoad, store.getState().profile), sl.plannedLoad, `${sl.slotKey} opener is loadable`);
-    near(sl.plannedLoad, attemptsFor(store.getState(), sl.slot.lift).opener, `${sl.slotKey} rehearses the printed opener`, 0.01);
+    // The rehearsal is loaded in this gym; the figure declared on the day is the
+    // platform-legal one. On a plate set with 1.25s they are the same weight.
+    near(sl.plannedLoad, attemptsFor(store.getState(), sl.slot.lift, { platform: false }).opener,
+      `${sl.slotKey} rehearses the opener its own gym can load`, 0.01);
+    const decl = sl.attempts.declared.opener;
+    eq(decl % 2.5, 0, `${sl.slotKey}'s declared opener is a legal attempt`);
+    near(decl, sl.plannedLoad, `${sl.slotKey} declares what it rehearsed on a full plate set`, 0.01);
+  }
+
+  /* ---- a gym with no small plates declares one weight and rehearses another ---- */
+  {
+    const saved = JSON.stringify(store.getState());
+    store.update((s) => { s.profile.plates = [25, 20, 15, 10, 5]; s.profile.microplates = false; });
+    const coarse = resolveDay(store.getState(), { week: 3, day: 4, phase: 'load' }).slots[0];
+    const gymOpener = coarse.plannedLoad;
+    const declared = coarse.attempts.declared.opener;
+    eq(roundToLoadable(gymOpener, store.getState().profile), gymOpener,
+      'the rehearsal is a weight these plates can actually make');
+    eq(declared % 2.5, 0, 'while the declared opener stays on the platform ladder');
+    ok(coarse.loadNote.includes('Declare') || declared === gymOpener,
+      'and the card says so when the two differ', `${declared} vs ${gymOpener}`);
+    store.replaceState(JSON.parse(saved));
   }
 
   /* ---- the four weeks run without ever raising the checklist ---- */
@@ -1669,6 +1722,30 @@ hr('17. The peaking block');
   eq(st.program.cursor.phase, 'load', 'in a loading phase');
   eq(st.program.cyclesSinceDeload, 0, 'with the deload counter reset by the taper');
   eq(st.maxes.squat.source, 'tested', 'the meet is where the maxes come from');
+
+  /* ---- what the week after the meet actually asks for ---- */
+  //
+  // Entering the block converted the strength-day anchors up, because the reps
+  // were coming down: a slot asked for a triple where it did a set of five needs
+  // ~6.5% more bar to still be RPE 8. Nothing used to convert them back, so the
+  // first ordinary week after a meet asked for *fives* at the triples anchor
+  // plus an increment — on a 125 kg week-1 squat, 137.5 kg for 5 reps.
+  {
+    const after = resolveDay(st, { day: 3 }).slots.find((x) => x.slotKey === 'd3_squat');
+    eq(after.reps, 5, 'the rep range is back to the ordinary wave');
+    const anchor = st.program.slots.d3_squat.week1Load;
+    // What it would have been had the peak never happened: the pre-peak anchor
+    // (125), re-anchored in peak week 1 by what was actually lifted, converted
+    // back, and rolled on one increment.
+    ok(anchor < squatAnchorBefore + 5 + 0.01,
+      'and the anchor comes back down with them, not up', `${squatAnchorBefore} -> ${anchor}`);
+    ok(anchor > squatAnchorBefore - 5,
+      'without throwing away the block either', `${squatAnchorBefore} -> ${anchor}`);
+    const implied = after.plannedLoad / (pctOf1RM(5, 8) / 100);
+    ok(implied < st.maxes.squat.value * 1.1,
+      'so week 1 after a meet is a set of five, not a single in disguise',
+      `${after.plannedLoad} for 5 implies a ${implied.toFixed(1)} max against a tested ${st.maxes.squat.value}`);
+  }
 
   /* ---- and it does not start again for the same meet ---- */
   eq(shouldEnterPeak(store.getState()), false, 'a meet already lifted cannot start a second block');
@@ -1883,6 +1960,360 @@ hr('19. Test-day promotion');
   store.update((s) => { enterPeak(s); });
   eq(testPromotion(store.getState()).reason, 'meet', 'and so does a running peak block');
   eq(testPromotion(store.getState()).promote, false, 'which never asks for a separate max attempt');
+}
+
+/* ======================================================================
+   19b. Attempts are declared, not loaded
+   ====================================================================== */
+hr('19b. Competition attempt rounding');
+{
+  for (const [units, inc, bar, plates] of [
+    ['kg', 2.5, 20, [25, 20, 15, 10, 5, 2.5, 1.25]],
+    ['lb', 5, 45, [45, 35, 25, 10, 5, 2.5, 1.25]],
+  ]) {
+    for (const maxv of [100, 141.3, 177.6, 200.4, 233.9, 312.7]) {
+      store.update((s) => {
+        Object.assign(s, store.defaultState());
+        s.profile.units = units; s.profile.barWeight = bar; s.profile.plates = [...plates];
+        s.maxes = { squat: { value: maxv }, bench: { value: maxv }, deadlift: { value: maxv } };
+        s.program = buildProgram({});
+      });
+      const a = attemptsFor(store.getState(), 'squat');
+      const at = `${units} max ${maxv}`;
+      for (const k of ['opener', 'second', 'third']) {
+        const n = a[k] / inc;
+        ok(Math.abs(n - Math.round(n)) < 1e-9,
+          `the ${k} is a legal attempt — a multiple of ${inc} ${units} (${at})`, `got ${a[k]}`);
+      }
+      ok(a.opener < a.second && a.second < a.third, `and the three go up (${at})`, `${a.opener}/${a.second}/${a.third}`);
+      ok(a.second - a.opener >= inc - 1e-9 && a.third - a.second >= inc - 1e-9,
+        `by at least the smallest jump the platform allows (${at})`);
+      // Microplates at home must not leak onto the card.
+      ok(a.opener % 1.25 === 0 && a.opener % inc === 0,
+        `microplates in the gym do not put a ${units === 'kg' ? '1.25' : '2.5'} on an attempt (${at})`, `${a.opener}`);
+    }
+  }
+}
+
+/* ======================================================================
+   20. Confirming the peaking block
+   ====================================================================== */
+hr('20. The peak asks first');
+{
+  const iso = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return store.todayISO(d); };
+
+  const lifter = (out) => {
+    store.update((s) => {
+      Object.assign(s, store.defaultState());
+      s.maxes = { squat: { value: 150 }, bench: { value: 100 }, deadlift: { value: 170 } };
+      s.program = buildProgram({ meetDate: iso(out) });
+      for (const k of Object.keys(s.program.slots)) s.program.slots[k].week1Load = 60;
+      s.program.slots.d3_squat.week1Load = 125;
+    });
+    return store.getState();
+  };
+  const trainDay = () => {
+    const st0 = store.getState();
+    const ses = startSession(st0, st0.program.cursor);
+    for (const e of ses.entries) {
+      e.sets = e.sets.map((x) => ({ load: x.load ?? e.plannedLoad ?? 60, reps: e.targetReps ?? 1,
+                                    rpe: e.targetRPE ?? 8, done: true, ts: new Date().toISOString() }));
+    }
+    store.update((s) => { s.sessions.push(ses); s.activeSessionId = ses.id; });
+    store.update((s) => { completeSession(s, ses.id); s.activeSessionId = null; });
+  };
+  const trainWeek = () => { for (let i = 0; i < 4; i++) trainDay(); };
+
+  eq(store.getState().settings.confirmPeak, true, 'asking is the default');
+
+  lifter(26);
+  trainWeek();
+  let st2 = store.getState();
+  ok(st2.program.pendingPeak, 'the week boundary offers the block instead of taking it');
+  ok(!st2.program.peak, 'and nothing has switched yet');
+  eq(peakStatus(st2).kind, 'pending', 'which the coach can see');
+  eq(shouldEnterPeak(st2), false, 'and the trigger will not fire twice while it waits');
+
+  /* ---- "not yet" carries on training ---- */
+  let res;
+  store.update((s) => { res = resolvePeakPrompt(s, { start: false }); });
+  st2 = store.getState();
+  eq(res.started, false, 'not yet');
+  ok(!st2.program.peak, 'no block');
+  eq(st2.program.pendingPeak, null, 'the question is answered');
+  eq(st2.program.cursor.week, 2, 'and the ordinary week boundary happened after all');
+  eq(st2.program.peakDeclines, 1, 'counted, because a lifter who declines twice needs telling');
+  eq(peakStatus(st2).kind, 'declined', 'and the coach says so rather than going quiet');
+
+  /* ---- and it asks again at the next boundary ---- */
+  // A week has gone by in the meantime, which is the cost of saying not yet.
+  store.update((s) => { s.program.meetDate = iso(19); });
+  trainWeek();
+  ok(store.getState().program.pendingPeak, 'the block is offered again a week later');
+  store.update((s) => { res = resolvePeakPrompt(s, { start: true }); });
+  st2 = store.getState();
+  ok(st2.program.peak, 'saying yes starts it');
+  eq(st2.program.pendingPeak, null, 'and clears the prompt');
+  ok(st2.program.events.some((e) => e.kind === 'peakStart'), 'and it is logged');
+  // The block compresses from the front rather than scheduling meet week after
+  // the meet — so a week spent deciding costs a loading week, not the taper.
+  ok(st2.program.cursor.week > 1, 'a late start skips a loading week', `week ${st2.program.cursor.week}`);
+
+  /* ---- declining until it is too late is allowed, and said out loud ---- */
+  lifter(PEAK_MIN_DAYS + 1);
+  trainWeek();
+  store.update((s) => { resolvePeakPrompt(s, { start: false }); });
+  store.update((s) => { s.program.meetDate = iso(PEAK_MIN_DAYS - 2); });
+  eq(shouldEnterPeak(store.getState()), false, 'past the runway the block is no longer offered');
+  eq(peakStatus(store.getState()).kind, 'tooLate', 'and the app says why rather than silently dropping it');
+
+  /* ---- starting it by hand, mid-week ---- */
+  lifter(24);
+  eq(store.getState().program.pendingPeak, null, 'no prompt is outstanding mid-week');
+  store.update((s) => { res = startPeakNow(s); });
+  ok(res?.started && store.getState().program.peak, 'but the lifter can start it whenever they like');
+  store.update((s) => { res = startPeakNow(s); });
+  eq(res, null, 'and starting it twice does nothing');
+
+  /* ---- and a way out of one that has already started ---- */
+  lifter(24);
+  store.update((s) => { startPeakNow(s); });
+  ok(store.getState().program.peak, 'a block is running');
+  const inPeakAnchor = store.getState().program.slots.d3_squat.week1Load;
+  store.update((s) => { exitPeak(s, { competed: false, meetStillOn: true }); });
+  st2 = store.getState();
+  eq(st2.program.peak, null, 'leaving mid-block closes it');
+  ok(!st2.program.peakDoneFor, 'without writing the meet off — it has not happened yet');
+  ok(st2.program.slots.d3_squat.week1Load < inPeakAnchor,
+    'and the triples anchor is converted back down with the rep range', `${inPeakAnchor} -> ${st2.program.slots.d3_squat.week1Load}`);
+  eq(st2.program.cursor.week, 1, 'on week 1 of an ordinary cycle');
+  eq(shouldEnterPeak(st2), true, 'and the block can be offered again while the meet is still in range');
+
+  // ...whereas a meet that has been and gone is written off, so the same date
+  // cannot launch a second block.
+  store.update((s) => { startPeakNow(s); });
+  store.update((s) => { exitPeak(s, { competed: false }); });
+  eq(store.getState().program.peakDoneFor, store.getState().program.meetDate,
+    'closing a meet that did not happen does write it off');
+  eq(shouldEnterPeak(store.getState()), false, 'and nothing starts again for it');
+
+  /* ---- with the setting off, nothing changes from before ---- */
+  lifter(26);
+  store.update((s) => { s.settings.confirmPeak = false; });
+  trainWeek();
+  ok(store.getState().program.peak, 'with asking turned off the block still takes over on its own');
+  eq(store.getState().program.pendingPeak, null, 'without a prompt');
+}
+
+/* ======================================================================
+   21. A rep short is not a stall
+   ====================================================================== */
+hr('21. Shortfall vs stall');
+{
+  const entry = (over = {}) => ({
+    targetSets: 3, targetReps: 5, prescribedLoad: 100, plannedLoad: 100,
+    sets: [
+      { done: true, load: 100, reps: 5, rpe: 8 },
+      { done: true, load: 100, reps: 5, rpe: 9 },
+      { done: true, load: 100, reps: 5, rpe: 9.5 },
+    ],
+    ...over,
+  });
+  const kind = (e, opts) => entryShortfall(e, opts).kind;
+
+  eq(kind(entry()), 'none', 'everything completed is not a shortfall');
+
+  // p. 243: missing reps "should only occasionally occur in pursuit of the
+  // planned progression on your final sets".
+  const lastShort = entry();
+  lastShort.sets[2].reps = 4;
+  eq(kind(lastShort), 'soft', 'one rep off the last set is the book\'s expected cost of pushing');
+
+  const firstShort = entry();
+  firstShort.sets[0].reps = 4;
+  eq(kind(firstShort), 'hard', 'one rep off the FIRST set means you opened too heavy');
+
+  const twoShort = entry();
+  twoShort.sets[1].reps = 4; twoShort.sets[2].reps = 4;
+  eq(kind(twoShort), 'hard', 'two sets short is not occasional');
+
+  const wayShort = entry();
+  wayShort.sets[2].reps = 3;
+  eq(kind(wayShort), 'hard', 'two reps off the last set is not one rep off the last set');
+
+  const missed = entry();
+  missed.sets[2] = { done: true, load: 100, reps: 0, failed: true };
+  eq(kind(missed), 'hard', 'a weight that did not go up is always a stall');
+
+  const oneUnlogged = entry();
+  oneUnlogged.sets = oneUnlogged.sets.slice(0, 2);
+  eq(kind(oneUnlogged), 'soft', 'one set left unlogged is noted');
+  const twoUnlogged = entry();
+  twoUnlogged.sets = twoUnlogged.sets.slice(0, 1);
+  eq(kind(twoUnlogged), 'hard', 'two are a session that did not happen');
+
+  /* ---- the load comparison has to know what the exercise loads in ---- */
+  const lighter = entry();
+  lighter.sets = lighter.sets.map((x) => ({ ...x, load: 92 }));
+  eq(kind(lighter), 'hard', 'stripping 8 kg off a barbell prescription is a stall');
+  eq(kind(lighter, { step: 8 }), 'none',
+    'the same 8 kg on a machine that only steps in 8s is the nearest weight that exists');
+
+  // Logging a set at a different weight carries it forward to the rest of the
+  // exercise, so `plannedLoad` ends up holding the lifter's own choice.
+  const carried = entry();
+  carried.sets = carried.sets.map((x) => ({ ...x, load: 90 }));
+  carried.plannedLoad = 90;
+  eq(kind(carried), 'hard', 'and the prescription is remembered separately so that still reads as one');
+
+  /* ---- two soft sessions in a row are the stall ---- */
+  store.update((s) => {
+    Object.assign(s, store.defaultState());
+    s.maxes = { squat: { value: 150 }, bench: { value: 100 }, deadlift: { value: 170 } };
+    s.program = buildProgram({});
+    for (const k of Object.keys(s.program.slots)) s.program.slots[k].week1Load = 60;
+    s.program.slots.d3_squat.week1Load = 125;
+  });
+  const trainDay = (over = {}) => {
+    const st0 = store.getState();
+    const ses = startSession(st0, st0.program.cursor);
+    for (const e of ses.entries) {
+      const o = over[e.slotKey] || {};
+      e.sets = e.sets.map((x, i) => ({
+        load: x.load ?? e.plannedLoad ?? 60,
+        reps: (o.lastRep != null && i === e.sets.length - 1) ? o.lastRep : (e.targetReps ?? 1),
+        rpe: e.targetRPE ?? 8, done: true, ts: new Date().toISOString(),
+      }));
+    }
+    store.update((s) => { s.sessions.push(ses); s.activeSessionId = ses.id; });
+    let notes = [];
+    store.update((s) => { notes = completeSession(s, ses.id).notes; s.activeSessionId = null; });
+    return notes;
+  };
+
+  trainDay(); trainDay();                                        // days 1, 2
+  let notes = trainDay({ d3_squat: { lastRep: 4 } });            // day 3, a rep short on the last set
+  ok(notes.some((n) => n.kind === 'shortfall'), 'the first short session is reported as such');
+  ok(!notes.some((n) => n.kind === 'stall'), 'and is not a stall');
+  eq(store.getState().program.slots.d3_squat.stalls, 0, 'nothing is counted against the slot');
+  eq(store.getState().program.forcedDeload, false, 'and no deload is forced off one rep');
+  ok(store.getState().program.slots.d3_squat.lastShortfall, 'but it is remembered');
+
+  trainDay();                                                    // day 4
+  trainDay(); trainDay();                                        // week 2 days 1, 2
+  notes = trainDay({ d3_squat: { lastRep: 3 } });                // week 2 day 3, short again
+  ok(notes.some((n) => n.kind === 'stall'), 'the second one is the stall');
+  eq(store.getState().program.slots.d3_squat.stalls, 1, 'counted once');
+  ok(store.getState().program.forcedDeload, 'and it forces the week-4 deload');
+
+  /* ---- and a clean session clears the memory ---- */
+  store.update((s) => {
+    s.program.slots.d3_squat.lastShortfall = { date: '2026-01-01', week: 1 };
+    s.program.slots.d3_squat.stalledThisCycle = false;
+  });
+  trainDay();                                                    // day 4, clean
+  trainDay(); trainDay(); trainDay();                            // week 3 up to day 3, clean
+  eq(store.getState().program.slots.d3_squat.lastShortfall, null,
+    'a session that goes to plan wipes the slate — the rule is two in a row, not two ever');
+}
+
+/* ======================================================================
+   22. Not everything is a barbell
+   ====================================================================== */
+hr('22. Loading grids');
+{
+  const stack = { mode: 'stack', start: 8, step: 8 };
+  const gym = { barWeight: 20, plates: [25, 20, 15, 10, 5, 2.5, 1.25] };
+
+  eq(roundToLoadable(74.5, { ...gym, loading: stack }), 72, '74.5 on an eight-kilo stack is 72');
+  eq(roundToLoadable(77, { ...gym, loading: stack }), 80, 'and 77 is 80 — nearest, not lower');
+  eq(roundToLoadable(3, { ...gym, loading: stack }), 8, 'nothing below the lightest plate on the stack');
+  eq(roundToLoadable(75, gym), 75, 'while a barbell is unchanged by any of this');
+  eq(loadStep({ ...gym, loading: stack }), 8, 'the smallest jump is one notch');
+  eq(loadStep(gym), 2.5, 'and a barbell\'s is two of the lightest plate');
+  eq(gridFloor({ ...gym, loading: stack }), 8, 'the floor is the bottom of the stack');
+  eq(gridFloor(gym), 20, 'or the empty bar');
+  eq(isLadder({ mode: 'stack', step: 0 }), false, 'a zero step is not a grid');
+  eq(isLadder({ mode: 'barbell', step: 8 }), false, 'nor is a barbell claiming one');
+  ok(plateBreakdown(72, { ...gym, loading: stack }).ladder, 'a stack has no plate breakdown');
+  eq(plateBreakdown(72, { ...gym, loading: stack }).perSide.length, 0, 'because it has no sides');
+
+  /* ---- the whole point: a machine slot stops printing weights that do not exist ---- */
+  store.update((s) => {
+    Object.assign(s, store.defaultState());
+    s.maxes = { squat: { value: 150 }, bench: { value: 100 }, deadlift: { value: 170 } };
+    s.program = buildProgram({});
+    for (const k of Object.keys(s.program.slots)) s.program.slots[k].week1Load = 60;
+    // The lat pulldown in the vertical-pull slot, on a stack that steps in 8s.
+    s.program.choices.d1_verpull = 'lat-pulldown';
+    s.program.slots.d1_verpull.week1Load = 72;
+    s.profile.loading['lat-pulldown'] = { ...stack };
+  });
+
+  const pull = () => resolveDay(store.getState(), { week: 1, day: 1 }).slots.find((x) => x.slotKey === 'd1_verpull');
+  eq(pull().plannedLoad, 72, 'week 1 asks for a weight the stack has');
+  {
+    const r = pull().loadRange;
+    eq(roundToLoadable(r.low, loadOptsFor(store.getState(), 'lat-pulldown')), r.low, 'and so are both ends of the range');
+    eq(roundToLoadable(r.high, loadOptsFor(store.getState(), 'lat-pulldown')), r.high, '');
+  }
+  const bench = resolveDay(store.getState(), { week: 1, day: 1 }).slots.find((x) => x.slotKey === 'd1_bench');
+  eq(roundToLoadable(bench.plannedLoad, { barWeight: 20, plates: [25, 20, 15, 10, 5, 2.5, 1.25] }), bench.plannedLoad,
+    'while the bench in the same session still rounds onto the bar');
+
+  /* ---- and the progression still moves, three cycles at a time ---- */
+  const trainDay = () => {
+    const st0 = store.getState();
+    const ses = startSession(st0, st0.program.cursor);
+    for (const e of ses.entries) {
+      e.sets = e.sets.map((x) => ({ load: x.load ?? e.plannedLoad ?? 60, reps: e.targetReps ?? 1,
+                                    rpe: e.targetRPE ?? 8, done: true, ts: new Date().toISOString() }));
+    }
+    store.update((s) => { s.sessions.push(ses); s.activeSessionId = ses.id; });
+    let notes = [];
+    store.update((s) => { notes = completeSession(s, ses.id).notes; s.activeSessionId = null; });
+    return notes;
+  };
+
+  // The regression this locks down. A 2.5 kg weekly increment is a third of one
+  // notch on this stack, so the anchor has to carry the fraction across cycles.
+  // Writing the rounded load back on week 1 — which is what "the anchor is what
+  // you lifted" does — threw it away every cycle and froze the slot forever.
+  store.update((s) => { s.program.slots.d1_verpull.week1Load = 74.5; });
+  eq(pull().plannedLoad, 72, 'an anchor of 74.5 still asks for 72');
+  let notes = trainDay();
+  eq(store.getState().program.slots.d1_verpull.week1Load, 74.5,
+    'and logging that 72 leaves the 74.5 alone, because 72 is what 74.5 rounds to');
+  ok(!notes.some((n) => n.kind === 'stall' || n.kind === 'shortfall'),
+    'lifting exactly what a machine slot asked for is neither a stall nor a shortfall');
+
+  // ...while a weight the lifter actually chose still re-anchors the slot.
+  store.update((s) => { s.program.cursor.week = 1; s.program.cursor.day = 1; s.program.cursor.phase = 'load'; });
+  {
+    const st0 = store.getState();
+    const ses = startSession(st0, st0.program.cursor);
+    const e = ses.entries.find((x) => x.slotKey === 'd1_verpull');
+    e.sets = e.sets.map((x) => ({ ...x, load: 80, reps: e.targetReps, rpe: 8, done: true, ts: new Date().toISOString() }));
+    for (const other of ses.entries) {
+      if (other === e) continue;
+      other.sets = other.sets.map((x) => ({ load: x.load ?? other.plannedLoad ?? 60, reps: other.targetReps ?? 1,
+                                            rpe: other.targetRPE ?? 8, done: true, ts: new Date().toISOString() }));
+    }
+    store.update((s) => { s.sessions.push(ses); s.activeSessionId = ses.id; });
+    store.update((s) => { completeSession(s, ses.id); s.activeSessionId = null; });
+  }
+  eq(store.getState().program.slots.d1_verpull.week1Load, 80,
+    'going up a notch on purpose is taken as the new anchor');
+
+  // Three cycles of the fraction accumulating, and the stack steps.
+  store.update((s) => { s.program.slots.d1_verpull.week1Load = 72; });
+  const anchors = [72];
+  for (let i = 0; i < 3; i++) {
+    store.update((s) => { startNextCycle(s); });
+    anchors.push(store.getState().program.slots.d1_verpull.week1Load);
+  }
+  eq(anchors.join(' '), '72 74.5 77 79.5', 'the anchor carries 2.5 kg a cycle exactly');
+  eq(pull().plannedLoad, 80, 'and by the third the stack has moved a notch', anchors.join(' -> '));
 }
 
 /* ======================================================================

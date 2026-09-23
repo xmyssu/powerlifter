@@ -387,7 +387,13 @@ function peakBriefing(resolved) {
       return [{
         kind: 'deload',
         title: 'Peak week 3 — everything but the big three comes down',
-        text: 'Your variations and accessories deload this week; the competition lifts do not. That split is the whole idea — shed the fatigue that is not making you better at squat, bench and deadlift, and keep the practice that is.',
+        text: 'Your variations, accessories and volume-day work deload this week; the strength-day mains and your technique singles do not. That split is the whole idea — shed the fatigue that is not making you better at squat, bench and deadlift, and keep the practice that is.',
+      }];
+    case 'load':
+      return [{
+        kind: 'cycle',
+        title: 'The block is a taper, not another cycle',
+        text: 'Your strength-day mains keep their sets and go up. Everything else runs at two-thirds of the sets it normally would, from today. That is the point of the four weeks: hold the heavy specific work, take the rest away, and arrive on the platform with the fitness you built and none of the fatigue you built it with.',
       }];
     case 'taper':
       return [{
@@ -1146,10 +1152,10 @@ function meetInsights(state, peak) {
 
   if (peak.kind === 'running') {
     const wk = peak.week;
-    const text = wk === 1 ? 'Peak week 1 of 4. Your strength-day mains are triples now instead of sets of five — the load goes up to meet the reps coming down. Everything else is the program you were already running.'
-      : wk === 2 ? 'Peak week 2 of 4. Doubles on the strength days. This is the last genuinely hard week; after it the work goes down and stays down.'
-      : wk === 3 ? 'Peak week 3 of 4. Everything that is not a competition lift deloads this week, and Day 4 is replaced by one opener single on each lift in meet order. Treat that day as a dress rehearsal — same kit, same order, same timing.'
-      : 'Meet week. The competition lifts come down too. Day 3 is your primer, 24 to 48 hours out; Day 4 is the meet.';
+    const text = wk === 1 ? 'Peak week 1 of 4. Your strength-day mains are triples now instead of sets of five — the load goes up to meet the reps coming down. Everything else drops to two-thirds of its sets: this is a taper, and volume is the thing that comes off.'
+      : wk === 2 ? 'Peak week 2 of 4. Doubles on the strength days, and the rest of the work stays thinned. This is the last genuinely hard week; after it everything goes down and stays down.'
+      : wk === 3 ? 'Peak week 3 of 4. Everything the block is not made of deloads this week, and the last day is replaced by one opener single on each lift in meet order. Treat that day as a dress rehearsal — same kit, same order, same timing.'
+      : 'Meet week. The competition lifts come down too. The second-to-last day is your primer, 24 to 48 hours out; the last one is the meet.';
     out.push({ kind: 'meet', priority: 1, title: days >= 0 ? `${days} days out · peak week ${wk} of ${PEAK_WEEKS_LABEL}` : `Peak week ${wk}`, text, action: 'meet' });
 
     // The meet date has passed and no platform session was logged. The block
@@ -1158,10 +1164,30 @@ function meetInsights(state, peak) {
       out.push({
         kind: 'meetStale', priority: 0,
         title: 'Your meet date has passed',
-        text: 'Nothing was logged for meet day, so the peaking block is still running and still tapering you. If you competed, log the attempts; if you did not, close the block and a normal cycle starts from where your peak left you.',
+        text: 'Nothing was logged for meet day, so the peaking block is still running and still tapering you. If you competed, log the attempts; if you did not, close the block and a normal cycle starts — back at the top of your rep ranges, at the loads an ordinary cycle would have reached.',
         action: 'closePeak',
       });
     }
+    return out;
+  }
+
+  if (peak.kind === 'pending') {
+    out.push({
+      kind: 'meet', priority: 0,
+      title: `${days} days out — start the peaking block?`,
+      text: 'Four weeks of work with a date on the end of it: triples, then doubles, then openers, then the platform. Everything that is not a competition lift thins out and then stops. Say yes and it starts now; say not yet and you carry on as you are and get asked again at the end of next week.',
+      action: 'peakPrompt',
+    });
+    return out;
+  }
+
+  if (peak.kind === 'declined') {
+    out.push({
+      kind: 'meet', priority: 1,
+      title: `${days} days to your meet`,
+      text: `You have put the peaking block off ${peak.declined === 1 ? 'once' : `${peak.declined} times`}. That is a decision, not a mistake — but the block needs ${PEAK_MIN_DAYS} days to fit, so there are about ${Math.max(0, days - PEAK_MIN_DAYS)} left to change your mind. You will be asked again at the end of this training week, or you can start it now.`,
+      action: 'startPeak',
+    });
     return out;
   }
 
@@ -1169,7 +1195,7 @@ function meetInsights(state, peak) {
     out.push({
       kind: 'meet', priority: 1,
       title: `${days} days to your meet`,
-      text: 'Inside four weeks. The peaking block takes over at the end of this training week — you do not have to switch anything, and you should not try to bring it forward by going heavy in the meantime. Finish the week as written.',
+      text: 'Inside four weeks. At the end of this training week the app will offer you the peaking block — you do not have to switch anything now, and you should not try to bring it forward by going heavy in the meantime. Finish the week as written.',
       action: 'meet',
     });
   } else if (peak.kind === 'waiting' && days <= 42) {

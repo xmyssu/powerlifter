@@ -220,6 +220,30 @@ export const INTERMEDIATE_PEAK = {
     // 2. Week 3: deload everything that is not a competition lift, including
     //    the squat/bench/deadlift variants.
     week3DeloadNonComp: true,
+    /**
+     * 2a. And from week 1, that same work runs at two-thirds of its sets.
+     *
+     * NOT in the peaking section's list of modifications — but the peaking
+     * section opens by saying to combine the intermediate program "with the
+     * approach shown at the end of Level 3", and that approach is the taper on
+     * p. 140, whose tenets are: begin roughly 1-4 weeks out, reduce volume by a
+     * third up to two-thirds, and maintain or slightly increase intensity.
+     *
+     * Taken literally the peak implements only the intensity half. The rep
+     * range drops on the strength days so the bar goes up, but because the block
+     * starts a fresh cycle every other slot restarts at the *top* of its rep
+     * range — so a lifter four weeks out does 3x9 on the volume day, the highest
+     * -volume week in the program, and then deloads before the wave ever walks
+     * down. That is fatigue bought at the one time of year there is nothing left
+     * to spend it on.
+     *
+     * Two-thirds of the sets is the low end of the book's own range, and it is
+     * the same fraction the book uses for a deload, so nothing new is invented.
+     * The strength-day mains and the technique work are exempt: the first is the
+     * peak, and the second is RPE 5 skill practice that the taper explicitly
+     * wants kept (p. 140: train all three lifts, low reps, low RPE).
+     */
+    taperNonCompSets: true,
     // 3. Week 3 reshuffle: the week's last day becomes squat, bench, deadlift in
     //    meet order, working up to a single at your opener on each.
     // 4. Meet week: the day before the last is the primer, 24-48 h out; the last

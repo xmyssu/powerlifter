@@ -9,8 +9,9 @@
    ========================================================================== */
 
 import { html, raw, esc, icon, $, $$, toast, sheet, closeSheet, confirmSheet, fmtDuration, haptic } from '../ui.js';
-import { fmtLoadBare, plateBreakdown, roundToLoadable, minIncrement, e1RM, fmtRPE, normalizeRPE, loadFor, parseNum, convertLoad } from '../rpe.js';
-import { resolveDay, completeSession, discardSession, slotHistory, lastComparable, templateOf } from '../program.js';
+import { fmtLoadBare, plateBreakdown, roundToLoadable, loadStep, e1RM, fmtRPE, normalizeRPE, loadFor, parseNum, convertLoad } from '../rpe.js';
+import { resolveDay, completeSession, discardSession, slotHistory, lastComparable, templateOf,
+         loadOptsFor } from '../program.js';
 import { RPE_SCALE, REST_GUIDE } from '../templates.js';
 import { sessionBriefing } from '../coach.js';
 import { optionsForSlot, SLOT_INFO, byId } from '../exercises.js';
@@ -114,6 +115,7 @@ function exerciseCard(entry, resolved, i, st, ses) {
       ${rxStrip(entry, slot, st)}
       ${(resolved.isTest || resolved.isMeet) ? rampStrip(slot, units) : lastTimeStrip(st, entry, slot)}
       ${slot?.loadNote && nextIdx === 0 ? `<p class="cite" style="margin-bottom:10px">${esc(slot.loadNote)}</p>` : ''}
+      ${coarseNote(slot, st)}
       ${rpeCheckNote(slot, entry, units)}
       ${loadStepper(entry, st)}
       <div class="sets">
@@ -133,7 +135,8 @@ function exerciseCard(entry, resolved, i, st, ses) {
 
 function rxStrip(entry, slot, st) {
   const units = st.profile.units;
-  const pb = entry.plannedLoad ? plateBreakdown(entry.plannedLoad, { barWeight: st.profile.barWeight, plates: st.profile.plates }) : null;
+  const grid = loadOptsFor(st, entry.exerciseId);
+  const pb = entry.plannedLoad ? plateBreakdown(entry.plannedLoad, grid) : null;
   const range = slot?.loadRange || null;
 
   // The weight to aim for leads; the RPE it encodes drops to the caption. The
@@ -161,7 +164,15 @@ function rxStrip(entry, slot, st) {
 }
 
 function plateStrip(pb, units) {
-  if (pb.tooLight) return `<p class="cite" style="margin-bottom:10px">Lighter than the bar — use dumbbells or a machine and log the load you use.</p>`;
+  // A weight stack has no plates and no bar. Drawing one round it was the
+  // visible half of the app assuming everything is a barbell.
+  if (pb.ladder) {
+    return `<div style="margin-bottom:12px"><div class="plates">
+      <span class="plates__label">Stack</span>
+      <span class="plate">${fmtLoadBare(pb.achieved)} ${esc(units)}</span>
+    </div></div>`;
+  }
+  if (pb.tooLight) return `<p class="cite" style="margin-bottom:10px">Lighter than the bar — use dumbbells or a machine and log the load you use. If this slot always loads that way, set its weight steps in Settings › Equipment.</p>`;
   return `<div style="margin-bottom:12px">
     <div class="plates">
       <span class="plates__label">Per side</span>
@@ -224,6 +235,22 @@ function rampStrip(slot, units) {
   </div>`;
 }
 
+/**
+ * Why the weight has not moved since last week on a machine.
+ *
+ * The anchor goes up every week; a stack with an eight-kilo step cannot express
+ * a 2.5 kg rise, so the printed load holds and then jumps three weeks' worth at
+ * once. Without a word of explanation that looks exactly like a program that
+ * has stopped working, and the obvious response — adding a plate anyway — puts
+ * the lifter three weeks ahead of their own progression.
+ */
+function coarseNote(slot, st) {
+  if (!slot || !slot.gridStep || !slot.increment) return '';
+  if (slot.gridStep <= slot.increment + 1e-9) return '';
+  const weeks = Math.ceil(slot.gridStep / slot.increment);
+  return `<p class="cite" style="margin-bottom:10px">The smallest jump here is ${fmtLoadBare(slot.gridStep)} ${esc(st.profile.units)} — about ${weeks} weeks of this lift's ${fmtLoadBare(slot.increment)} ${esc(st.profile.units)} increment. The weight holds and then steps; that is the progression working, not stalling. Add reps inside the range rather than weight while it holds.</p>`;
+}
+
 /** If the lifter's own RPE data disagrees with the wave, say so plainly. */
 function rpeCheckNote(slot, entry, units) {
   if (!slot || !slot.rpeCheckLoad || !entry.plannedLoad) return '';
@@ -239,7 +266,7 @@ function rpeCheckNote(slot, entry, units) {
 }
 
 function loadStepper(entry, st) {
-  const step = minIncrement(st.profile.plates, { microplates: st.profile.microplates });
+  const step = loadStep(loadOptsFor(st, entry.exerciseId));
   return `<div class="stepper" style="margin-bottom:12px">
     <button class="stepper__btn" data-load-delta="${-step}" data-slot="${esc(entry.slotKey)}" aria-label="Less weight">−</button>
     <div class="stepper__val">
@@ -748,8 +775,8 @@ function showSummary(ctx, sessionId, notes) {
         <div class="insight__b">${prs.map((p) => `${esc(p.name)} +${fmtLoadBare(p.gain)} ${esc(units)}`).join(' · ')}</div></div>
       </div>` : ''}
 
-      ${notes.map((n) => `<div class="insight insight--${n.kind === 'tested' ? 'good' : n.kind === 'deloadHard' ? 'info' : 'warn'}">
-        <div class="insight__icon">${icon(n.kind === 'tested' ? 'trophy' : n.kind === 'deloadHard' ? 'rest' : 'warn')}</div>
+      ${notes.map((n) => `<div class="insight insight--${n.kind === 'tested' ? 'good' : n.kind === 'deloadHard' || n.kind === 'shortfall' ? 'info' : 'warn'}">
+        <div class="insight__icon">${icon(n.kind === 'tested' ? 'trophy' : n.kind === 'deloadHard' ? 'rest' : n.kind === 'shortfall' ? 'info' : 'warn')}</div>
         <div><div class="insight__t">${esc(n.title || 'Worth knowing')}</div><div class="insight__b">${esc(n.text)}</div></div>
       </div>`).join('')}
 
@@ -777,10 +804,14 @@ function mount(root, ctx) {
   $$('[data-finish]', root).forEach((b) => b.onclick = () => finish(ctx));
   $$('[data-discard]', root).forEach((b) => b.onclick = () => discard(ctx));
 
+  // Adding or removing a set is the lifter re-prescribing, not failing to
+  // complete a prescription — so the target moves with it. Without this,
+  // trimming a set you never meant to do read as coming up short of the program.
   $$('[data-addset]', root).forEach((b) => b.onclick = () => {
     ctx.store.update((s) => {
       const e = entryOf(sessionOf(s), b.dataset.addset);
       e.sets.push({ load: e.plannedLoad, reps: null, rpe: null, done: false, ts: null });
+      e.targetSets = e.sets.length;
     });
   });
 
@@ -805,7 +836,7 @@ function mount(root, ctx) {
     }
     ctx.store.update((s) => {
       const e = entryOf(sessionOf(s), slotKey);
-      if (e && e.sets.length > 1) e.sets.pop();
+      if (e && e.sets.length > 1) { e.sets.pop(); e.targetSets = e.sets.length; }
     });
     haptic(8);
   });
@@ -817,9 +848,7 @@ function mount(root, ctx) {
     ctx.store.update((s) => {
       const e = entryOf(sessionOf(s), slotKey);
       const base = e.plannedLoad ?? 0;
-      const next = roundToLoadable(Math.max(0, base + delta), {
-        barWeight: s.profile.barWeight, plates: s.profile.plates, microplates: s.profile.microplates,
-      });
+      const next = roundToLoadable(Math.max(0, base + delta), loadOptsFor(s, e.exerciseId));
       e.plannedLoad = next;
       for (const set of e.sets) if (!set.done) set.load = next;
     });

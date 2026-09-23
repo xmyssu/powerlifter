@@ -3,7 +3,7 @@
    ========================================================================== */
 
 import { html, raw, esc, icon, $, $$, sheet, toast, confirmSheet, fmtDate, restoreSheet } from '../ui.js';
-import { PLATE_PRESETS, fmtLoadBare, plateLabel, minIncrement, e1RM, normalizeRPE, parseNum } from '../rpe.js';
+import { PLATE_PRESETS, fmtLoadBare, plateLabel, minIncrement, isLadder, e1RM, normalizeRPE, parseNum } from '../rpe.js';
 import { templateOf, buildProgram, volumeAudit, convertUnits } from '../program.js';
 import { EMPHASIS, TEMPLATES, INTERMEDIATE_PL, INTERMEDIATE_PL_3DAY, ADVANCED_ACCUMULATION, ADVANCED_INTENSIFICATION } from '../templates.js';
 import { optionsForSlot, SLOT_INFO, byId } from '../exercises.js';
@@ -91,6 +91,12 @@ function view(ctx) {
             </div>
           </div>
         </div>
+        <button class="pick" data-act="loading">
+          <div class="pick__body"><div class="pick__title">Weight steps per exercise</div>
+            <div class="pick__sub">${esc(loadingSummary(st))}</div></div>
+          ${raw(icon('chevron', 'dim'))}
+        </button>
+        <p class="cite">A pulldown stack that goes 72 then 80 cannot be asked for 74.5. Tell the app what each machine actually steps in and it will stop printing weights you cannot load — and stop reading the weight you did load as coming up short.</p>
       </div>
 
       <div class="stack-sm">
@@ -100,6 +106,7 @@ function view(ctx) {
           ${raw(toggle('restBeep', 'Chime when rest is up', '', st))}
           ${raw(toggle('restVibrate', 'Vibrate when rest is up', iOSDevice() ? 'iPhones do not let a web app buzz on a timer — use the chime.' : '', st))}
           ${raw(toggle('keepAwake', 'Keep the screen on during a session', iOSDevice() ? 'On iPhone this needs iOS 18.4 or newer, added to your home screen.' : '', st))}
+          ${raw(toggle('confirmPeak', 'Ask before the peaking block starts', 'Four weeks out the app offers the block instead of switching to it. Turn this off and it takes over on its own at the next week boundary.', st))}
         </div>
       </div>
 
@@ -187,6 +194,173 @@ function installCard() {
          ${canInstall() ? `<button class="btn btn--primary btn--block" style="margin-top:12px" data-act="install">Install</button>`
            : `<div class="cite" style="margin-top:8px">Use your browser's install or "Add to Home screen" option.</div>`}`}
   </div>`;
+}
+
+/* ---- loading grids ---------------------------------------------------- */
+
+/** Every exercise the current program actually uses, in day order, deduplicated. */
+function programExercises(st) {
+  const tpl = templateOf(st.program);
+  const seen = new Set();
+  const out = [];
+  for (const d of tpl.days) {
+    for (const slot of d.slots) {
+      const id = st.program.choices[slot.key];
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      out.push({ id, ex: byId(id), slotType: slot.slotType, day: d.n });
+    }
+  }
+  return out;
+}
+
+function loadingSummary(st) {
+  const n = programExercises(st).filter((r) => isLadder(st.profile.loading?.[r.id])).length;
+  if (!n) return 'Everything is treated as a barbell — set the machines and dumbbells here';
+  return `${n} exercise${n === 1 ? '' : 's'} set to their own steps`;
+}
+
+const GRID_MODES = [
+  { id: 'barbell', label: 'Barbell', hint: 'Bar plus pairs of plates, from your plate set above.' },
+  { id: 'stack', label: 'Weight stack', hint: 'A selectorised machine — cable, pulldown, leg curl.' },
+  { id: 'fixed', label: 'Fixed weights', hint: 'Dumbbells or fixed barbells off a rack.' },
+];
+
+/**
+ * Tell the app what each exercise is actually loaded in.
+ *
+ * Deliberately per exercise rather than per slot: the stack belongs to the
+ * machine, so swapping the lat pulldown into a different slot should carry its
+ * steps with it, and choosing a different exercise should not inherit them.
+ */
+function openLoading(ctx) {
+  const st = ctx.state;
+  const units = st.profile.units;
+  const rows = programExercises(st);
+
+  const row = (r) => {
+    const g = st.profile.loading?.[r.id];
+    const set = isLadder(g);
+    const ex = r.ex;
+    const machine = ex && ex.freeWeight === false;
+    return `<button class="pick" data-grid="${esc(r.id)}">
+      <div class="pick__body">
+        <div class="pick__title">${esc(ex?.short || r.id)}</div>
+        <div class="pick__sub">${set
+          ? `${esc(GRID_MODES.find((m) => m.id === g.mode)?.label || g.mode)} · from ${fmtLoadBare(g.start)} in steps of ${fmtLoadBare(g.step)} ${esc(units)}`
+          : machine
+            ? 'Barbell — but this is a machine, so its steps are probably not yours'
+            : 'Barbell'}</div>
+      </div>
+      ${icon('chevron', 'dim')}
+    </button>`;
+  };
+
+  sheet({
+    title: 'Weight steps',
+    body: `<div class="stack">
+      <p class="small muted">Which weights each exercise can actually be loaded to. Anything left as a barbell rounds onto your bar and plates; a stack or a dumbbell rack rounds onto its own ladder instead.</p>
+      <div class="stack-sm">${rows.map(row).join('')}</div>
+      <p class="cite">This changes the weights the app prints, the size of the + and − buttons in a session, and what counts as lifting less than you were asked for. It does not touch anything already logged.</p>
+    </div>`,
+    onMount(root) {
+      for (const b of $$('[data-grid]', root)) b.onclick = () => openGridEditor(ctx, b.dataset.grid);
+    },
+  });
+}
+
+function openGridEditor(ctx, exerciseId) {
+  const st = ctx.state;
+  const units = st.profile.units;
+  const ex = byId(exerciseId);
+  const cur = st.profile.loading?.[exerciseId];
+  const draft = {
+    mode: isLadder(cur) ? cur.mode : 'barbell',
+    start: isLadder(cur) ? cur.start : (units === 'kg' ? 5 : 10),
+    step: isLadder(cur) ? cur.step : (units === 'kg' ? 5 : 10),
+  };
+
+  const preview = () => {
+    if (draft.mode === 'barbell') {
+      return `Rounds onto your bar and plates — smallest jump ${fmtLoadBare(minIncrement(st.profile.plates, { microplates: st.profile.microplates }))} ${units}.`;
+    }
+    const start = Number(draft.start) || 0;
+    const step = Number(draft.step) || 0;
+    if (step <= 0) return 'Put a step size in.';
+    const ladder = [0, 1, 2, 3, 4].map((i) => fmtLoadBare(start + i * step));
+    return `${ladder.join(', ')}, … ${units}`;
+  };
+
+  sheet({
+    title: ex?.short || exerciseId,
+    body: `<div class="stack">
+      <div class="field">
+        <div class="field__label">How is it loaded?</div>
+        <div class="seg">${GRID_MODES.map((m) => `<button class="seg__btn" data-mode="${m.id}" aria-pressed="${draft.mode === m.id}">${esc(m.label)}</button>`).join('')}</div>
+        <div class="field__hint" data-modehint>${esc(GRID_MODES.find((m) => m.id === draft.mode)?.hint || '')}</div>
+      </div>
+
+      <div data-ladder ${draft.mode === 'barbell' ? 'hidden' : ''}>
+        <div class="row" style="gap:10px">
+          <div class="field grow">
+            <label class="field__label" for="gstart">Lightest weight</label>
+            <input class="input input--num" id="gstart" type="text" inputmode="decimal" value="${draft.start}" data-g="start">
+          </div>
+          <div class="field grow">
+            <label class="field__label" for="gstep">Jump between weights</label>
+            <input class="input input--num" id="gstep" type="text" inputmode="decimal" value="${draft.step}" data-g="step">
+          </div>
+        </div>
+        <div class="field__hint">Read them off the machine. If the plates are marked 8, 16, 24 the lightest is 8 and the jump is 8; if it goes 72 then 80, the jump is 8 whatever the bottom says.</div>
+      </div>
+
+      <div class="card card--flat">
+        <div class="eyebrow" style="margin-bottom:6px">What you will be asked for</div>
+        <div class="mono small" data-preview>${esc(preview())}</div>
+      </div>
+
+      <button class="btn btn--primary btn--block" data-save>Save</button>
+      ${isLadder(cur) ? '<button class="btn btn--bare btn--block" data-clear>Back to a barbell</button>' : ''}
+    </div>`,
+    onMount(root, close) {
+      const repaint = () => {
+        const pv = $('[data-preview]', root);
+        if (pv) pv.textContent = preview();
+        const box = $('[data-ladder]', root);
+        if (box) box.hidden = draft.mode === 'barbell';
+        const hint = $('[data-modehint]', root);
+        if (hint) hint.textContent = GRID_MODES.find((m) => m.id === draft.mode)?.hint || '';
+      };
+      for (const b of $$('[data-mode]', root)) {
+        b.onclick = () => {
+          draft.mode = b.dataset.mode;
+          for (const sib of $$('[data-mode]', root)) sib.setAttribute('aria-pressed', String(sib === b));
+          repaint();
+        };
+      }
+      for (const el of $$('[data-g]', root)) {
+        el.oninput = () => { draft[el.dataset.g] = parseNum(el.value); repaint(); };
+      }
+      $('[data-clear]', root)?.addEventListener('click', () => {
+        ctx.store.update((s) => { delete s.profile.loading[exerciseId]; });
+        close();
+        toast('Back to bar and plates.');
+        ctx.refresh();
+      });
+      $('[data-save]', root).onclick = () => {
+        const step = Number(draft.step);
+        if (draft.mode !== 'barbell' && !(step > 0)) { toast('The jump has to be more than zero.', 'bad'); return; }
+        ctx.store.update((s) => {
+          if (!s.profile.loading) s.profile.loading = {};
+          if (draft.mode === 'barbell') delete s.profile.loading[exerciseId];
+          else s.profile.loading[exerciseId] = { mode: draft.mode, start: Number(draft.start) || 0, step };
+        });
+        close();
+        toast('Saved.');
+        ctx.refresh();
+      };
+    },
+  });
 }
 
 /* ---- sheets ----------------------------------------------------------- */
@@ -647,6 +821,7 @@ function mount(root, ctx) {
 
   const acts = {
     exercises: () => openExercises(ctx),
+    loading: () => openLoading(ctx),
     emphasis: () => openEmphasis(ctx),
     switch: () => openSwitch(ctx),
     maxes: () => openMaxes(ctx),

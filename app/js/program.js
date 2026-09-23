@@ -13,7 +13,8 @@
 import { TEMPLATES, INTERMEDIATE_PL, INTERMEDIATE_PEAK, PEAK_DAYS, EMPHASIS,
          incrementFor, assessDeload, TEST_DAY, WARMUP } from './templates.js';
 import { SLOT_DEFAULTS, byId } from './exercises.js';
-import { e1RM, loadFor, roundToLoadable, pctOf1RM, normalizeRPE, convertLoad, loadBand, minIncrement, RPE_TOLERANCE, PLATE_PRESETS, KG_PER_LB } from './rpe.js';
+import { e1RM, loadFor, roundToLoadable, pctOf1RM, normalizeRPE, convertLoad, loadBand, minIncrement,
+         loadStep, gridFloor, isLadder, RPE_TOLERANCE, PLATE_PRESETS, KG_PER_LB } from './rpe.js';
 import { todayISO, uid } from './store.js';
 
 /* ---- construction ----------------------------------------------------- */
@@ -39,6 +40,10 @@ export function buildProgram({
         stalls: 0,
         stalledThisCycle: false,
         stalledAtLoad: null,
+        // The last session on this slot that came up a rep short on its final
+        // set. One of those is the book's expected cost of pushing (p. 243);
+        // two in a row is the stall. Cleared by any session that goes to plan.
+        lastShortfall: null,
       };
     }
   }
@@ -61,6 +66,8 @@ export function buildProgram({
     cursor: { cycle: 1, week: 1, day: 1, phase: 'load' },
     cyclesSinceDeload: 0,
     pendingAssessment: false,   // set when a cycle's loading weeks are done
+    pendingPeak: null,          // the peaking block is offered and waiting on an answer
+    peakDeclines: 0,            // how many times "not yet" has been chosen
     forcedDeload: false,        // a stall forces week 4 regardless of checklist
     events: [],                 // program-level history for the coach log
   };
@@ -98,8 +105,14 @@ export const PAIN_WEEK_REPS = 12;
 
 /* ---- slot geometry ---------------------------------------------------- */
 
-/** Effective rep range for a slot, after emphasis and any widening. */
-export function repRangeFor(slot, program) {
+/**
+ * Effective rep range for a slot, after emphasis and any widening.
+ *
+ * `ignorePeak` answers "what would this slot's range be if the block were not
+ * running" — which is what unwinding the peak's anchor conversion needs, and
+ * the only honest way to get it while the override is still in place.
+ */
+export function repRangeFor(slot, program, { ignorePeak = false } = {}) {
   const st = program?.slots?.[slot.key];
   const tpl = templateOf(program);
   let range = slot.repRange ? [...slot.repRange] : null;
@@ -111,7 +124,7 @@ export function repRangeFor(slot, program) {
     range = [range[0] + emph.repShift, range[1] + emph.repShift];
   }
   // Peaking overrides the strength-day main lifts down to 1-3.
-  const override = program?.peak?.repRangeOverrides?.[slot.key];
+  const override = ignorePeak ? null : program?.peak?.repRangeOverrides?.[slot.key];
   if (override) range = [...override];
 
   if (st?.extendedRange) {
@@ -123,7 +136,7 @@ export function repRangeFor(slot, program) {
 }
 
 /** Reps prescribed for a given week index (1-based) of the loading wave. */
-export function repsForWeek(slot, program, week) {
+export function repsForWeek(slot, program, week, { ignorePeak = false } = {}) {
   const tpl = templateOf(program);
 
   if (slot.fixedReps != null) return slot.fixedReps;
@@ -134,7 +147,7 @@ export function repsForWeek(slot, program, week) {
     return Math.max(1, r);
   }
 
-  const range = repRangeFor(slot, program);
+  const range = repRangeFor(slot, program, { ignorePeak });
   if (!range) return null;
   const step = slot.repStep || 1;
   return Math.max(range[0], range[1] - step * (week - 1));
@@ -182,6 +195,28 @@ export function pctForWeek(slot, program, week) {
 export function incrementOf(slot, program, units) {
   const st = program?.slots?.[slot.key];
   return incrementFor(slot, units, { small: !!st?.smallIncrement });
+}
+
+/* ---- loading grids ---------------------------------------------------- */
+
+/**
+ * The rounding options for one exercise: the lifter's bar and plates, plus the
+ * grid they have told the app that particular exercise is loaded on.
+ *
+ * Everything that turns a number into a weight someone walks up to goes through
+ * here. Passing the bare profile instead is what produces a pulldown
+ * prescription of 74.5 kg on a stack that only stops at 72 and 80.
+ */
+export function loadOptsFor(state, exerciseId) {
+  const p = state?.profile || {};
+  const base = { barWeight: p.barWeight, plates: p.plates, microplates: p.microplates };
+  const g = exerciseId ? p.loading?.[exerciseId] : null;
+  return isLadder(g) ? { ...base, loading: g } : base;
+}
+
+/** The same, for a program slot — resolves the exercise the lifter has in it. */
+export function loadOptsForSlot(state, slotKey) {
+  return loadOptsFor(state, state?.program?.choices?.[slotKey] || null);
 }
 
 /* ---- history ---------------------------------------------------------- */
@@ -438,7 +473,7 @@ export function bestMaxFor(state, lift) {
  * someone walks up to a bar and lifts; a figure they cannot load is not an
  * attempt, it is a suggestion.
  */
-export function attemptsFor(state, lift, { max = null } = {}) {
+export function attemptsFor(state, lift, { max = null, platform = true } = {}) {
   const est = max ?? bestMaxFor(state, lift);
   if (!est) return null;
   const opts = {
@@ -446,13 +481,25 @@ export function attemptsFor(state, lift, { max = null } = {}) {
     plates: state.profile.plates,
     microplates: state.profile.microplates,
   };
+  // Where is this weight going to be loaded?
+  //
+  // On the platform the answer is the meet's plates, whose smallest change is
+  // 2.5 kg (5 lb) in every federation not handling a record attempt — so a
+  // lifter with microplates at home was being handed an opener of 141.25, a
+  // number no loader will put on the bar and no card will accept.
+  //
+  // In their own gym for a test day or the opener rehearsal it is their own
+  // plate set, which may be coarser than the platform's. Declaring 157.5 and
+  // rehearsing 160 is fine; being told to rehearse a weight your gym cannot
+  // make is not.
   const inc = state.profile.units === 'kg' ? 2.5 : 5;
-  const opener = roundToLoadable(loadFor(est, 3, 10), opts);
-  const second = roundToLoadable(loadFor(est, 2, 10), opts);
-  let third = roundToLoadable(est + inc, opts);
-  // Rounding can collapse the jumps on a coarse plate set; keep them ordered
-  // and distinct, or the lifter is handed the same weight three times.
-  const step = minIncrement(state.profile.plates, { microplates: state.profile.microplates });
+  const grid = platform ? { ...opts, loading: { mode: 'fixed', start: 0, step: inc } } : opts;
+  const opener = roundToLoadable(loadFor(est, 3, 10), grid);
+  const second = roundToLoadable(loadFor(est, 2, 10), grid);
+  let third = roundToLoadable(est + inc, grid);
+  // Rounding can collapse the jumps; keep them ordered and distinct, or the
+  // lifter is handed the same weight three times.
+  const step = platform ? inc : Math.max(inc, minIncrement(state.profile.plates, { microplates: state.profile.microplates }));
   const second2 = Math.max(second, opener + step);
   third = Math.max(third, second2 + step);
 
@@ -463,7 +510,7 @@ export function attemptsFor(state, lift, { max = null } = {}) {
     .map((w) => ({ reps: w.reps, load: roundToLoadable((opener * w.pct) / 100, opts), pct: w.pct }))
     .filter((w, i, xs) => i === 0 || w.load > xs[i - 1].load);
 
-  return { lift, max: est, opener, second: second2, third, ramp };
+  return { lift, max: est, opener, second: second2, third, ramp, platform };
 }
 
 /**
@@ -496,7 +543,7 @@ function competitionChoice(state, lift) {
  * touches a wave anchor for one of these, so taking a heavy single on a whim
  * costs you nothing except the fatigue of having taken it.
  */
-export function resolveTestDay(state, { lifts = null } = {}) {
+export function resolveTestDay(state, { lifts = null, platform = false } = {}) {
   const wanted = lifts && lifts.length ? lifts : TEST_DAY.slots.map((s) => s.lift);
   const opts = {
     barWeight: state.profile.barWeight,
@@ -507,7 +554,7 @@ export function resolveTestDay(state, { lifts = null } = {}) {
   const slots = TEST_DAY.slots
     .filter((slot) => wanted.includes(slot.lift))
     .map((slot, i) => {
-      const a = attemptsFor(state, slot.lift);
+      const a = attemptsFor(state, slot.lift, { platform });
       const exId = competitionChoice(state, slot.lift) || SLOT_DEFAULTS[slot.slotType] || null;
       return {
         index: i,
@@ -620,6 +667,8 @@ export function shouldEnterPeak(state, { today = todayISO() } = {}) {
   const program = state?.program;
   if (!program || program.peak) return false;
   if (!program.meetDate || program.peakDoneFor === program.meetDate) return false;
+  // Already asked and waiting: raising it a second time would stack prompts.
+  if (program.pendingPeak) return false;
   if (!peakable(program)) return false;
   const d = daysUntil(program.meetDate, today);
   return d != null && d <= PEAK_TRIGGER_DAYS && d >= PEAK_MIN_DAYS;
@@ -639,8 +688,14 @@ export function peakStatus(state, { today = todayISO() } = {}) {
     return { kind: 'running', week, out, weeks: PEAK_WEEKS };
   }
   if (out == null) return null;
+  // Waiting on the lifter, not on the calendar.
+  if (program.pendingPeak) return { kind: 'pending', out, weeks: PEAK_WEEKS, declined: program.peakDeclines || 0 };
   if (out < 0) return { kind: 'past', out };
   if (program.peakDoneFor === program.meetDate) return { kind: 'done', out };
+  // Put off at least once, and still inside the window where it would fit.
+  if (program.peakDeclines && out >= PEAK_MIN_DAYS && out <= PEAK_TRIGGER_DAYS) {
+    return { kind: 'declined', out, weeks: PEAK_WEEKS, declined: program.peakDeclines };
+  }
   if (!peakable(program)) return { kind: 'unsupported', out };
   if (out < PEAK_MIN_DAYS) return { kind: 'tooLate', out };
   if (out > PEAK_TRIGGER_DAYS) return { kind: 'waiting', out, startsIn: out - PEAK_TRIGGER_DAYS };
@@ -679,6 +734,33 @@ export function peakWeek(program) {
 /** The three lifts as they are contested, as opposed to trained around. */
 const COMP_SLOT_TYPES = new Set(['squat', 'bench', 'deadlift']);
 export const isCompetitionSlot = (slot) => !!slot?.lift && COMP_SLOT_TYPES.has(slot.slotType);
+
+/**
+ * The work the peak is made of — the only thing in the block that keeps its
+ * full prescription.
+ *
+ * Two kinds qualify. The strength-day mains, which is what the rep-range
+ * override names, are the peak: their volume comes down through the reps
+ * (3 x 5 becomes 3 x 3, then 3 x 2, then a single) while the bar goes up, which
+ * is the taper's "maintain or slightly increase intensity" done properly. And
+ * the technique slots, which are 1-3 reps at RPE 5 on the competition lifts —
+ * the taper asks for exactly that and it costs nothing to recover from.
+ *
+ * Everything else is the volume the taper exists to remove: see
+ * `INTERMEDIATE_PEAK.rules.taperNonCompSets`.
+ */
+export function peakKeepsFullSets(slot, program) {
+  if (program?.peak?.repRangeOverrides?.[slot?.key]) return true;
+  return !!slot?.technique;
+}
+
+/** Sets for a slot in a given peak week, once the block's volume cut applies. */
+export function peakSetsFor(slot, program, peakKind) {
+  const thinned = Math.max(1, Math.floor((slot.sets * 2) / 3));
+  if (!program?.peak || !peakKind || peakKind === 'meet' || peakKind === 'primer' || peakKind === 'openers') return slot.sets;
+  if (peakKeepsFullSets(slot, program)) return slot.sets;
+  return thinned;
+}
 
 /**
  * What the peak does to a given day — the single place the four weeks are
@@ -724,7 +806,10 @@ function resolvePeakDay(state, kind, { week, day, phase }) {
   };
 
   const slots = dayDef.slots.map((slot, i) => {
-    const a = attemptsFor(state, slot.lift);
+    // Rehearsed on the lifter's own plates; the figure they declare is the
+    // platform-legal one, which is only different when their gym is coarser.
+    const a = attemptsFor(state, slot.lift, { platform: false });
+    const declared = attemptsFor(state, slot.lift);
     const exId = competitionChoice(state, slot.lift) || SLOT_DEFAULTS[slot.slotType] || null;
     // The primer is a fraction of the opener, not of a max: it is the same ramp
     // the lifter will walk on meet day, stopped early. Expressing it off the
@@ -754,12 +839,12 @@ function resolvePeakDay(state, kind, { week, day, phase }) {
       loadNote: !a
         ? 'No estimate for this lift yet — work up by feel and stop well short.'
         : kind === 'openers'
-          ? `Your opener: ${a.opener}. Ramp to it and take one. If it does not move like a warm-up, it is not your opener — lower it now, while lowering it is free.`
+          ? `Your opener: ${a.opener}.${declared && declared.opener !== a.opener ? ` Declare ${declared.opener} on the day — your plates do not make that weight, so rehearse the nearest one you can load.` : ''} Ramp to it and take one. If it does not move like a warm-up, it is not your opener — lower it now, while lowering it is free.`
           : 'One easy single. If you are thinking about whether to add weight, you have finished.',
       rpeCheckLoad: null,
       increment: null,
       lastTime: lastComparable(state, slot.key, { reps: 1 }),
-      attempts: kind === 'openers' ? a : null,
+      attempts: kind === 'openers' ? { ...a, declared: declared || a } : null,
     };
   });
 
@@ -791,7 +876,7 @@ function resolvePeakDay(state, kind, { week, day, phase }) {
  * aftermath: logging it is what ends the peak.
  */
 function resolveMeetDay(state, { week, day, phase }) {
-  const base = resolveTestDay(state, { lifts: ['squat', 'bench', 'deadlift'] });
+  const base = resolveTestDay(state, { lifts: ['squat', 'bench', 'deadlift'], platform: true });
   return {
     ...base,
     // Its own day definition: inheriting the test day's would have every pill
@@ -854,12 +939,29 @@ export function enterPeak(state, { today = todayISO() } = {}) {
   return program.peak;
 }
 
-function peakAnchor(slot, program, slotState) {
+/**
+ * Convert a slot's wave anchor between its ordinary rep range and the peak's.
+ *
+ * `dir` is +1 going in (fives become triples, so the bar goes up to keep the
+ * RPE) and -1 coming out. The ratio of table percentages is the whole
+ * conversion, and it stays tied to the lifter's own anchor rather than to an
+ * estimate.
+ */
+function peakAnchor(slot, program, slotState, dir = 1) {
   const override = INTERMEDIATE_PEAK.rules.repRangeOverrides[slot.key];
   if (!override || !slotState.week1Load) return null;
   const rpe = slot.rpe ?? (slot.rpeRange ? (slot.rpeRange[0] + slot.rpeRange[1]) / 2 : null);
-  const fromReps = repsForWeek(slot, program, 1);
-  const toReps = override[1];
+  // Both ends are derived rather than read off the live range, because
+  // `program.peak` is unset on the way in and set on the way out — asking the
+  // range what it currently is would give the same answer in both directions
+  // and the conversion would only ever run one way. `ignorePeak` gives the
+  // ordinary wave's week-1 reps with emphasis and any widening applied; the
+  // peak end is the override's top, widened the same way if the range is.
+  const waveReps = repsForWeek(slot, program, 1, { ignorePeak: true });
+  const widened = program?.slots?.[slot.key]?.extendedRange ? (slot.repStep || 1) : 0;
+  const peakReps = override[1] + widened;
+  const fromReps = dir > 0 ? waveReps : peakReps;
+  const toReps = dir > 0 ? peakReps : waveReps;
   if (!rpe || !fromReps || !toReps || fromReps === toReps) return null;
   const a = pctOf1RM(fromReps, rpe);
   const b = pctOf1RM(toReps, rpe);
@@ -868,19 +970,47 @@ function peakAnchor(slot, program, slotState) {
 }
 
 /**
- * The peak is over the moment the meet is logged.
+ * The peak is over the moment the meet is logged — or the moment the lifter
+ * says it is.
  *
- * `peakDoneFor` is stamped with the date rather than cleared, so a lifter who
- * keeps training afterwards without changing the meet date does not get a second
- * peaking cycle out of a meet they have already lifted.
+ * `meetStillOn` is the difference between the two ways out. Someone who
+ * competed, or whose meet date has gone by unlogged, is done with that meet:
+ * `peakDoneFor` is stamped with the date rather than cleared, so training on
+ * afterwards without changing it cannot launch a second block off the same day.
+ * Someone who simply decided this was not the month to be peaking has not
+ * cancelled their meet, so nothing is stamped and the block is offered again at
+ * the next week boundary while there is still room for it.
  */
-export function exitPeak(state, { competed = true } = {}) {
+export function exitPeak(state, { competed = true, meetStillOn = false } = {}) {
   const program = state.program;
   if (!program?.peak) return null;
   const meetDate = program.peak.meetDate || program.meetDate;
-  program.peakDoneFor = meetDate;
+
+  // Undo the rep-range conversion before the peak flag goes, or the lifter comes
+  // out of the block with a triples anchor and a rep range back at 3-5.
+  //
+  // Entering the peak raised these anchors because the reps were coming down:
+  // a slot asked for a triple where it did a set of five needs ~6.5% more bar to
+  // still be RPE 8. Nothing used to put that back, so the first ordinary week
+  // after a meet asked for *fives* at the triples anchor plus an increment — on
+  // a 125 kg week-1 squat that is 137.5 kg for 5, a load a long way past RPE 10.
+  // The lifter misses it, the miss reads as a stall, the stall forces a deload
+  // and cuts 7.5% off the anchor, and the week after a meet is spent digging out
+  // of a hole the app dug. The conversion runs back through the same table.
+  const tpl = templateOf(program);
+  for (const day of tpl.days) {
+    for (const slot of day.slots) {
+      const st = program.slots[slot.key];
+      if (!st?.week1Load) continue;
+      const back = peakAnchor(slot, program, st, -1);
+      if (back != null) st.week1Load = back;
+    }
+  }
+
+  if (!meetStillOn) program.peakDoneFor = meetDate;
   program.peak = null;
-  program.events.push({ date: todayISO(), kind: 'peakEnd', meetDate, competed });
+  program.pendingPeak = null;
+  program.events.push({ date: todayISO(), kind: 'peakEnd', meetDate, competed, meetStillOn });
   // Meet week was a taper and the meet itself is three singles: the lifter is
   // beaten up but not accumulating fatigue, so the deload counter starts clean
   // rather than dragging the pre-meet cycles into the next block.
@@ -920,16 +1050,14 @@ export function resolveDay(state, { cycle, week, day, phase } = {}) {
   // lifts come down too, which is the one week of the year that is true.
   const isDeload = phase === 'deload' || peak?.kind === 'taper';
   const isPainWeek = phase === 'painWeek';
-  const loadOpts = {
-    barWeight: state.profile.barWeight,
-    plates: state.profile.plates,
-    microplates: state.profile.microplates,
-  };
 
   const slots = dayDef.slots.map((slot, i) => {
     const st = program.slots[slot.key] || {};
     const exId = program.choices[slot.key];
     const ex = byId(exId);
+    // Every load below is rounded onto *this exercise's* grid, not the lifter's
+    // barbell. A machine slot and a squat slot round differently.
+    const loadOpts = loadOptsFor(state, exId);
     const inc = incrementOf(slot, program, units);
     const weeksInWave = loadingWeeks(program);
 
@@ -948,10 +1076,21 @@ export function resolveDay(state, { cycle, week, day, phase } = {}) {
     let pct = pctForWeek(slot, program, waveWeek);
     let repsRaised = false;
 
-    // Peak week 3 deloads everything that is not contested — the variants
-    // included — while the competition lifts keep climbing to their opener.
-    // That is a per-slot decision, so it cannot ride on the day-level flag.
-    const slotDeload = isDeload || (peak?.kind === 'week3' && !isCompetitionSlot(slot));
+    // Peak week 3 deloads everything the block is not made of — the variants
+    // and the volume day included — while the strength-day mains keep climbing
+    // to their opener and the technique work carries on. That is a per-slot
+    // decision, so it cannot ride on the day-level flag.
+    //
+    // The book draws this line at "not a competition lift" (p. 245), which
+    // leaves the volume day's bench loading at seven reps seven days out. Seven
+    // reps at RPE 7 is not specificity, it is fatigue; the line that matters is
+    // the one between the peak and everything else.
+    const slotDeload = isDeload || (peak?.kind === 'week3' && !peakKeepsFullSets(slot, program));
+
+    // Weeks 1-2 of the block: the same work is still loading, but at two-thirds
+    // of its sets. Week 3 and meet week are handled by the deload above, which
+    // already thins to two-thirds and takes the load down as well.
+    const peakThinned = !slotDeload && peakSetsFor(slot, program, peak?.kind) !== slot.sets;
 
     if (slotDeload) {
       // Intermediate: lowest reps and lowest load of the wave, two-thirds of the sets.
@@ -1007,6 +1146,8 @@ export function resolveDay(state, { cycle, week, day, phase } = {}) {
       repsRaised = true;
     }
 
+    if (peakThinned) sets = peakSetsFor(slot, program, peak?.kind);
+
     // --- load --------------------------------------------------------
     const plan = plannedLoad({ state, program, slot, week: waveWeek, isDeload: slotDeload, repsRaised, inc, pct, reps, targetRPE, rpeRange });
     const planned = plan.load == null ? null : roundToLoadable(plan.load, loadOpts);
@@ -1027,8 +1168,21 @@ export function resolveDay(state, { cycle, week, day, phase } = {}) {
       pct,
       timed: !!slot.timed,
       prescription: slot.prescription || null,
+      peakThinned,
       plannedLoad: planned,
       loadRange,
+      /**
+       * One notch of whatever this exercise is loaded in.
+       *
+       * Worth carrying to the UI because when it is bigger than the weekly
+       * increment — an eight-kilo stack against a 2.5 kg increase — the printed
+       * load holds for two or three weeks and then steps. The anchor is moving
+       * the whole time; the bar simply cannot say so. That is the book's own
+       * answer for a lifter without small plates (p. 241: "increase the load
+       * every other session"), and it reads as a broken program unless the app
+       * says otherwise.
+       */
+      gridStep: loadStep(loadOpts),
       loadSource: plan.source,
       loadNote: plan.note,
       rpeCheckLoad: plan.rpeCheck == null ? null : roundToLoadable(plan.rpeCheck, loadOpts),
@@ -1231,6 +1385,14 @@ export function startSession(state, position) {
       targetReps: s.reps,
       targetRPE: s.targetRPE,
       rpeRange: s.rpeRange,
+      // What the program asked for, kept apart from `plannedLoad` and never
+      // written to again. `plannedLoad` is the *working* load: logging a set at
+      // a different weight carries it forward to the remaining sets, so by the
+      // end of an exercise it holds whatever the lifter chose. Comparing that
+      // against itself is how "did you lift what you were asked for" came out
+      // yes on a session where the answer was no, and no on one where the
+      // prescription was simply not loadable.
+      prescribedLoad: s.plannedLoad,
       plannedLoad: s.plannedLoad,
       pct: s.pct,
       note: '',
@@ -1319,19 +1481,78 @@ function recordTestedMaxes(state, session) {
   return notes;
 }
 
-/** Did a slot fall short of what was prescribed? (book's definition of a stall) */
-export function entryStalled(entry) {
-  const done = (entry.sets || []).filter((s) => s.done);
-  if (!done.length) return false;
+/**
+ * How far short of the prescription an entry came, and whether that is a stall.
+ *
+ * The book is explicit that these are not the same question. Missing reps
+ * "should only occasionally occur in pursuit of the planned progression on your
+ * final sets. This will happen as you push the limits of your strength week to
+ * week and cycle to cycle" (p. 243) — that is the program working, not failing.
+ * A stall is being "unable to complete the progression as outlined on a given
+ * exercise" (p. 244), and the novice version of the same rule spells out what
+ * that looks like: "if you go two weeks in a row and do not get your target
+ * repetitions" (p. 241).
+ *
+ * So one rep off the last set is `soft` — noted, not acted on, and it becomes a
+ * stall only if the next session on that slot does it again. Everything that is
+ * not that is `hard`: a weight that did not go up, a first set that fell short,
+ * more than one set short, two or more reps missing, or a bar lighter than the
+ * one asked for by more than a single notch of whatever this exercise loads in.
+ *
+ * `step` is that notch. Without it a prescription of 74.5 kg on a stack that
+ * stops at 72 reads as a stall every single week.
+ */
+export function entryShortfall(entry, { step = 0 } = {}) {
+  const done = (entry?.sets || []).filter((s) => s.done);
+  const targetSets = entry?.targetSets || done.length;
+  const missingSets = Math.max(0, targetSets - done.length);
+  if (!done.length) return { kind: missingSets ? 'hard' : 'none', reasons: missingSets ? ['nothing logged'] : [] };
+
   const target = entry.targetReps;
-  const planned = entry.plannedLoad;
-  // A missed attempt is the plainest stall there is: the prescribed load went on
-  // the bar and did not come back up.
-  if (done.some((s) => s.failed)) return true;
-  const missedReps = done.some((s) => s.reps != null && target != null && s.reps < target);
-  const droppedLoad = planned != null && done.some((s) => s.load != null && s.load < planned - 1e-6);
-  const shortSets = done.length < (entry.targetSets || done.length);
-  return missedReps || droppedLoad || shortSets;
+  const prescribed = entry.prescribedLoad ?? entry.plannedLoad ?? null;
+  const tol = Math.max(0, step) + 1e-6;
+
+  const reasons = [];
+  const shortAt = [];
+  let worstReps = 0;
+  let failed = false;
+  let lightBar = false;
+
+  done.forEach((s, i) => {
+    let short = false;
+    if (s.failed) { failed = true; short = true; }
+    if (target != null && s.reps != null && !s.failed && s.reps < target) {
+      worstReps = Math.max(worstReps, target - s.reps);
+      short = true;
+    }
+    if (prescribed != null && s.load != null && s.load < prescribed - tol) { lightBar = true; short = true; }
+    if (short) shortAt.push(i);
+  });
+
+  if (!shortAt.length && !missingSets) return { kind: 'none', reasons: [] };
+
+  // Ordered so `reasons[0]` is the most serious thing that happened, because
+  // that is the one the note in front of the lifter quotes.
+  if (failed) reasons.push('a weight that did not go up');
+  if (lightBar) reasons.push('the bar was lighter than prescribed');
+  if (shortAt.includes(0)) reasons.push('the first set fell short');
+  if (shortAt.length > 1) reasons.push(`${shortAt.length} sets fell short`);
+  if (worstReps > 1) reasons.push(`${worstReps} reps short on a set`);
+  if (missingSets) reasons.push(`${missingSets} set${missingSets === 1 ? '' : 's'} not logged`);
+  if (!reasons.length && worstReps === 1) reasons.push('a rep short on the last set');
+
+  const hard = failed || lightBar || shortAt.includes(0) || shortAt.length > 1 || worstReps > 1 || missingSets > 1;
+  return { kind: hard ? 'hard' : 'soft', reasons, shortSets: shortAt.length, missingSets, repsShort: worstReps };
+}
+
+/**
+ * Did a slot fall short of what was prescribed, at all?
+ *
+ * The loose question, which is the one a session summary wants to answer. The
+ * progression engine asks the strict one through `entryShortfall`.
+ */
+export function entryStalled(entry, opts) {
+  return entryShortfall(entry, opts).kind !== 'none';
 }
 
 /**
@@ -1384,28 +1605,58 @@ export function completeSession(state, sessionId) {
     const doneSets = (entry.sets || []).filter((s) => s.done && s.load > 0);
     if (!doneSets.length) continue;
 
+    const grid = loadOptsFor(state, entry.exerciseId);
+
     // The week-1 load of a cycle is the anchor the whole wave is built from.
     if (session.week === 1 && session.phase === 'load') {
-      st.week1Load = doneSets[0].load;
+      // Only overwritten when the lifter actually chose a different weight.
+      // The anchor is carried unrounded on purpose (see `startNextCycle`): a
+      // halved increment, or a weekly increment smaller than one notch of a
+      // machine's stack, has to accumulate across weeks before the bar can
+      // express it. Writing the rounded load back here threw that fraction away
+      // every cycle — which on an eight-kilo stack means the load never moves
+      // again, and on a gym without 1.25s froze every post-stall lift.
+      const logged = doneSets[0].load;
+      const held = st.week1Load != null && Math.abs(roundToLoadable(st.week1Load, grid) - logged) < 1e-6;
+      if (!held) st.week1Load = logged;
     }
 
-    if (entryStalled(entry) && session.phase === 'load') {
+    if (session.phase === 'load') {
       // Technique work is meant to stay submaximal forever, so falling short of
       // it is never a stall. On the 4-day that is a whole day; on the 3-day the
       // same sets are folded into other days, so the slot flag has to count too.
       const isTechniqueDay = tpl.days.find((d) => d.n === session.day)?.role === 'technique';
       if (!isTechniqueDay && !slot.technique) {
-        if (!st.stalledThisCycle) {
-          st.stalledThisCycle = true;
-          st.stalledAtLoad = doneSets[0].load;
-          st.stalls += 1;
-          program.forcedDeload = true;
+        const short = entryShortfall(entry, { step: loadStep(grid) });
+        const name = byId(entry.exerciseId)?.short || entry.slotKey;
+        const repeat = short.kind === 'soft' && !!st.lastShortfall;
+
+        if (short.kind === 'hard' || repeat) {
+          st.lastShortfall = null;
+          if (!st.stalledThisCycle) {
+            st.stalledThisCycle = true;
+            st.stalledAtLoad = doneSets[0].load;
+            st.stalls += 1;
+            program.forcedDeload = true;
+            notes.push({
+              kind: 'stall',
+              title: 'Stall recorded',
+              slotKey: entry.slotKey,
+              text: repeat
+                ? `Second session running that ${name} has come up short — ${short.reasons[0]}. One of those is the cost of pushing; two in a row is a stall. Finish this cycle, dropping load as needed so every set and rep gets completed — then take the week-4 deload regardless of how the checklist scores.`
+                : `You came up short on ${name} — ${short.reasons[0]}. Finish this cycle, dropping load as needed so every set and rep gets completed — then take the week-4 deload regardless of how the checklist scores.`,
+            });
+          }
+        } else if (short.kind === 'soft') {
+          st.lastShortfall = { date: session.date, week: session.week, cycle: session.cycle };
           notes.push({
-            kind: 'stall',
-            title: 'Stall recorded',
+            kind: 'shortfall',
+            title: 'Noted, not a stall',
             slotKey: entry.slotKey,
-            text: `You came up short on ${byId(entry.exerciseId)?.short || entry.slotKey}. Finish this cycle, dropping load as needed so every set and rep gets completed — then take the week-4 deload regardless of how the checklist scores.`,
+            text: `${name} ${short.missingSets ? 'is a set short of what was prescribed' : 'came up a rep short on its last set'}. The book expects that occasionally — it is what pushing the top of a wave looks like, and nothing changes because of it. If the next session on this lift comes up short too, that is a stall and the app will treat it as one.`,
           });
+        } else {
+          st.lastShortfall = null;
         }
       }
     }
@@ -1505,20 +1756,35 @@ export function advanceCursor(state) {
     return;
   }
 
+  // A meet inside the next four weeks outranks the rest of the cycle. The peak
+  // is its own mesocycle and starts at its own week 1, so this cuts the current
+  // cycle short rather than peaking from wherever the wave happened to be.
+  if (shouldEnterPeak(state)) {
+    if (peakNeedsConfirming(state)) { askAboutPeak(program, 'week'); return; }
+    enterPeak(state);
+    return;
+  }
+
+  endOfWeek(state);
+}
+
+/**
+ * What an ordinary week boundary does once the peak has had its say.
+ *
+ * Split out so declining the peak can run it afterwards: the block is offered
+ * at the boundary, and if the answer is no the week has to end the way it
+ * always would have.
+ */
+function endOfWeek(state) {
+  const program = state.program;
+  const cur = program.cursor;
+
   // Both of the checklist's non-proceed answers are a single week that stands in
   // for the normal cycle break, so both roll into the next cycle when they are
   // done. Without this the cursor stayed pinned to the pain week and re-asked
   // the checklist every time it came round, with no way out but answering
   // differently.
-  if (cur.phase === 'deload' || cur.phase === 'painWeek') {
-    if (shouldEnterPeak(state)) enterPeak(state); else startNextCycle(state);
-    return;
-  }
-
-  // A meet inside the next four weeks outranks the rest of the cycle. The peak
-  // is its own mesocycle and starts at its own week 1, so this cuts the current
-  // cycle short rather than peaking from wherever the wave happened to be.
-  if (shouldEnterPeak(state)) { enterPeak(state); return; }
+  if (cur.phase === 'deload' || cur.phase === 'painWeek') { startNextCycle(state); return; }
 
   const weeks = loadingWeeks(program);
   if (cur.week < weeks) {
@@ -1528,6 +1794,62 @@ export function advanceCursor(state) {
 
   // Loading weeks are done — the checklist decides what happens next.
   program.pendingAssessment = true;
+}
+
+/* ---- confirming the peak ---------------------------------------------- */
+
+/**
+ * Does the block need the lifter's word before it takes over?
+ *
+ * It switched on its own, on a date typed in weeks earlier, and then ran four
+ * weeks that cannot be unwound without losing the wave. That is the right
+ * default only if the date is still right — and a meet gets moved, a lifter
+ * gets ill, a cycle lands badly. Asking costs one tap; not asking costs a month.
+ */
+export function peakNeedsConfirming(state) {
+  return state?.settings?.confirmPeak !== false;
+}
+
+function askAboutPeak(program, onDecline) {
+  program.pendingPeak = { meetDate: program.meetDate, askedOn: todayISO(), onDecline };
+}
+
+/**
+ * Answer the question. `start` runs the block; anything else carries on
+ * training and asks again at the next week boundary, for as long as the meet is
+ * still far enough out for a block to fit.
+ */
+export function resolvePeakPrompt(state, { start = false } = {}) {
+  const program = state?.program;
+  const pending = program?.pendingPeak;
+  if (!pending) return null;
+  program.pendingPeak = null;
+
+  if (start) {
+    enterPeak(state);
+    return { started: true, week: program.cursor.week };
+  }
+
+  program.peakDeclines = (program.peakDeclines || 0) + 1;
+  program.events.push({ date: todayISO(), kind: 'peakDeclined', meetDate: program.meetDate });
+  if (pending.onDecline === 'cycle') startNextCycle(state);
+  else endOfWeek(state);
+  return { started: false, declines: program.peakDeclines };
+}
+
+/**
+ * Start the block now, from anywhere the lifter asks for it.
+ *
+ * The automatic trigger is a week boundary; this is the manual one, for the
+ * lifter who said "not yet" and then changed their mind on the Wednesday.
+ */
+export function startPeakNow(state) {
+  const program = state?.program;
+  if (!program || program.peak) return null;
+  if (!shouldEnterPeak(state)) return null;
+  program.pendingPeak = null;
+  enterPeak(state);
+  return { started: true, week: program.cursor.week };
 }
 
 /** Answer the deload checklist and route accordingly. */
@@ -1560,7 +1882,11 @@ export function resolveAssessment(state, answers) {
     program.cursor.phase = 'painWeek';
     program.cursor.week = loadingWeeks(program) + 1;
   } else if (shouldEnterPeak(state)) {
-    enterPeak(state);
+    // Declining here has to fall through to a fresh cycle rather than back into
+    // `endOfWeek`, which would see the loading weeks finished and ask the
+    // checklist the lifter has just answered.
+    if (peakNeedsConfirming(state)) askAboutPeak(program, 'cycle');
+    else enterPeak(state);
   } else {
     startNextCycle(state);
   }
@@ -1594,8 +1920,12 @@ export function startNextCycle(state, { intoPeak = false } = {}) {
         // anchor below the bar itself, and every later stall shrinks it again.
         const base = st.stalledAtLoad || st.week1Load;
         if (base) {
-          const cut = roundToLoadable(base * 0.925, state.profile);
-          st.week1Load = Math.max(cut ?? state.profile.barWeight, state.profile.barWeight);
+          // On this exercise's own grid, and floored at the lightest weight that
+          // grid can make — the empty bar, or the bottom of the stack.
+          const grid = loadOptsFor(state, program.choices[slot.key]);
+          const floor = gridFloor(grid);
+          const cut = roundToLoadable(base * 0.925, grid);
+          st.week1Load = Math.max(cut ?? floor, floor);
         }
         st.smallIncrement = true;
         st.stalledThisCycle = false;
@@ -1683,10 +2013,12 @@ export function cyclePlan(state) {
   const weeks = loadingWeeks(program);
   const peaking = !!program.peak;
 
-  const planSlot = (slot, w) => ({
+  const planSlot = (slot, w, peakKind = null) => ({
     key: slot.key,
     name: byId(program.choices[slot.key] || SLOT_DEFAULTS[slot.slotType])?.short || slot.slotType,
-    sets: slot.sets,
+    sets: peakKind === 'week3' && !peakKeepsFullSets(slot, program)
+      ? Math.max(1, Math.floor((slot.sets * 2) / 3))
+      : peakSetsFor(slot, program, peakKind),
     reps: repsForWeek(slot, program, w),
     pct: pctForWeek(slot, program, w),
     rpe: slot.rpe ?? null,
@@ -1709,14 +2041,17 @@ export function cyclePlan(state) {
       // is quietly wrong for a month.
       peakKind: plan?.kind || null,
       note: plan?.kind === 'week3'
-        ? 'Everything that is not a competition lift deloads this week, and Day 4 is replaced by opener singles.'
-        : null,
+        ? 'Everything the block is not made of deloads this week, and the last day is replaced by opener singles.'
+        : plan?.kind === 'load'
+          ? 'Your strength-day mains keep their sets and climb. Everything else runs at two-thirds of its sets — the block is a taper, and the volume is what comes off.'
+          : null,
       days: tpl.days.map((d) => {
         if (peaking && peakPlanFor(program, { week: w, day: d.n, phase: 'load' })?.kind === 'openers') {
           return { day: d.n, label: PEAK_DAYS.openers.label, role: 'strength', peakKind: 'openers',
-                   slots: PEAK_DAYS.openers.slots.map((slot) => planSlot(slot, w)) };
+                   slots: PEAK_DAYS.openers.slots.map((slot) => planSlot(slot, w, 'openers')) };
         }
-        return { day: d.n, label: d.label, role: d.role, peakKind: null, slots: d.slots.map((slot) => planSlot(slot, w)) };
+        return { day: d.n, label: d.label, role: d.role, peakKind: null,
+                 slots: d.slots.map((slot) => planSlot(slot, w, plan?.kind || null)) };
       }),
     });
   }
@@ -1734,10 +2069,11 @@ export function cyclePlan(state) {
         }
         if (d.n === pd.primerDay) {
           return { day: d.n, label: PEAK_DAYS.primer.label, role: 'primer', peakKind: 'primer',
-                   slots: PEAK_DAYS.primer.slots.map((slot) => planSlot(slot, weeks)) };
+                   slots: PEAK_DAYS.primer.slots.map((slot) => planSlot(slot, weeks, 'primer')) };
         }
         return { day: d.n, label: `${d.label} · taper`, role: d.role, peakKind: 'taper',
-                 slots: d.slots.map((slot) => planSlot(slot, weeks)) };
+                 slots: d.slots.map((slot) => ({ ...planSlot(slot, weeks, 'taper'),
+                                                 sets: Math.max(1, Math.floor((slot.sets * 2) / 3)) })) };
       }),
     });
   }
@@ -1828,10 +2164,24 @@ export function convertUnits(state, to) {
     if (m.fromLoad) m.fromLoad = roundToLoadable(m.fromLoad * f, state.profile);
   }
 
+  // A machine's stack is described in the unit it is labelled in, so the grids
+  // convert with everything else. Left alone, an 8 kg step would come out of a
+  // switch to pounds still claiming to be 8 — and every accessory would round
+  // onto a ladder three and a half times too fine.
+  for (const [id, g] of Object.entries(state.profile.loading || {})) {
+    if (!isLadder(g)) continue;
+    state.profile.loading[id] = {
+      ...g,
+      start: +(Number(g.start || 0) * f).toFixed(2),
+      step: +(Number(g.step) * f).toFixed(2),
+    };
+  }
+
   for (const key of Object.keys(state.program?.slots || {})) {
     const sl = state.program.slots[key];
-    if (sl.week1Load) sl.week1Load = roundToLoadable(sl.week1Load * f, state.profile);
-    if (sl.stalledAtLoad) sl.stalledAtLoad = roundToLoadable(sl.stalledAtLoad * f, state.profile);
+    const grid = loadOptsFor(state, state.program.choices?.[key]);
+    if (sl.week1Load) sl.week1Load = roundToLoadable(sl.week1Load * f, grid);
+    if (sl.stalledAtLoad) sl.stalledAtLoad = roundToLoadable(sl.stalledAtLoad * f, grid);
   }
   return state;
 }

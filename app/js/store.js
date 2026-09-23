@@ -40,6 +40,16 @@ export function defaultState() {
       plates: [25, 20, 15, 10, 5, 2.5, 1.25],
       microplates: true,
       equipment: ['barbell', 'rack', 'bench', 'pullupBar', 'dumbbells', 'cable', 'legPress'],
+      /**
+       * Per-exercise loading grids, keyed by exercise id.
+       *
+       * Empty means "everything is a barbell", which is the right default and
+       * the wrong answer for a lat pulldown. An entry looks like
+       * `{ mode: 'stack', start: 8, step: 8 }` — see `isLadder` in rpe.js. This
+       * lives on the profile rather than in the exercise catalogue because it is
+       * a fact about the lifter's gym, not about the movement.
+       */
+      loading: {},
       theme: 'auto',
     },
 
@@ -81,6 +91,14 @@ export function defaultState() {
       keepAwake: true,
       plateHelper: true,
       confirmDeload: true,
+      /**
+       * Ask before the peaking block takes over, rather than switching on its own.
+       *
+       * The block is four weeks the lifter cannot undo without losing the wave,
+       * and it starts on a calendar rule they set weeks earlier. Defaulting to
+       * asking costs one tap and makes "not this week" possible.
+       */
+      confirmPeak: true,
       lastBackupAt: null,
       // Set by "not now" on the milestone card; the home screen stops asking for
       // a test day until this date. Milestones themselves stay visible.

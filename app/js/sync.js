@@ -18,8 +18,8 @@
 
 import * as store from './store.js';
 import { todayISO } from './store.js';
-import { convertLoad, e1RM, fmtLoadBare, fmtRPE } from './rpe.js';
-import { templateOf, slotHistory, entryStalled } from './program.js';
+import { convertLoad, e1RM, fmtLoadBare, fmtRPE, loadStep } from './rpe.js';
+import { templateOf, slotHistory, entryStalled, loadOptsFor } from './program.js';
 import { strengthTrend } from './coach.js';
 import { nameOf } from './exercises.js';
 
@@ -494,7 +494,9 @@ function stalledSlots(st, ses) {
   for (const e of ses.entries) {
     const def = defs[e.slotKey];
     if (!def || def.technique || def.dayRole === 'technique') continue;
-    if (entryStalled(e)) out.push(nameOf(e.exerciseId));
+    // With the slot's own grid step, so a prescription that landed between two
+    // notches of a machine's stack is not reported as coming up short.
+    if (entryStalled(e, { step: loadStep(loadOptsFor(st, e.exerciseId)) })) out.push(nameOf(e.exerciseId));
   }
   return out;
 }

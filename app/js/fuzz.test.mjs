@@ -35,13 +35,14 @@ const store = await import('./store.js');
 const {
   buildProgram, resolveDay, startSession, completeSession, resolveAssessment,
   repsForWeek, pctForWeek, loadingWeeks, slotE1RM, slotE1RMDetail, slotHistory,
-  lastComparable, convertUnits, templateOf, entryStalled, enterPeak, peakPlanFor,
+  lastComparable, convertUnits, templateOf, entryStalled, entryShortfall, enterPeak, peakPlanFor,
+  loadOptsFor, loadOptsForSlot, startNextCycle,
   RELIABLE_E1RM_REPS, PAIN_WEEK_REPS, DELOAD_RPE_FLOOR, PEAK_WEEKS,
 } = await import('./program.js');
 const {
   pctOf1RM, e1RM, loadFor, eXRM, repsAt, loadBand, roundToLoadable, minIncrement,
-  plateBreakdown, normalizeRPE, convertLoad, parseNum, PLATE_PRESETS, RPE_TOLERANCE,
-  RPE_MIN, RPE_MAX, toKg, toLb, fmtLoad, fmtRPE,
+  plateBreakdown, normalizeRPE, convertLoad, parseNum, loadStep, gridFloor, isLadder,
+  PLATE_PRESETS, RPE_TOLERANCE, RPE_MIN, RPE_MAX, toKg, toLb, fmtLoad, fmtRPE,
 } = await import('./rpe.js');
 const { TEMPLATES, assessDeload, DELOAD_CHECKLIST } = await import('./templates.js');
 
@@ -411,6 +412,7 @@ for (const templateId of ['intermediate-pl', 'intermediate-pl-3day']) {
       const w3 = tpl.days.map((d) => peakPlanFor(st.program, { week: 3, day: d.n, phase: 'load' })?.kind);
       eq(w3.filter((k) => k === 'openers').length, 1, `week 3 has exactly one opener day (${templateId})`);
 
+      const meetStep = gym.units === 'kg' ? 2.5 : 5;
       for (const pos of positions) {
         const day = resolveDay(st, pos);
         peakDays++;
@@ -434,8 +436,17 @@ for (const templateId of ['intermediate-pl', 'intermediate-pl-3day']) {
             eq(normalizeRPE(r), r, `the printed RPE survives normalisation (${at})`);
           }
           if (sl.plannedLoad != null) {
-            eq(roundToLoadable(sl.plannedLoad, gym), sl.plannedLoad, `the load is loadable (${at})`);
-            ok(plateBreakdown(sl.plannedLoad, gym).ok, `and can be built from these plates (${at})`);
+            // Meet day is the one session that does not happen in this gym, so
+            // it is held to the platform's ladder instead of these plates: in
+            // kg federations every attempt is a multiple of 2.5.
+            if (day.isMeet) {
+              const n = sl.plannedLoad / meetStep;
+              ok(Math.abs(n - Math.round(n)) < 1e-9,
+                `a meet-day attempt is a legal one (${at})`, `${sl.plannedLoad} is not a multiple of ${meetStep}`);
+            } else {
+              eq(roundToLoadable(sl.plannedLoad, gym), sl.plannedLoad, `the load is loadable (${at})`);
+              ok(plateBreakdown(sl.plannedLoad, gym).ok, `and can be built from these plates (${at})`);
+            }
             ok(sl.plannedLoad >= gym.barWeight - 1e-9, `and is at least the empty bar (${at})`, `got ${sl.plannedLoad}`);
           }
           // Meet week is a taper and the primer is RPE 4. Neither may hand the
@@ -455,7 +466,14 @@ for (const templateId of ['intermediate-pl', 'intermediate-pl-3day']) {
         ok(ses.entries.length > 0, `the day starts a real session (${tag})`);
         for (const e of ses.entries) {
           for (const set of e.sets) {
-            if (set.load != null) eq(roundToLoadable(set.load, gym), set.load, `pre-filled peak set loads are loadable (${tag})`);
+            if (set.load == null) continue;
+            if (day.isMeet) {
+              const n = set.load / meetStep;
+              ok(Math.abs(n - Math.round(n)) < 1e-9,
+                `pre-filled meet attempts are legal (${tag})`, `${set.load} is not a multiple of ${meetStep}`);
+            } else {
+              eq(roundToLoadable(set.load, gym), set.load, `pre-filled peak set loads are loadable (${tag})`);
+            }
           }
         }
       }
@@ -665,6 +683,171 @@ for (let mask = 0; mask < (1 << keys.length); mask++) {
   if (n >= 2) eq(v.verdict, 'deload', `two or more flags is always a deload ${at}`);
   if (n === 1 && answers.pain) eq(v.verdict, 'painWeek', `pain alone is always the high-rep week ${at}`);
   if (n === 0) eq(v.verdict, 'proceed', `no flags always proceeds ${at}`);
+}
+
+/* ======================================================================
+   G2. Loading grids — every prescription lands on a weight that exists.
+   ----------------------------------------------------------------------
+   The barbell sweep in D asserts every load is loadable from the lifter's
+   plates. That assertion is only true because every slot was assumed to be a
+   barbell. Once a slot can be a weight stack, the same claim has to hold
+   against *that* slot's own ladder — including both ends of the load window,
+   the RPE-check suggestion, and the loads a stall reset and a unit switch make.
+   ====================================================================== */
+hr('G2. Loading grids — every load lands on the grid its own exercise has');
+
+{
+  /**
+   * Is this load one of the weights that grid can actually make?
+   *
+   * Deliberately not `roundToLoadable(v) === v`: that asks the rounder to mark
+   * its own homework, and a rounder that ignores grids entirely passes it.
+   */
+  const onGrid = (v, { barWeight = 20, plates = [], microplates = true, loading = null } = {}) => {
+    if (v == null) return true;
+    if (isLadder(loading)) {
+      const n = (v - (Number(loading.start) || 0)) / Number(loading.step);
+      return n >= -1e-9 && Math.abs(n - Math.round(n)) < 1e-6;
+    }
+    if (v < barWeight - 1e-9) return false;
+    const step = minIncrement(plates, { microplates });
+    const n = (v - barWeight) / step;
+    return Math.abs(n - Math.round(n)) < 1e-6;
+  };
+  let ladders = 0;
+
+  const LADDERS = [
+    { mode: 'stack', start: 8, step: 8 },      // a pulldown that goes 72, 80, 88
+    { mode: 'stack', start: 5, step: 5 },
+    { mode: 'stack', start: 2.5, step: 7.5 },  // deliberately ugly
+    { mode: 'fixed', start: 2, step: 2 },      // a dumbbell rack
+    { mode: 'fixed', start: 10, step: 10 },
+  ];
+
+  for (const templateId of TEMPLATE_IDS) {
+    for (const gym of GYMS.slice(0, 3)) {
+      for (let li = 0; li < LADDERS.length; li++) {
+        const st = stateFor({
+          templateId, gym,
+          maxes: gym.units === 'kg' ? { squat: 170, bench: 120, deadlift: 200 }
+                                    : { squat: 375, bench: 265, deadlift: 440 },
+        });
+        const tpl = templateOf(st.program);
+        const weeks = loadingWeeks(st.program);
+
+        // Put a ladder on every other exercise, so each sweep has barbell and
+        // stack slots side by side in the same session.
+        const ids = [...new Set(Object.values(st.program.choices).filter(Boolean))];
+        st.profile.loading = {};
+        ids.forEach((id, i) => { if ((i + li) % 2 === 0) st.profile.loading[id] = { ...LADDERS[li] }; });
+
+        for (const k of Object.keys(st.program.slots)) {
+          st.program.slots[k].week1Load = roundToLoadable(
+            gym.units === 'kg' ? 70 : 155, loadOptsForSlot(st, k));
+        }
+
+        for (const d of tpl.days) {
+          for (const phase of ['load', 'deload', 'painWeek']) {
+            const weekList = phase === 'load' ? Array.from({ length: weeks }, (_, i) => i + 1) : [weeks + 1];
+            for (const week of weekList) {
+              for (const sl of resolveDay(st, { week, day: d.n, phase }).slots) {
+                const grid = loadOptsForSlot(st, sl.slotKey);
+                const at = `${templateId}/${gym.units}/ladder${li}/${sl.slotKey}/w${week}/${phase}`;
+                // Checked arithmetically rather than by round-tripping through
+                // `roundToLoadable`: asking the rounder whether its own output is
+                // rounded agrees with itself even when it is wrong.
+                const snap = (v) => onGrid(v, grid);
+                if (sl.plannedLoad != null) {
+                  ladders += isLadder(grid.loading) ? 1 : 0;
+                  ok(snap(sl.plannedLoad), `the load exists on this exercise grid (${at})`, `${sl.plannedLoad}`);
+                  ok(sl.plannedLoad >= gridFloor(grid) - 1e-9,
+                    `and is at least the lightest weight it has (${at})`, `${sl.plannedLoad} vs ${gridFloor(grid)}`);
+                }
+                if (sl.rpeCheckLoad != null) ok(snap(sl.rpeCheckLoad), `the RPE-check suggestion too (${at})`, `${sl.rpeCheckLoad}`);
+                if (sl.loadRange) {
+                  ok(snap(sl.loadRange.low), `and the bottom of the window (${at})`, `${sl.loadRange.low}`);
+                  ok(snap(sl.loadRange.high), `and the top (${at})`, `${sl.loadRange.high}`);
+                  ok(sl.loadRange.low <= sl.loadRange.high, `which stays ordered (${at})`);
+                  if (sl.plannedLoad != null) {
+                    ok(sl.loadRange.low <= sl.plannedLoad + 1e-9 && sl.plannedLoad <= sl.loadRange.high + 1e-9,
+                      `and still brackets the load (${at})`, `${sl.loadRange.low}-${sl.loadRange.high} vs ${sl.plannedLoad}`);
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        // A stall reset must land on the grid too, and never below its floor.
+        const before = {};
+        for (const k of Object.keys(st.program.slots)) {
+          before[k] = st.program.slots[k].week1Load;
+          st.program.slots[k].stalledThisCycle = true;
+          st.program.slots[k].stalledAtLoad = st.program.slots[k].week1Load;
+        }
+        startNextCycle(st);
+        for (const k of Object.keys(st.program.slots)) {
+          const grid = loadOptsForSlot(st, k);
+          const v = st.program.slots[k].week1Load;
+          const at = `${templateId}/${gym.units}/ladder${li}/${k}`;
+          ok(onGrid(v, grid), `a stall reset lands on the grid (${at})`, `${v}`);
+          ok(v >= gridFloor(grid) - 1e-9, `and never below the lightest weight there is (${at})`, `${v} vs ${gridFloor(grid)}`);
+          ok(v <= before[k] + 1e-9, `and never heavier than what was stalled with (${at})`, `${before[k]} -> ${v}`);
+        }
+
+        // ...and so must everything a unit switch produces.
+        const other = st.profile.units === 'kg' ? 'lb' : 'kg';
+        convertUnits(st, other);
+        for (const k of Object.keys(st.program.slots)) {
+          const grid = loadOptsForSlot(st, k);
+          const v = st.program.slots[k].week1Load;
+          if (v == null) continue;
+          ok(onGrid(v, grid),
+            `a unit switch leaves every anchor loadable (${templateId}/${other}/ladder${li}/${k})`, `${v}`);
+        }
+        for (const g of Object.values(st.profile.loading)) {
+          ok(isLadder(g), 'a converted grid is still a grid');
+          ok(g.step > 0, 'with a positive step');
+        }
+      }
+    }
+  }
+  // Without this the whole section can pass by never having configured a grid.
+  ok(ladders > 500, 'the sweep actually put loads on ladders', `${ladders} ladder loads`);
+  console.log(`   ${ladders} loads checked against a machine's own ladder`);
+}
+
+/* ======================================================================
+   G3. Shortfall severity — the ordering must never invert.
+   ====================================================================== */
+hr('G3. Shortfall — missing more is never less serious');
+
+{
+  const RANK = { none: 0, soft: 1, hard: 2 };
+  for (let seed = 900; seed < 1100; seed++) {
+    const r = rng(seed);
+    const targetSets = 2 + Math.floor(between(r, 0, 4));
+    const targetReps = 1 + Math.floor(between(r, 0, 12));
+    const prescribed = +between(r, 20, 200).toFixed(1);
+    const step = [0, 1.25, 2.5, 5, 8][Math.floor(between(r, 0, 5))];
+    const mk = (n) => Array.from({ length: targetSets }, (_, i) => ({
+      done: true, load: prescribed, reps: i === targetSets - 1 ? Math.max(0, targetReps - n) : targetReps, rpe: 8,
+    }));
+    const entryOf = (n) => ({ targetSets, targetReps, prescribedLoad: prescribed, plannedLoad: prescribed, sets: mk(n) });
+
+    let last = 0;
+    for (let n = 0; n <= targetReps; n++) {
+      const k = RANK[entryShortfall(entryOf(n), { step }).kind];
+      ok(k >= last, `missing more reps never becomes less serious (seed ${seed}, ${n} short)`, `${k} after ${last}`);
+      last = k;
+    }
+    eq(entryShortfall(entryOf(0), { step }).kind, 'none', `a session to plan is clean (seed ${seed})`);
+    // Nor is the nearest weight the grid actually has a shortfall.
+    const nearest = entryOf(0);
+    nearest.sets = nearest.sets.map((x) => ({ ...x, load: prescribed - step }));
+    eq(entryShortfall(nearest, { step }).kind, 'none',
+      `nor is the nearest weight the grid has (seed ${seed}, step ${step})`);
+  }
 }
 
 /* ======================================================================

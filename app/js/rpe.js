@@ -135,9 +135,59 @@ export function minIncrement(plates, { microplates = true } = {}) {
   return microplates ? lightest * 2 : Math.max(lightest * 2, 2.5);
 }
 
-/** Round a load to something you can actually load on the bar. */
-export function roundToLoadable(load, { barWeight = 20, plates = [], microplates = true } = {}) {
+/* ---- loading grids ----------------------------------------------------- */
+
+/**
+ * Not everything is loaded with a barbell.
+ *
+ * The rounding below assumes a bar and pairs of plates, which is right for the
+ * competition lifts and wrong for most of what fills the accessory slots. A lat
+ * pulldown whose stack goes 72, 80, 88 cannot be asked for 74.5 kg, and printing
+ * that number does more harm than being vague would: the lifter loads 72, the
+ * app compares 72 against a prescription of 74.5, and records a stall on an
+ * exercise where nothing went wrong.
+ *
+ * So an exercise may carry its own grid. `stack` is a selectorised machine — the
+ * ladder of weights from `start` upward in steps of `step`. `fixed` is the same
+ * arithmetic for dumbbells and fixed barbells, kept as a separate name only
+ * because the stack and the rack are different objects to the person holding the
+ * phone. Anything without a grid is a barbell.
+ */
+export const LADDER_MODES = ['stack', 'fixed'];
+
+export const isLadder = (g) =>
+  !!g && LADDER_MODES.includes(g.mode) && Number.isFinite(Number(g.step)) && Number(g.step) > 0;
+
+/** Snap onto a ladder of weights: start, start + step, start + 2 x step, ... */
+function roundToLadder(load, { start = 0, step = 1 }) {
+  const s = Number(start) || 0;
+  const k = Number(step);
+  const n = Math.max(0, Math.round((load - s) / k));
+  return +(s + n * k).toFixed(3);
+}
+
+/**
+ * The smallest change in load these options can express.
+ *
+ * On a ladder that is one notch, which is the number that matters everywhere a
+ * load is nudged, compared or called "lower than prescribed" — on the pulldown
+ * above, 8 kg rather than the 1.25 kg the lifter's plate set would suggest.
+ */
+export function loadStep({ plates = [], microplates = true, loading = null } = {}) {
+  if (isLadder(loading)) return Number(loading.step);
+  return minIncrement(plates, { microplates });
+}
+
+/** The lightest weight these options can express — the bar, or the stack's bottom. */
+export function gridFloor({ barWeight = 20, loading = null } = {}) {
+  return isLadder(loading) ? (Number(loading.start) || Number(loading.step)) : barWeight;
+}
+
+/** Round a load to something you can actually load. */
+export function roundToLoadable(load, opts = {}) {
   if (!Number.isFinite(load)) return null;
+  const { barWeight = 20, plates = [], microplates = true, loading = null } = opts;
+  if (isLadder(loading)) return roundToLadder(load, loading);
   const step = minIncrement(plates, { microplates });
   if (load <= barWeight) return barWeight;
   const above = load - barWeight;
@@ -149,9 +199,16 @@ export function roundToLoadable(load, { barWeight = 20, plates = [], microplates
  * Plate breakdown per side for a target load.
  * Returns {ok, perSide:[{plate,count}], achieved, remainder, barWeight}
  */
-export function plateBreakdown(load, { barWeight = 20, plates = [] } = {}) {
+export function plateBreakdown(load, { barWeight = 20, plates = [], loading = null } = {}) {
   const target = Number(load);
   if (!Number.isFinite(target)) return { ok: false, perSide: [], achieved: null, remainder: 0, barWeight };
+  // There are no plates on a weight stack. Saying so is the whole answer, and
+  // it keeps every caller from drawing a barbell round a machine.
+  if (isLadder(loading)) {
+    const achieved = roundToLadder(target, loading);
+    return { ok: Math.abs(achieved - target) < 1e-6, perSide: [], achieved,
+             remainder: +(target - achieved).toFixed(3), barWeight: null, ladder: true };
+  }
   if (target < barWeight - 1e-6) {
     return { ok: false, perSide: [], achieved: barWeight, remainder: target - barWeight, barWeight, tooLight: true };
   }
@@ -178,6 +235,7 @@ export function plateBreakdown(load, { barWeight = 20, plates = [] } = {}) {
 /** "20 + 25/20/5" style short label for the plate hint. */
 export function plateLabel(load, opts) {
   const b = plateBreakdown(load, opts);
+  if (b.ladder) return `${fmtLoadBare(b.achieved)} on the stack`;
   if (!b.perSide.length) return b.tooLight ? 'below bar weight' : 'empty bar';
   const parts = b.perSide.map(({ plate, count }) => (count > 1 ? `${plate}×${count}` : `${plate}`));
   return parts.join(' · ') + (b.ok ? '' : ` (+${b.remainder} short)`);

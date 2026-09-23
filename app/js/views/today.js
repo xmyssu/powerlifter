@@ -5,7 +5,8 @@
 import { html, raw, esc, icon, $, $$, toast, sheet, closeSheet, fmtDate, relDays, confirmSheet } from '../ui.js';
 import { fmtLoadBare, plateBreakdown, fmtRPE } from '../rpe.js';
 import { resolveDay, startSession, templateOf, resolveAssessment, cyclePlan, loadingWeeks, resolveTestDay,
-         attemptsFor, discardSession, exitPeak, PEAK_WEEKS } from '../program.js';
+         attemptsFor, discardSession, exitPeak, loadOptsForSlot, resolvePeakPrompt, startPeakNow,
+         peakStatus, daysUntil, PEAK_WEEKS, PEAK_MIN_DAYS } from '../program.js';
 import { DELOAD_CHECKLIST, WARMUP, RPE_SCALE, INTERMEDIATE_PL, ADVANCED_ACCUMULATION } from '../templates.js';
 import { activeInsights, sessionBriefing, readinessVerdict, READINESS_QUESTIONS, PAIN_PROTOCOL,
          testReadiness, planTestBlock, testPromotion, TEST_PROMPT_QUIET_DAYS } from '../coach.js';
@@ -22,6 +23,10 @@ function view(ctx) {
   const active = st.sessions.find((s) => s.id === st.activeSessionId && s.status === 'active');
   const insights = activeInsights(st);
   const units = st.profile.units;
+
+  if (program.pendingPeak) {
+    return html`${raw(header(st, tpl))}${raw(peakPrompt(st))}`;
+  }
 
   if (program.pendingAssessment) {
     return html`${raw(header(st, tpl))}${raw(assessmentPrompt())}`;
@@ -220,7 +225,9 @@ function openTestDay(ctx) {
   };
 
   const table = () => ['squat', 'bench', 'deadlift'].map((lift) => {
-    const a = attemptsFor(st, lift);
+    // A test day happens in the lifter's own gym, so these have to be weights
+    // their plates can make — not the platform's 2.5 kg ladder.
+    const a = attemptsFor(st, lift, { platform: false });
     const name = { squat: 'Squat', bench: 'Bench', deadlift: 'Deadlift' }[lift];
     return `<label class="pick" style="cursor:pointer">
       <input type="checkbox" data-lift="${lift}" ${chosen.has(lift) ? 'checked' : ''} style="margin-right:10px">
@@ -304,6 +311,7 @@ function insightCard(i) {
       <div class="insight__b">${esc(i.text)}</div>
       ${i.action === 'graduate' ? `<button class="btn btn--good" style="margin-top:10px" data-graduate>Switch to the advanced program</button>` : ''}
       ${i.action === 'closePeak' ? `<button class="btn btn--ghost" style="margin-top:10px" data-closepeak>Close the block — I did not compete</button>` : ''}
+      ${i.action === 'startPeak' ? `<button class="btn btn--primary" style="margin-top:10px" data-peak="start">Start the peaking block now</button>` : ''}
     </div>
   </div>`;
 }
@@ -364,7 +372,7 @@ function slotRow(s, i, units, st) {
     ? esc(s.prescription || 'timed holds')
     : `<b>${s.sets} × ${s.reps}</b>` + (s.targetRPE != null ? ` @ RPE <b>${fmtRPE(s.targetRPE)}</b>` : s.rpeRange ? ` @ RPE <b>${s.rpeRange[0]}-${s.rpeRange[1]}</b>` : '');
   const load = s.plannedLoad;
-  const pb = load ? plateBreakdown(load, { barWeight: st.profile.barWeight, plates: st.profile.plates }) : null;
+  const pb = load ? plateBreakdown(load, loadOptsForSlot(st, s.slotKey)) : null;
   const range = s.loadRange;
   const showRange = !!range && !range.exact;
 
@@ -373,7 +381,7 @@ function slotRow(s, i, units, st) {
       <div class="ex__num">${i + 1}</div>
       <div class="grow">
         <div class="ex__name">${esc(ex?.short || s.slot.slotType)}</div>
-        <div class="ex__role">${esc(s.role)}${s.pct != null ? ` · ${s.pct}% ref` : ''}</div>
+        <div class="ex__role">${esc(s.role)}${s.pct != null ? ` · ${s.pct}% ref` : ''}${s.peakThinned ? ' · tapered' : ''}</div>
         <div class="ex__target">${raw(target)}</div>
       </div>
       <div style="text-align:right;flex:0 0 auto">
@@ -412,6 +420,51 @@ function warmupCard(resolved) {
 function scheduleNote(resolved, st) {
   if (!resolved.scheduleNote) return '';
   return `<p class="cite">${esc(resolved.scheduleNote)}</p>`;
+}
+
+/* ---- the peaking block, offered rather than imposed -------------------- */
+
+/**
+ * The one decision in the program the app will not make on the lifter's behalf.
+ *
+ * It used to switch on its own at the first week boundary inside four weeks.
+ * That is the right default and the wrong thing to do silently: the block is a
+ * month, it cannot be unwound without throwing away the wave, and it fires off
+ * a date typed in weeks earlier — by which time the lifter may be ill, the meet
+ * may have moved, or they may simply not want to start it on a week that went
+ * badly. So it asks, and "not yet" is a real answer that costs nothing.
+ */
+function peakPrompt(st) {
+  const out = daysUntil(st.program.meetDate);
+  const declines = st.program.peakDeclines || 0;
+  const latest = Math.max(0, out - PEAK_MIN_DAYS);
+  return `<div class="stack-lg">
+    <div>
+      <div class="eyebrow">${out} days to your meet</div>
+      <h1 style="margin-top:6px">Start the peaking block?</h1>
+      <p class="muted" style="margin-top:8px;line-height:1.6">
+        Four weeks with a date on the end of them. Your strength-day mains drop to triples, then
+        doubles, then a single at your opener; everything else runs at two-thirds of its sets and
+        then stops. The week of the meet is a taper, a primer, and the platform.
+      </p>
+    </div>
+
+    <div class="card card--flat">
+      <div class="kv"><span class="kv__k">Weeks</span><span class="kv__v">${PEAK_WEEKS}, ending on meet day</span></div>
+      <div class="kv"><span class="kv__k">Strength days</span><span class="kv__v">3 → 2 → 1 reps</span></div>
+      <div class="kv"><span class="kv__k">Everything else</span><span class="kv__v">⅔ sets, then deload</span></div>
+      <div class="kv"><span class="kv__k">Your wave</span><span class="kv__v">kept — anchors and stalls carry</span></div>
+    </div>
+
+    <div class="stack-sm">
+      <button class="btn btn--primary btn--lg btn--block" data-peak="start">Start the block</button>
+      <button class="btn btn--ghost btn--block" data-peak="later">Not yet — carry on as I am</button>
+    </div>
+
+    <p class="cite">${esc(declines
+      ? `You have said not yet ${declines === 1 ? 'once' : `${declines} times`} already. The block needs ${PEAK_MIN_DAYS} days to fit, so you have about ${latest} more before the answer stops being yours.`
+      : 'Saying not yet runs another ordinary week and asks again at the end of it. Nothing is lost either way — the block compresses itself from the front if you start it late.')}</p>
+  </div>`;
 }
 
 /* ---- deload assessment ------------------------------------------------ */
@@ -599,7 +652,26 @@ function openPlan(ctx) {
           </table></div>
         </div>`).join('')}
       <p class="cite">Loads are not shown here because they are set by your first-set RPE each week, not fixed in advance.${plan.peaking ? ' Meet week is a taper: the numbers on those days are deliberately small and are not a measure of anything.' : ''}</p>
+      ${plan.peaking ? `<button class="btn btn--bare btn--block" data-leavepeak style="color:var(--bad)">Leave the peaking block</button>` : ''}
     </div>`,
+    onMount(root, close) {
+      // A month is a long time to be locked into a decision made on a Sunday.
+      // The prompt before the block starts is the main answer to that; this is
+      // the answer for a lifter who is already inside one and should not be.
+      $('[data-leavepeak]', root)?.addEventListener('click', async () => {
+        const yes = await confirmSheet({
+          title: 'Leave the peaking block?',
+          message: 'Nothing is recorded as a meet and no maxes are written. Your strength-day anchors are converted back to the wave\'s rep ranges and an ordinary cycle starts from week 1 — so the block\'s remaining weeks are given up, not banked. If the meet is still on, you will be offered the block again at the end of next week.',
+          confirmLabel: 'Leave it',
+          danger: true,
+        });
+        if (!yes) return;
+        ctx.store.update((s) => { exitPeak(s, { competed: false, meetStillOn: true }); });
+        close();
+        toast('Back on an ordinary cycle.');
+        ctx.refresh();
+      });
+    },
   });
 }
 
@@ -622,6 +694,32 @@ function mount(root, ctx) {
     ctx.go('session');
   });
 
+  $$('[data-peak]', root).forEach((b) => b.onclick = async () => {
+    const start = b.dataset.peak === 'start';
+    if (start && !ctx.state.program.pendingPeak) {
+      // The button on the "you said not yet" card: no prompt is outstanding, so
+      // this is a fresh decision rather than an answer to one.
+      let res = null;
+      ctx.store.update((s) => { res = startPeakNow(s); });
+      if (!res) { toast('The meet is no longer far enough out for a block.', 'bad'); return; }
+      toast('Peaking block started.', 'good');
+      ctx.refresh();
+      return;
+    }
+    if (!start) {
+      const yes = await confirmSheet({
+        title: 'Not yet?',
+        message: 'You will train another ordinary week and be asked again at the end of it. The block compresses from the front if you start it late, so the loading weeks are what you give up — the opener rehearsal and the taper are not.',
+        confirmLabel: 'Carry on as I am',
+      });
+      if (!yes) return;
+    }
+    let res = null;
+    ctx.store.update((s) => { res = resolvePeakPrompt(s, { start }); });
+    toast(res?.started ? 'Peaking block started.' : 'Carrying on — you will be asked again next week.', res?.started ? 'good' : '');
+    ctx.refresh();
+  });
+
   $$('[data-assess]', root).forEach((b) => b.onclick = () => openAssessment(ctx));
   $$('[data-readiness]', root).forEach((b) => b.onclick = () => openReadiness(ctx));
   $$('[data-pain]', root).forEach((b) => b.onclick = () => openPain());
@@ -639,7 +737,7 @@ function mount(root, ctx) {
   $$('[data-closepeak]', root).forEach((b) => b.onclick = async () => {
     const yes = await confirmSheet({
       title: 'Close the peaking block?',
-      message: 'Nothing is recorded as a meet and no maxes are written. A normal cycle starts from the loads your peak left you on — which are the heaviest anchors you have had, so expect week 1 to bite.',
+      message: 'Nothing is recorded as a meet and no maxes are written. A normal cycle starts next, back at the top of your rep ranges — the block\'s heavier anchors are converted back down as the reps go back up, so week 1 lands where an ordinary cycle would have.',
       confirmLabel: 'Close it',
     });
     if (!yes) return;
