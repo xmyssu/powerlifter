@@ -3,7 +3,7 @@
    ========================================================================== */
 
 import { html, raw, esc, icon, $, $$, sheet, toast, confirmSheet, fmtDate, relDays } from '../ui.js';
-import { fmtLoadBare } from '../rpe.js';
+import { fmtLoadBare, parseNum } from '../rpe.js';
 import { activeInsights, PLATEAU_TREE, PAIN_PROTOCOL, FAULTS, STICKING_POINT_PREAMBLE, trainingAgeReport } from '../coach.js';
 import { graduationCheck, templateOf, slotHistory, slotE1RM, loadingWeeks, attemptsFor,
          peakStatus, PEAK_MIN_DAYS } from '../program.js';
@@ -376,9 +376,11 @@ function openMeet(ctx) {
   // to say where in it you are and what happens next, not to hand you a plan to
   // execute yourself.
   const statusLine = !status ? null
-    : status.kind === 'running' ? { cls: 'good', t: `Peaking block running — week ${status.week} of ${status.weeks}`, b: 'Your program has already switched. Strength-day mains are at 1-3 reps, week 3 deloads everything that is not contested, and meet week is a taper into the platform. There is nothing for you to turn on.' }
-    : status.kind === 'nextWeek' ? { cls: 'accent', t: 'The peak starts at the end of this week', b: 'Finish the week you are on as written. The switch happens on its own when the week rolls over — no setting to change, and no reason to bring it forward by going heavy early.' }
-    : status.kind === 'waiting' ? { cls: 'info', t: `Normal training for about ${status.startsIn} more day${status.startsIn === 1 ? '' : 's'}`, b: 'The peaking block takes over automatically at the first week boundary inside four weeks. Train the program you are on until then.' }
+    : status.kind === 'running' ? { cls: 'good', t: `Peaking block running — week ${status.week} of ${status.weeks}`, b: 'Strength-day mains are at 1-3 reps and everything else is at two-thirds of its sets; week 3 deloads all of that and rehearses your openers, and meet week is a taper into the platform. If you need out, the cycle plan on the home screen will close it.' }
+    : status.kind === 'pending' ? { cls: 'accent', t: 'Waiting on you', b: 'The block has been offered and not answered yet. The home screen has the decision — start it, or carry on for another week and be asked again.' }
+    : status.kind === 'declined' ? { cls: 'warn', t: `Put off ${status.declined === 1 ? 'once' : `${status.declined} times`}`, b: `That is a decision, not a mistake — but a block needs ${PEAK_MIN_DAYS} days of runway and there are ${status.out}. You will be asked again at the end of this training week.` }
+    : status.kind === 'nextWeek' ? { cls: 'accent', t: 'The peak is offered at the end of this week', b: 'Finish the week you are on as written. When it rolls over the app asks whether to start the block — and "not yet" is a real answer. No reason to bring it forward by going heavy early.' }
+    : status.kind === 'waiting' ? { cls: 'info', t: `Normal training for about ${status.startsIn} more day${status.startsIn === 1 ? '' : 's'}`, b: 'The peaking block is offered at the first week boundary inside four weeks. Train the program you are on until then.' }
     : status.kind === 'tooLate' ? { cls: 'warn', t: 'Too close to peak for', b: `A four-week block needs ${PEAK_MIN_DAYS} days of runway and there are ${status.out}. The app will not start a truncated one — it would taper you for a meet you never trained heavy for. Train normally, take the last four or five days easy, and open conservatively.` }
     : status.kind === 'done' ? { cls: 'info', t: 'This meet has been peaked for', b: 'Set a new date to arm the next block.' }
     : status.kind === 'past' ? { cls: 'info', t: 'That date has passed', b: 'Set a new one to arm the next block.' }
@@ -406,9 +408,9 @@ function openMeet(ctx) {
       <div class="stack-sm">
         <div class="eyebrow">The four-week cycle — what the app will do</div>
         ${[
-          ['Weeks 1-2', 'Your normal program, except Day 3 squat and bench and Day 4 deadlift drop from 3-5 reps to 1-3 — and the bar goes up to meet them, converted off your own week-1 anchor. The wave runs 3 reps, then 2, then 1.'],
-          ['Week 3', 'Everything that is not a competition lift deloads, your squat and bench variations included. Day 4 is replaced: squat, bench, deadlift in meet order, one single at your opener on each, about 7 days out at RPE 7.5-8.5.'],
-          ['Week 4 (meet week)', 'The competition lifts come down too. Day 3 is your primer, 24-48 hours out: two singles at RPE 4 on squat, two on bench, one on deadlift, and nothing else. Day 4 is the meet — nine attempts, logged like a test day, and logging it is what closes the block.'],
+          ['Weeks 1-2', 'Your strength-day squat, bench and deadlift drop from 3-5 reps to 1-3, and the bar goes up to meet them, converted off your own week-1 anchor — the wave runs 3 reps, then 2, then 1. Everything else runs at two-thirds of its sets from day one: the block is a taper, and volume is what comes off (p. 140).'],
+          ['Week 3', 'Everything the block is not made of deloads — variations, accessories and the volume day. Your last training day is replaced: squat, bench, deadlift in meet order, one single at your opener on each, about 7 days out at RPE 7.5-8.5.'],
+          ['Week 4 (meet week)', 'The competition lifts come down too. The second-to-last day is your primer, 24-48 hours out: two singles at RPE 4 on squat, two on bench, one on deadlift, and nothing else. The last one is the meet — nine attempts against a running total, and logging it is what closes the block.'],
         ].map(([k, v]) => `<div class="card card--flat">
           <div class="insight__t" style="font-size:.875rem">${esc(k)}</div>
           <div class="insight__b" style="margin-top:4px">${esc(v)}</div>
@@ -425,15 +427,29 @@ function openMeet(ctx) {
                     : `<td class="r dim" colspan="3">no data</td>`}
           </tr>`).join('')}</tbody>
         </table></div>
-        <p class="cite">Open with your current 3RM, second attempt at your current 2RM, third at the next incremental PR if it is there. Computed from your logged estimated maxes, in ${esc(units)}, and rounded onto your own plates. Week 3's opener rehearsal and meet day itself run exactly these numbers, recomputed on the day.</p>
+        <p class="cite">Open with your current 3RM, second attempt at your current 2RM, third at the next incremental PR if it is there. Computed from your logged estimated maxes, in ${esc(units)}, and rounded onto the platform's ${esc(units === 'kg' ? '2.5 kg' : '5 lb')} rather than onto your own plates — these are weights you declare, not weights you load. Week 3's opener rehearsal and meet day itself run exactly these numbers, recomputed on the day.</p>
+
+        <div class="field">
+          <label class="field__label" for="goaltotal">Total you are chasing</label>
+          <div class="row" style="gap:8px">
+            <input class="input input--num grow" id="goaltotal" type="text" inputmode="decimal"
+                   value="${st.program.goalTotal ?? ''}" placeholder="${attempts.every((a) => a.max) ? fmtLoadBare(attempts.reduce((n, a) => n + a.second, 0)) : '—'}" data-goal>
+            <span class="pill mono" style="flex:0 0 auto">${esc(units)}</span>
+          </div>
+          <div class="field__hint">Optional, and the most useful number on the platform — the board tracks against it between attempts, so the third-attempt call is arithmetic rather than a feeling. Three second attempts is a total you should make; three thirds is one you might.</div>
+        </div>
       </div>
 
-      <button class="btn btn--primary btn--block" data-savemeet>Save meet date</button>
+      <button class="btn btn--primary btn--block" data-savemeet>Save</button>
     </div>`,
     onMount(root, close) {
       $('[data-savemeet]', root).onclick = () => {
         const v = $('[data-md]', root).value;
-        ctx.store.update((s) => { s.program.meetDate = v || null; });
+        const g = parseNum($('[data-goal]', root)?.value);
+        ctx.store.update((s) => {
+          s.program.meetDate = v || null;
+          s.program.goalTotal = g && g > 0 ? g : null;
+        });
         close();
         toast(v ? 'Meet date saved.' : 'Meet date cleared.');
       };

@@ -68,6 +68,14 @@ export function buildProgram({
     pendingAssessment: false,   // set when a cycle's loading weeks are done
     pendingPeak: null,          // the peaking block is offered and waiting on an answer
     peakDeclines: 0,            // how many times "not yet" has been chosen
+    /**
+     * The total the lifter is chasing on the platform.
+     *
+     * On the program rather than on the session because it is decided weeks
+     * before meet day and is the thing attempt selection is actually for — a
+     * meet is one number, and every call after the opener is made against it.
+     */
+    goalTotal: null,
     forcedDeload: false,        // a stall forces week 4 regardless of checklist
     events: [],                 // program-level history for the coach log
   };
@@ -217,6 +225,42 @@ export function loadOptsFor(state, exerciseId) {
 /** The same, for a program slot — resolves the exercise the lifter has in it. */
 export function loadOptsForSlot(state, slotKey) {
   return loadOptsFor(state, state?.program?.choices?.[slotKey] || null);
+}
+
+/**
+ * The ramp to a working weight, in weights rather than percentages.
+ *
+ * The book prints the warm-up as a table of percentages (p. 224) and leaves the
+ * arithmetic to the lifter, which means it gets done badly or not at all —
+ * standing over a bar with a phone, "70% of 137.5" is three seconds of mental
+ * work per rung, six rungs deep, at the exact moment attention is worth most.
+ *
+ * Three things fall out of computing it instead of printing it:
+ *  - every rung is rounded onto *this* exercise's grid, so a pulldown ramps up
+ *    its own stack rather than onto weights it does not have;
+ *  - rungs that collapse onto the same weight after rounding are dropped, which
+ *    a coarse plate set produces constantly near the bottom;
+ *  - nothing at or above the working weight is ever called a warm-up.
+ */
+export function warmupFor(load, reps, loadOpts = {}) {
+  if (!(load > 0)) return null;
+  const scheme = reps != null && reps <= 5 ? WARMUP.lowRep : WARMUP.highRep;
+  const bar = loadOpts.barWeight ?? 20;
+  const floor = gridFloor(loadOpts);
+  const sets = [];
+  for (const w of scheme.sets) {
+    // The optional empty-bar set is a fact about a barbell; a weight stack has
+    // no such thing and printing one would be nonsense.
+    if (w.pct == null) {
+      if (!isLadder(loadOpts.loading) && bar < load) sets.push({ reps: w.reps, pct: null, load: bar, label: w.label });
+      continue;
+    }
+    const l = roundToLoadable((load * w.pct) / 100, loadOpts);
+    if (l == null || l >= load - 1e-9 || l < floor - 1e-9) continue;
+    if (sets.some((x) => Math.abs(x.load - l) < 1e-9)) continue;
+    sets.push({ reps: w.reps, pct: w.pct, load: l });
+  }
+  return sets.length ? { label: scheme.label, sets } : null;
 }
 
 /* ---- history ---------------------------------------------------------- */

@@ -36,9 +36,10 @@ const {
   buildProgram, resolveDay, startSession, completeSession, resolveAssessment,
   repsForWeek, pctForWeek, loadingWeeks, slotE1RM, slotE1RMDetail, slotHistory,
   lastComparable, convertUnits, templateOf, entryStalled, entryShortfall, enterPeak, peakPlanFor,
-  loadOptsFor, loadOptsForSlot, startNextCycle,
+  loadOptsFor, loadOptsForSlot, startNextCycle, warmupFor, attemptsFor,
   RELIABLE_E1RM_REPS, PAIN_WEEK_REPS, DELOAD_RPE_FLOOR, PEAK_WEEKS,
 } = await import('./program.js');
+const { meetProgress, targetLine, attemptAdvice } = await import('./meet.js');
 const {
   pctOf1RM, e1RM, loadFor, eXRM, repsAt, loadBand, roundToLoadable, minIncrement,
   plateBreakdown, normalizeRPE, convertLoad, parseNum, loadStep, gridFloor, isLadder,
@@ -848,6 +849,145 @@ hr('G3. Shortfall — missing more is never less serious');
     eq(entryShortfall(nearest, { step }).kind, 'none',
       `nor is the nearest weight the grid has (seed ${seed}, step ${step})`);
   }
+}
+
+/* ======================================================================
+   G4. The board — every outcome of nine attempts.
+   ----------------------------------------------------------------------
+   3^9 orderings is too many to enumerate usefully, but the invariants are
+   simple and absolute: the total is the sum of made attempts, a bombed lift
+   means no total at all, and the ceiling can never be below the board.
+   ====================================================================== */
+hr('G4. Meet day — nine attempts, every way they can go');
+
+{
+  const OUTCOMES = ['good', 'missed', 'pending'];
+  const mkSession = (plan, loads) => ({
+    units: 'kg',
+    entries: ['test_squat', 'test_bench', 'test_deadlift'].map((slotKey, li) => ({
+      slotKey, exerciseId: null, targetReps: 1,
+      sets: [0, 1, 2].map((i) => {
+        const o = plan[li][i];
+        const load = loads[li][i];
+        if (o === 'pending') return { load, reps: null, rpe: null, done: false };
+        if (o === 'missed') return { load, reps: 0, rpe: null, failed: true, done: true };
+        return { load, reps: 1, rpe: 9, done: true };
+      }),
+    })),
+  });
+  const st = stateFor({ templateId: 'intermediate-pl', gym: GYMS[0], maxes: { squat: 150, bench: 100, deadlift: 180 } });
+
+  let swept = 0;
+  for (let seed = 1200; seed < 1500; seed++) {
+    const r = rng(seed);
+    const plan = [0, 1, 2].map(() => [0, 1, 2].map(() => OUTCOMES[Math.floor(between(r, 0, 3))]));
+    // A pending attempt before a taken one is not a thing that happens; sort so
+    // each lift's attempts are taken in order.
+    for (const row of plan) row.sort((a, b) => (a === 'pending' ? 1 : 0) - (b === 'pending' ? 1 : 0));
+    const loads = [0, 1, 2].map((li) => {
+      const base = [140, 95, 170][li];
+      return [base, base + 7.5, base + 12.5];
+    });
+    const ses = mkSession(plan, loads);
+    const p = meetProgress(st, ses);
+    swept++;
+    const at = `seed ${seed}`;
+
+    ok(p.lifts.length === 3, `every lift is on the board (${at})`);
+    ok(p.total >= 0, `the total is never negative (${at})`, `${p.total}`);
+    ok(p.ifAllMade >= p.total - 1e-9, `the ceiling is never below the board (${at})`, `${p.ifAllMade} vs ${p.total}`);
+
+    const anyBombed = p.lifts.some((l) => l.done && l.made === 0);
+    eq(p.bombed, anyBombed, `bombing is exactly three misses on one lift (${at})`);
+    if (anyBombed) {
+      eq(p.total, 0, `a bombed lift is no total at all, not a smaller one (${at})`);
+      eq(p.ifAllMade, 0, `and no ceiling either (${at})`);
+    } else {
+      const byHand = p.lifts.reduce((n, l) => {
+        const made = l.attempts.filter((a) => a.status === 'good').map((a) => a.load);
+        return n + (made.length ? Math.max(...made) : 0);
+      }, 0);
+      near(p.total, byHand, `the total is the best made attempt on each lift (${at})`, 1e-9);
+    }
+
+    // lastChance and bombed are mutually exclusive, and both are about the
+    // same fact: this lift has nothing on the board.
+    for (const l of p.lifts) {
+      ok(!(l.lastChance && l.bombed), `a last chance is not yet a bomb (${at}/${l.lift})`);
+      if (l.lastChance || l.bombed) eq(l.made, 0, `both mean nothing made (${at}/${l.lift})`);
+      eq(l.made + l.misses + l.remaining, 3, `three attempts, always accounted for (${at}/${l.lift})`);
+      if (l.made > 0) ok(l.best > 0, `a made lift has a best (${at}/${l.lift})`);
+    }
+
+    // nextUp is the first pending attempt in meet order, or nothing.
+    const firstPending = p.lifts.flatMap((l) => l.attempts.map((a) => ({ l, a }))).find((x) => x.a.status === 'pending');
+    if (!firstPending) eq(p.nextUp, null, `a finished meet has nothing next (${at})`);
+    else eq(p.nextUp.lift, firstPending.l.lift, `next up is the first attempt still to come (${at})`);
+    eq(p.complete, !firstPending, `and complete says the same thing (${at})`);
+
+    // A target is only reachable when the weights already loaded can reach it.
+    const tgt = targetLine(p, p.total + 20);
+    if (tgt) {
+      eq(tgt.reachable, tgt.toGo <= tgt.headroom + 1e-9, `reachable agrees with the arithmetic (${at})`);
+      near(tgt.short, tgt.toGo - tgt.headroom, `and the shortfall is the difference (${at})`, 1e-6);
+    }
+    eq(targetLine(p, 0), null, `no target, no line (${at})`);
+
+    // Advice never suggests adding weight to a bar you just failed.
+    for (const l of p.lifts) {
+      const adv = attemptAdvice(l, { step: 2.5 });
+      if (!adv) { ok(l.done, `no advice only when the lift is finished (${at}/${l.lift})`); continue; }
+      const idx = l.attempts.findIndex((a) => a.status === 'pending');
+      const prev = idx > 0 ? l.attempts[idx - 1] : null;
+      if (adv.load != null) {
+        ok(adv.load > 0, `advised load is a real weight (${at}/${l.lift})`, `${adv.load}`);
+        eq(adv.load % 2.5, 0, `and a legal attempt (${at}/${l.lift})`);
+      }
+      if (prev?.status === 'missed') {
+        ok(adv.load <= prev.load + 1e-9,
+          `never heavier than a weight already missed today (${at}/${l.lift})`, `${adv.load} vs ${prev.load}`);
+      }
+      if (prev?.status === 'good' && adv.load != null) {
+        ok(adv.load > prev.load - 1e-9, `and never lighter than one already made (${at}/${l.lift})`);
+      }
+    }
+  }
+  console.log(`   ${swept} meets swept`);
+}
+
+/* ======================================================================
+   G5. Warm-up ramps — loadable, ascending, and under the working weight.
+   ====================================================================== */
+hr('G5. Warm-ups — every rung is a weight you can load');
+
+{
+  const LADDER = { mode: 'stack', start: 8, step: 8 };
+  let rungs = 0;
+  for (const gym of GYMS) {
+    for (const loading of [null, LADDER]) {
+      const grid = loading ? { ...gym, loading } : gym;
+      for (let seed = 1500; seed < 1560; seed++) {
+        const r = rng(seed);
+        const reps = 1 + Math.floor(between(r, 0, 15));
+        const raw = between(r, gym.barWeight, gym.barWeight * 10);
+        const load = roundToLoadable(raw, grid);
+        const w = warmupFor(load, reps, grid);
+        const at = `${gym.units}${gym.barWeight}/${loading ? 'stack' : 'bar'}/${load}x${reps}`;
+        if (!w) { ok(load <= gridFloor(grid) + 1e-9, `no ramp only for the lightest weight there is (${at})`, `${load}`); continue; }
+        let prev = -Infinity;
+        for (const x of w.sets) {
+          rungs++;
+          eq(roundToLoadable(x.load, grid), x.load, `a rung is loadable (${at})`);
+          ok(x.load < load - 1e-9, `and under the working weight (${at})`, `${x.load} vs ${load}`);
+          ok(x.load > prev, `and heavier than the one before it (${at})`, `${x.load} after ${prev}`);
+          ok(Number.isFinite(x.reps) || typeof x.reps === 'string', `with a rep target (${at})`);
+          prev = x.load;
+        }
+        if (loading) ok(w.sets.every((x) => x.pct != null), `a stack has no empty-bar rung (${at})`);
+      }
+    }
+  }
+  console.log(`   ${rungs} warm-up rungs checked`);
 }
 
 /* ======================================================================

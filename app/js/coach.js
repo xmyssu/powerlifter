@@ -288,6 +288,88 @@ export const FAULTS = [
 ];
 
 /* ======================================================================
+   Rhythm — the app knows what day it is, and used to act as if it did not
+   ====================================================================== */
+
+/**
+ * How today sits against the last session actually logged.
+ *
+ * The cursor is a position in a program, not a position in a week: it advances
+ * when a session is finished and has no opinion about when the next one should
+ * happen. That is right for a lifter whose week slips — a cycle finished a few
+ * days late is nothing (pp. 37-38) — and wrong in the one direction the book is
+ * explicit about, which is training the two heavy competition-lift days back to
+ * back. `scheduleNote` on the template says to put a rest day between them, and
+ * until now that sentence sat at the bottom of the screen as decoration.
+ */
+export function trainingRhythm(state, { today = todayISO() } = {}) {
+  const done = (state.sessions || []).filter((s) => s.status === 'done');
+  if (!done.length) return { sessions: 0, last: null, gap: null };
+  const last = done.reduce((a, b) => (b.date > a.date ? b : a), done[0]);
+  const gap = Math.max(0, -relDays(last.date));
+  const tpl = templateOf(state.program);
+  const lastDef = tpl.days.find((d) => d.n === last.day) || null;
+  // Named the way the lifter would name it out loud — "Day 3, your strength
+  // session" — rather than by the role, which on its own reads as "you trained
+  // strength yesterday".
+  const lastLabel = last.phase === 'test' ? 'a test day'
+    : last.phase === 'meetWeek' ? `meet week, day ${last.day}`
+    : lastDef ? `day ${last.day}, your ${lastDef.label.toLowerCase()} session`
+    : `day ${last.day}`;
+  return {
+    sessions: done.length,
+    last,
+    gap,
+    lastRole: last.phase === 'test' ? 'test' : (lastDef?.role || null),
+    lastLabel,
+    todayIso: today,
+  };
+}
+
+/** Days whose fatigue is the reason the book asks for a rest day between them. */
+const HEAVY_ROLES = new Set(['strength', 'test', 'meet']);
+
+/**
+ * Whether today is too soon, and what to do about it.
+ *
+ * Deliberately advice and never a block. A lifter who has to train Thursday and
+ * Friday because that is the week they have is better served by being told what
+ * it will cost and which day to take the hit on than by an app that refuses.
+ *
+ * Returns null when the spacing is fine — including for every gap of two days
+ * or more, which is the great majority of them.
+ */
+export function restAdvice(state, resolved, { today = todayISO() } = {}) {
+  const r = trainingRhythm(state, { today });
+  if (!r.last || r.gap > 1) return null;
+
+  const todayRole = resolved?.isMeet ? 'meet' : resolved?.isTest ? 'test' : resolved?.dayDef?.role || null;
+  const bothHeavy = HEAVY_ROLES.has(r.lastRole) && HEAVY_ROLES.has(todayRole);
+
+  if (r.gap === 0) {
+    return {
+      level: bothHeavy ? 'bad' : 'warn',
+      title: 'You have already trained today',
+      text: bothHeavy
+        ? `You logged ${r.lastLabel} earlier today, and this is another heavy one. Two of those in a day is one session's worth of stimulus and two sessions' worth of fatigue. Come back tomorrow — the cycle does not care what date it finishes on.`
+        : `You logged ${r.lastLabel} earlier today. Doubling up is not forbidden, but the second session is the one that gets worse, so put the work you care about first.`,
+      cite: 'Level 1, pp. 37-38.',
+    };
+  }
+
+  // Yesterday.
+  if (resolved?.peakKind === 'meet' || resolved?.peakKind === 'primer') return null;   // meet week is meant to be tight
+  if (!bothHeavy) return null;
+
+  return {
+    level: 'warn',
+    title: 'Two heavy days back to back',
+    text: `You trained ${r.lastLabel} yesterday, and this is the other heavy one. They draw on the same recovery — squat and deadlift especially — so expect today to feel a grade harder than the bar says it is. Land the RPE honestly rather than forcing the prescribed load, or move this session to tomorrow.`,
+    cite: templateOf(state.program).scheduleNote || 'Level 2, p. 208.',
+  };
+}
+
+/* ======================================================================
    Session-time notes: what to tell the lifter about this specific day
    ====================================================================== */
 
@@ -347,6 +429,9 @@ export function sessionBriefing(resolved, state) {
 
   const layoff = layoffAdvice(state);
   if (layoff) notes.push({ kind: 'layoff', title: layoff.headline, text: layoff.advice, cite: layoff.cite });
+
+  const spacing = restAdvice(state, resolved);
+  if (spacing) notes.push({ kind: 'rest', title: spacing.title, text: spacing.text, cite: spacing.cite });
 
   // Not during a peak: its week 1 is the opposite of an ordinary one — the reps
   // came *down* and the bar went up to meet them.

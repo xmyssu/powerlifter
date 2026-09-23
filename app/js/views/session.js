@@ -11,9 +11,10 @@
 import { html, raw, esc, icon, $, $$, toast, sheet, closeSheet, confirmSheet, fmtDuration, haptic } from '../ui.js';
 import { fmtLoadBare, plateBreakdown, roundToLoadable, loadStep, e1RM, fmtRPE, normalizeRPE, loadFor, parseNum, convertLoad } from '../rpe.js';
 import { resolveDay, completeSession, discardSession, slotHistory, lastComparable, templateOf,
-         loadOptsFor } from '../program.js';
+         loadOptsFor, warmupFor } from '../program.js';
 import { RPE_SCALE, REST_GUIDE } from '../templates.js';
 import { sessionBriefing } from '../coach.js';
+import { meetProgress, targetLine, attemptAdvice, ATTEMPT_NAMES as MEET_ATTEMPT_NAMES } from '../meet.js';
 import { optionsForSlot, SLOT_INFO, byId } from '../exercises.js';
 import * as timer from '../timer.js';
 import * as sync from '../sync.js';
@@ -67,6 +68,8 @@ function view(ctx) {
         `<div class="banner ${n.kind === 'deload' ? 'banner--good' : n.kind === 'technique' ? '' : ''}">
           <b>${esc(n.title)}</b><br>${esc(n.text)}</div>`).join(''))}
 
+      ${raw(resolved.isMeet ? meetCard(st, ses) : '')}
+
       ${raw(ses.entries.map((entry, i) => exerciseCard(entry, resolved, i, st, ses)).join(''))}
 
       <div class="stack-sm" style="margin-top:8px">
@@ -80,6 +83,86 @@ function view(ctx) {
     </div>
 
     <div id="timerslot"></div>`;
+}
+
+/* ---- meet day --------------------------------------------------------- */
+
+const ATTEMPT_CLS = { good: 'good', missed: 'bad', pending: '' };
+
+/**
+ * The board, between attempts.
+ *
+ * Nine loads logged one at a time told the lifter nothing about the only number
+ * that counts, at exactly the moment every remaining decision is made against
+ * it. This is the scoreboard, the goal, and the handler's advice in one card,
+ * recomputed from the log so a changed attempt is reflected instantly.
+ */
+function meetCard(st, ses) {
+  const p = meetProgress(st, ses);
+  if (!p) return '';
+  const units = st.profile.units;
+  const goal = st.program?.goalTotal || null;
+  const t = targetLine(p, goal);
+  const step = units === 'kg' ? 2.5 : 5;
+  const advice = p.nextUp ? attemptAdvice(p.nextUp.liftState, { step }) : null;
+
+  const chip = (a) => `<span class="pill ${a.status === 'good' ? 'pill--good' : a.status === 'missed' ? 'pill--bad' : ''} mono"
+      title="${esc(a.name)}">${a.load ? fmtLoadBare(a.load) : '—'}${a.status === 'missed' ? ' ✕' : a.status === 'good' ? ' ✓' : ''}</span>`;
+
+  const rows = p.lifts.map((l) => `<div class="kv" style="align-items:center">
+    <span class="kv__k">${esc(l.name)}${l.bombed ? ' <span class="pill pill--bad">no lift</span>' : ''}</span>
+    <span class="kv__v" style="display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end">${l.attempts.map(chip).join('')}</span>
+  </div>`).join('');
+
+  return `<div class="card ${p.bombed ? 'card--flat' : 'card--accent'}">
+    <div class="row-between" style="align-items:flex-end;margin-bottom:10px">
+      <div>
+        <div class="eyebrow" style="${p.bombed ? '' : 'color:var(--accent)'}">${p.bombed ? 'No total' : 'On the board'}</div>
+        <div class="mono" style="font-size:2rem;font-weight:700;letter-spacing:-.03em;line-height:1.1">
+          ${p.bombed ? '—' : fmtLoadBare(p.total)}<small style="font-size:.9rem;font-weight:500"> ${esc(units)}</small></div>
+      </div>
+      <div style="text-align:right">
+        <div class="tiny dim">${p.attemptsLeft} attempt${p.attemptsLeft === 1 ? '' : 's'} left</div>
+        ${!p.bombed && p.ifAllMade > p.total
+          ? `<div class="tiny mono">${fmtLoadBare(p.ifAllMade)} if they all go up</div>` : ''}
+      </div>
+    </div>
+
+    ${rows}
+
+    ${p.bombed ? `<div class="banner banner--bad" style="margin-top:10px">
+      Three misses on one lift is no total, whatever the other two did. It is a bad day and it is not a verdict —
+      the loads you made today are still in your log and still count as training.</div>` : ''}
+
+    ${p.nextUp?.liftState?.lastChance ? `<div class="banner banner--bad" style="margin-top:10px">
+      <b>Last attempt on the ${esc(p.nextUp.name.toLowerCase())}, nothing on the board.</b>
+      Miss this and there is no total at all — not a smaller one. Take a weight you know you have.</div>` : ''}
+
+    <div class="field" style="margin-top:12px;margin-bottom:0">
+      <label class="field__label" for="goaltotal">Total you are chasing</label>
+      <div class="row" style="gap:8px">
+        <input class="input input--num grow" id="goaltotal" type="text" inputmode="decimal"
+               value="${goal ?? ''}" placeholder="—" data-goal data-focus-key="goaltotal">
+        <span class="pill mono" style="flex:0 0 auto">${esc(units)}</span>
+      </div>
+      ${t ? `<div class="field__hint">${t.hit
+        ? `<b>Done — you are ${fmtLoadBare(-t.toGo)} over.</b> Everything from here is a bigger number, not a safer one.`
+        : t.reachable
+          ? `<b>${fmtLoadBare(t.toGo)} to go</b>, and the attempts now loaded are worth ${fmtLoadBare(t.headroom)}. It is there.`
+          : `<b>${fmtLoadBare(t.toGo)} to go</b> and only ${fmtLoadBare(t.headroom)} loaded — ${fmtLoadBare(t.short)} short. Something left has to go up, or the number does not.`}</div>` : ''}
+    </div>
+
+    ${advice && p.nextUp ? `<div class="insight ${advice.kind === 'repeat' || advice.kind === 'grind' ? 'insight--warn' : 'insight--info'}" style="margin-top:12px">
+      <div class="insight__icon">${icon('coach')}</div>
+      <div class="grow">
+        <div class="insight__t">${esc(p.nextUp.name)} · ${esc(p.nextUp.attempt.name.toLowerCase())}</div>
+        <div class="insight__b">${esc(advice.text)}</div>
+        ${advice.changed && advice.load != null ? `<button class="btn btn--ghost" style="margin-top:10px"
+          data-advice="${esc(p.nextUp.slotKey)}" data-advice-n="${p.nextUp.attempt.n - 1}" data-advice-load="${advice.load}">
+          ${icon('swap')} Change it to ${fmtLoadBare(advice.load)} ${esc(units)}</button>` : ''}
+      </div>
+    </div>` : ''}
+  </div>`;
 }
 
 function exerciseCard(entry, resolved, i, st, ses) {
@@ -114,10 +197,11 @@ function exerciseCard(entry, resolved, i, st, ses) {
     ${isOpen ? `<div class="ex__body">
       ${rxStrip(entry, slot, st)}
       ${(resolved.isTest || resolved.isMeet) ? rampStrip(slot, units) : lastTimeStrip(st, entry, slot)}
+      ${nextIdx === 0 && !resolved.isTest && !resolved.isMeet ? warmupStrip(entry, st) : ''}
       ${slot?.loadNote && nextIdx === 0 ? `<p class="cite" style="margin-bottom:10px">${esc(slot.loadNote)}</p>` : ''}
       ${coarseNote(slot, st)}
       ${rpeCheckNote(slot, entry, units)}
-      ${loadStepper(entry, st)}
+      ${loadStepper(entry, st, { attempts: resolved.isTest || resolved.isMeet, index: Math.max(0, nextIdx), platform: !!resolved.isMeet })}
       <div class="sets">
         ${entry.sets.map((s, si) => setRow(entry, s, si, si === nextIdx, units, !!(resolved.isTest || resolved.isMeet))).join('')}
       </div>
@@ -224,6 +308,32 @@ function lastTimeStrip(st, entry, slot) {
   </div>`;
 }
 
+/**
+ * The ramp to this exercise's working weight, in weights.
+ *
+ * Shown once per exercise, on the card of the set you are about to do, and
+ * folded away by default — a lifter who knows their own ramp should not have to
+ * scroll past it six times a session, and one who does not should not have to
+ * do percentage arithmetic between sets.
+ */
+function warmupStrip(entry, st) {
+  const w = warmupFor(entry.plannedLoad, entry.targetReps, loadOptsFor(st, entry.exerciseId));
+  if (!w) return '';
+  const units = st.profile.units;
+  return `<details class="acc" style="margin-bottom:12px">
+    <summary class="acc__head" style="list-style:none;cursor:pointer">
+      ${icon('chevron')}<b style="font-size:.813rem">Warm up to ${fmtLoadBare(entry.plannedLoad)}</b>
+      <span class="tiny dim">${w.sets.length} set${w.sets.length === 1 ? '' : 's'}</span>
+    </summary>
+    <div class="acc__body">
+      <div class="tiny mono">${w.sets.map((x) =>
+        `${fmtLoadBare(x.load)} × ${esc(String(x.reps))}`).join('  ·  ')}</div>
+      <p class="cite" style="margin-top:8px">${esc(w.label)}. Rest as little as you like down here — the ramp is
+      preparation, not training, and the only set that counts is the one at ${fmtLoadBare(entry.plannedLoad)} ${units}.</p>
+    </div>
+  </details>`;
+}
+
 /** The warm-up ramp to the opener. On a test day this is most of the session. */
 function rampStrip(slot, units) {
   const a = slot?.attempts;
@@ -265,17 +375,35 @@ function rpeCheckNote(slot, entry, units) {
   </div>`;
 }
 
-function loadStepper(entry, st) {
-  const step = loadStep(loadOptsFor(st, entry.exerciseId));
+/**
+ * The +/- on the working load.
+ *
+ * On an ordinary day there is one working load and it carries across the sets,
+ * so nudging it nudges everything unlogged. On a day of attempts there are
+ * three different weights in one exercise and they are not a series — changing
+ * your second attempt must not silently rewrite your third, which is what this
+ * did before it knew the difference. In attempt mode it moves exactly the one
+ * you are about to take, in the increment that day is contested in: the
+ * platform's 2.5 kg on meet day, the gym's own step on a test day.
+ */
+function loadStepper(entry, st, { attempts = false, index = 0, platform = false } = {}) {
+  const grid = loadOptsFor(st, entry.exerciseId);
+  const step = attempts && platform ? (st.profile.units === 'kg' ? 2.5 : 5) : loadStep(grid);
+  const set = attempts ? entry.sets[index] : null;
+  const value = attempts ? (set?.load ?? '') : (entry.plannedLoad ?? '');
+  const tag = attempts ? ` data-attempt="${index}" data-attempt-step="${step}"` : '';
+  const label = attempts ? `${MEET_ATTEMPT_NAMES[index] || `Attempt ${index + 1}`} load` : 'Working load';
+
   return `<div class="stepper" style="margin-bottom:12px">
-    <button class="stepper__btn" data-load-delta="${-step}" data-slot="${esc(entry.slotKey)}" aria-label="Less weight">−</button>
+    <button class="stepper__btn" data-load-delta="${-step}" data-slot="${esc(entry.slotKey)}"${tag} aria-label="Less weight">−</button>
     <div class="stepper__val">
-      <input type="text" inputmode="decimal" value="${entry.plannedLoad ?? ''}" placeholder="—"
-             data-load-set="${esc(entry.slotKey)}" data-focus-key="load-${esc(entry.slotKey)}" aria-label="Working load">
+      <input type="text" inputmode="decimal" value="${value}" placeholder="—"
+             data-load-set="${esc(entry.slotKey)}"${tag} data-focus-key="load-${esc(entry.slotKey)}" aria-label="${esc(label)}">
       <span class="stepper__unit">${esc(st.profile.units)}</span>
     </div>
-    <button class="stepper__btn" data-load-delta="${step}" data-slot="${esc(entry.slotKey)}" aria-label="More weight">+</button>
-  </div>`;
+    <button class="stepper__btn" data-load-delta="${step}" data-slot="${esc(entry.slotKey)}"${tag} aria-label="More weight">+</button>
+  </div>
+  ${attempts ? `<p class="cite" style="margin:-4px 0 10px">Moves your ${esc((MEET_ATTEMPT_NAMES[index] || 'next').toLowerCase())} only — the other attempts stay where you put them.</p>` : ''}`;
 }
 
 /** On a test day the three sets are not "1, 2, 3" — they have names. */
@@ -841,12 +969,21 @@ function mount(root, ctx) {
     haptic(8);
   });
 
-  // load stepper: changing the working load updates every unlogged set too
+  // load stepper: changing the working load updates every unlogged set too —
+  // except in attempt mode, where it moves only the attempt you are about to take
   $$('[data-load-delta]', root).forEach((b) => b.onclick = () => {
     const delta = Number(b.dataset.loadDelta);
     const slotKey = b.dataset.slot;
+    const ai = b.dataset.attempt == null ? null : Number(b.dataset.attempt);
+    const astep = Number(b.dataset.attemptStep) || Math.abs(delta);
     ctx.store.update((s) => {
       const e = entryOf(sessionOf(s), slotKey);
+      if (ai != null) {
+        const set = e.sets[ai];
+        if (!set || set.done) return;
+        set.load = Math.max(0, Math.round(((set.load ?? 0) + delta) / astep) * astep);
+        return;
+      }
       const base = e.plannedLoad ?? 0;
       const next = roundToLoadable(Math.max(0, base + delta), loadOptsFor(s, e.exerciseId));
       e.plannedLoad = next;
@@ -857,12 +994,34 @@ function mount(root, ctx) {
 
   $$('[data-load-set]', root).forEach((el) => el.onchange = () => {
     const slotKey = el.dataset.loadSet;
+    const ai = el.dataset.attempt == null ? null : Number(el.dataset.attempt);
     const v = num(el.value);
     ctx.store.update((s) => {
       const e = entryOf(sessionOf(s), slotKey);
+      if (ai != null) { if (e.sets[ai] && !e.sets[ai].done) e.sets[ai].load = v; return; }
       e.plannedLoad = v;
       for (const set of e.sets) if (!set.done) set.load = v;
     });
+  });
+
+  // the goal total, and the handler's advice about the next attempt
+  $$('[data-goal]', root).forEach((el) => el.onchange = () => {
+    const v = num(el.value);
+    ctx.store.update((s) => { s.program.goalTotal = v && v > 0 ? v : null; });
+    ctx.refresh();
+  });
+
+  $$('[data-advice]', root).forEach((b) => b.onclick = () => {
+    const slotKey = b.dataset.advice;
+    const i = Number(b.dataset.adviceN);
+    const load = Number(b.dataset.adviceLoad);
+    ctx.store.update((s) => {
+      const e = entryOf(sessionOf(s), slotKey);
+      if (e?.sets[i] && !e.sets[i].done) e.sets[i].load = load;
+    });
+    haptic(14);
+    toast(`Attempt changed to ${fmtLoadBare(load)} ${ctx.state.profile.units}.`);
+    ctx.refresh();
   });
 
   // per-set inputs persist on blur so nothing is lost when navigating away

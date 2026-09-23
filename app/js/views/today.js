@@ -6,10 +6,10 @@ import { html, raw, esc, icon, $, $$, toast, sheet, closeSheet, fmtDate, relDays
 import { fmtLoadBare, plateBreakdown, fmtRPE } from '../rpe.js';
 import { resolveDay, startSession, templateOf, resolveAssessment, cyclePlan, loadingWeeks, resolveTestDay,
          attemptsFor, discardSession, exitPeak, loadOptsForSlot, resolvePeakPrompt, startPeakNow,
-         peakStatus, daysUntil, PEAK_WEEKS, PEAK_MIN_DAYS } from '../program.js';
+         peakStatus, daysUntil, warmupFor, PEAK_WEEKS, PEAK_MIN_DAYS } from '../program.js';
 import { DELOAD_CHECKLIST, WARMUP, RPE_SCALE, INTERMEDIATE_PL, ADVANCED_ACCUMULATION } from '../templates.js';
 import { activeInsights, sessionBriefing, readinessVerdict, READINESS_QUESTIONS, PAIN_PROTOCOL,
-         testReadiness, planTestBlock, testPromotion, TEST_PROMPT_QUIET_DAYS } from '../coach.js';
+         testReadiness, planTestBlock, testPromotion, restAdvice, TEST_PROMPT_QUIET_DAYS } from '../coach.js';
 import { byId } from '../exercises.js';
 import { buildProgram } from '../program.js';
 import { todayISO } from '../store.js';
@@ -57,6 +57,8 @@ function view(ctx) {
 
       ${raw(active ? resumeCard(active, resolved) : '')}
 
+      ${raw(restCard(st, resolved))}
+
       ${raw(verdict ? readinessCard(verdict) : readinessPrompt())}
 
       ${raw(anyInRange ? milestoneCard(st, ms, promo) : '')}
@@ -82,7 +84,7 @@ function view(ctx) {
         ${raw(icon(resolved.peakKind === 'meet' ? 'trophy' : 'play'))} ${esc(active ? 'Resume session' : resolved.peakKind === 'meet' ? 'Start the meet' : 'Start session')}
       </button>
 
-      ${raw(warmupCard(resolved))}
+      ${raw(warmupCard(resolved, st))}
 
       <div class="row" style="gap:8px">
         <button class="btn btn--ghost grow" data-plan>${raw(icon('today'))} Cycle plan</button>
@@ -119,6 +121,27 @@ function meetDayBanner(st) {
         ? 'You set this date to find out what you can do. Three attempts a lift, computed from everything you have logged since you started.'
         : 'Keep today easy or take it off. Tomorrow is what the date was for.'}</div>
       ${out === 0 ? `<button class="btn btn--good btn--block" style="margin-top:10px" data-test>${icon('trophy')} Start test day</button>` : ''}
+    </div>
+  </div>`;
+}
+
+/**
+ * Whether today is too soon after the last session.
+ *
+ * Above the fold because it is one of the few things on this screen that can
+ * change the answer to "am I training at all today", and the only one the app
+ * can work out on its own from a calendar it was previously ignoring.
+ */
+function restCard(st, resolved) {
+  const r = restAdvice(st, resolved);
+  if (!r) return '';
+  const cls = r.level === 'bad' ? 'bad' : 'warn';
+  return `<div class="insight insight--${cls}">
+    <div class="insight__icon">${icon(r.level === 'bad' ? 'warn' : 'rest')}</div>
+    <div class="grow">
+      <div class="insight__t">${esc(r.title)}</div>
+      <div class="insight__b">${esc(r.text)}</div>
+      ${r.cite ? `<div class="insight__cite">${esc(r.cite)}</div>` : ''}
     </div>
   </div>`;
 }
@@ -394,17 +417,40 @@ function slotRow(s, i, units, st) {
   </div>`;
 }
 
-function warmupCard(resolved) {
+/**
+ * The general warm-up, plus the ramp to today's first loaded lift in weights.
+ *
+ * The percentage table is still there underneath, because it is the thing that
+ * generalises — but the first lift's ramp is printed in kilos, because the
+ * lifter is about to walk to a bar and the arithmetic is the part that does not
+ * survive contact with a gym floor.
+ */
+function warmupCard(resolved, st) {
   const lowRep = resolved.slots.some((s) => s.reps != null && s.reps <= 5);
   const scheme = lowRep ? WARMUP.lowRep : WARMUP.highRep;
+  const units = st.profile.units;
+  const first = resolved.slots.find((s) => s.plannedLoad > 0 && !s.timed);
+  const ramp = first ? warmupFor(first.plannedLoad, first.reps, loadOptsForSlot(st, first.slotKey)) : null;
+
   return `<details class="acc">
     <summary class="acc__head" style="list-style:none;cursor:pointer">
-      ${icon('chevron')}<b>Warm-up</b><span class="tiny dim">${esc(scheme.label)}</span>
+      ${icon('chevron')}<b>Warm-up</b><span class="tiny dim">${esc(ramp ? `to ${fmtLoadBare(first.plannedLoad)} ${units}` : scheme.label)}</span>
     </summary>
     <div class="acc__body">
       <p><b>General</b></p>
       <ul>${WARMUP.general.map((g) => `<li>${esc(g)}</li>`).join('')}</ul>
-      <p style="margin-top:12px"><b>Ramp on your first heavy lift</b></p>
+      ${ramp ? `<p style="margin-top:12px"><b>Ramp to ${esc(first.exercise?.short || first.slot.slotType)}</b></p>
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th>Set</th><th>Reps</th><th class="r">Load</th></tr></thead>
+        <tbody>${ramp.sets.map((x, i) => `<tr>
+          <td class="mono">${i + 1}</td><td class="mono">${esc(String(x.reps))}</td>
+          <td class="r mono">${fmtLoadBare(x.load)}${x.pct == null ? ' <span class="dim" style="font-weight:400">bar</span>' : ''}</td>
+        </tr>`).join('')}
+        <tr><td class="mono">${ramp.sets.length + 1}</td><td class="mono">${esc(String(first.reps ?? '—'))}</td>
+          <td class="r mono"><b>${fmtLoadBare(first.plannedLoad)}</b></td></tr></tbody>
+      </table></div>
+      <p class="cite" style="margin-top:10px">Every other lift today gets the same ramp against its own working weight — it is on each exercise card in the session. p. 224.</p>`
+      : `<p style="margin-top:12px"><b>Ramp on your first heavy lift</b></p>
       <div class="tbl-wrap"><table class="tbl">
         <thead><tr><th>Set</th><th>Reps</th><th class="r">Load</th></tr></thead>
         <tbody>${scheme.sets.map((s, i) => `<tr>
@@ -412,7 +458,7 @@ function warmupCard(resolved) {
           <td class="r mono">${s.pct ? `${s.pct}%` : esc(s.label || '—')}</td>
         </tr>`).join('')}</tbody>
       </table></div>
-      <p class="cite" style="margin-top:10px">Percentages are of your working weight for that lift. p. 224.</p>
+      <p class="cite" style="margin-top:10px">Percentages are of your working weight for that lift. p. 224.</p>`}
     </div>
   </details>`;
 }

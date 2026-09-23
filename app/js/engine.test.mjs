@@ -24,12 +24,13 @@ const { buildProgram, resolveDay, startSession, completeSession, resolveAssessme
         templateOf, PAIN_WEEK_REPS, RELIABLE_E1RM_REPS, resolveTestDay, attemptsFor,
         bestMaxFor, discardSession, shouldEnterPeak, enterPeak, exitPeak, peakStatus,
         peakWeek, missedAttempts, entryStalled, entryShortfall, daysUntil, resolvePeakPrompt,
-        startPeakNow, loadOptsFor, peakSetsFor, PEAK_WEEKS, PEAK_MIN_DAYS } = await import('./program.js');
+        startPeakNow, loadOptsFor, peakSetsFor, warmupFor, PEAK_WEEKS, PEAK_MIN_DAYS } = await import('./program.js');
+const { meetProgress, targetLine, attemptAdvice, MEET_ORDER } = await import('./meet.js');
 const { pctOf1RM, e1RM, loadFor, plateBreakdown, roundToLoadable, plateLabel, minIncrement, convertLoad,
         loadBand, loadStep, gridFloor, isLadder, RPE_TOLERANCE } = await import('./rpe.js');
 const { assessDeload, INTERMEDIATE_PL, INTERMEDIATE_PL_3DAY } = await import('./templates.js');
 const { strengthTrend, trendSummary, sessionBriefing, trainingAgeReport, TRAINING_AGE_BANDS, milestones,
-        testReadiness, planTestBlock, testPromotion, activeInsights,
+        testReadiness, planTestBlock, testPromotion, activeInsights, restAdvice, trainingRhythm,
         MISS_MEMORY_DAYS, TEST_PROMPT_QUIET_DAYS } = await import('./coach.js');
 
 let pass = 0, fail = 0;
@@ -2314,6 +2315,248 @@ hr('22. Loading grids');
   }
   eq(anchors.join(' '), '72 74.5 77 79.5', 'the anchor carries 2.5 kg a cycle exactly');
   eq(pull().plannedLoad, 80, 'and by the third the stack has moved a notch', anchors.join(' -> '));
+}
+
+/* ======================================================================
+   23. The board, between attempts
+   ====================================================================== */
+hr('23. Meet day');
+{
+  const iso = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return store.todayISO(d); };
+
+  /** A meet session with the given attempt outcomes per lift. */
+  const meetWith = (plan) => {
+    store.update((s) => {
+      Object.assign(s, store.defaultState());
+      s.settings.confirmPeak = false;
+      s.maxes = { squat: { value: 150 }, bench: { value: 100 }, deadlift: { value: 180 } };
+      s.program = buildProgram({ meetDate: iso(1) });
+      for (const k of Object.keys(s.program.slots)) s.program.slots[k].week1Load = 60;
+      enterPeak(s);
+      s.program.cursor.phase = 'meetWeek';
+      s.program.cursor.week = PEAK_WEEKS;
+      s.program.cursor.day = 4;
+      const ses = startSession(s, s.program.cursor);
+      for (const e of ses.entries) {
+        const lift = { test_squat: 'squat', test_bench: 'bench', test_deadlift: 'deadlift' }[e.slotKey];
+        const outcomes = plan[lift] || [];
+        e.sets = e.sets.map((x, i) => {
+          const o = outcomes[i];
+          if (o === undefined) return x;                                   // not taken yet
+          if (o === 'x') return { ...x, reps: 0, rpe: null, failed: true, done: true };
+          return { ...x, reps: 1, rpe: typeof o === 'number' ? o : 9, done: true };
+        });
+      }
+      s.sessions.push(ses);
+      s.activeSessionId = ses.id;
+    });
+    const st0 = store.getState();
+    return { st: st0, ses: st0.sessions.find((x) => x.id === st0.activeSessionId) };
+  };
+
+  /* ---- an empty board ---- */
+  let { st: mst, ses } = meetWith({});
+  let p = meetProgress(mst, ses);
+  eq(p.lifts.map((l) => l.lift).join(','), 'squat,bench,deadlift', 'the board runs in meet order');
+  eq(p.total, 0, 'nothing on it yet');
+  eq(p.attemptsLeft, 9, 'nine attempts to come');
+  eq(p.nextUp.lift, 'squat', 'and the squat opener is next');
+  ok(p.ifAllMade > 0, 'with a ceiling made of the weights already loaded');
+
+  /* ---- the total is the best MADE attempt, not the heaviest loaded ---- */
+  ({ st: mst, ses } = meetWith({ squat: [8, 9, 'x'] }));
+  p = meetProgress(mst, ses);
+  const sq = p.lifts[0];
+  eq(sq.made, 2, 'two squats made');
+  eq(sq.misses, 1, 'one missed');
+  eq(sq.best, sq.attempts[1].load, 'the second is what counts');
+  eq(p.total, sq.attempts[1].load, 'and it is the whole total so far');
+  ok(sq.attempts[2].load > sq.best, 'even though a heavier one was attempted');
+  eq(p.nextUp.lift, 'bench', 'and the bench is up next');
+
+  /* ---- a bombed lift is no total at all ---- */
+  ({ st: mst, ses } = meetWith({ squat: ['x', 'x', 'x'], bench: [9], deadlift: [9] }));
+  p = meetProgress(mst, ses);
+  ok(p.lifts[0].bombed, 'three misses is a bombed lift');
+  eq(p.bombed, true, 'and the meet knows');
+  eq(p.total, 0, 'there is no total — not a smaller one');
+
+  /* ---- and the warning comes one attempt before that ---- */
+  ({ st: mst, ses } = meetWith({ squat: ['x', 'x'] }));
+  p = meetProgress(mst, ses);
+  ok(p.lifts[0].lastChance, 'nothing on the board with one attempt left is flagged');
+  ok(!p.lifts[0].bombed, 'before it is a bomb, while it can still be avoided');
+
+  /* ---- a goal total, measured against what is actually loaded ---- */
+  ({ st: mst, ses } = meetWith({ squat: [8, 8, 8], bench: [8, 8, 8] }));
+  p = meetProgress(mst, ses);
+  const onBoard = p.total;
+  eq(targetLine(p, onBoard - 10).hit, true, 'a target already passed says so');
+  const reach = targetLine(p, onBoard + (p.ifAllMade - p.total));
+  eq(reach.reachable, true, 'a target exactly at the ceiling is reachable');
+  const tooBig = targetLine(p, p.ifAllMade + 25);
+  eq(tooBig.reachable, false, 'one above it is not');
+  eq(tooBig.short, 25, 'and the app says by how much, in kilos you can put on a bar');
+  eq(targetLine(p, null), null, 'no target, no line');
+
+  /* ---- what to put on the bar next ---- */
+  const advice = (plan, lift = 'squat') => {
+    const r = meetWith(plan);
+    const pr = meetProgress(r.st, r.ses);
+    return attemptAdvice(pr.lifts.find((l) => l.lift === lift), { step: 2.5 });
+  };
+
+  eq(advice({}).kind, 'opener', 'before anything is taken, the advice is about the opener');
+
+  const afterMiss = advice({ squat: ['x'] });
+  eq(afterMiss.kind, 'repeat', 'a missed opener is repeated, not jumped past');
+  {
+    const r = meetWith({ squat: ['x'] });
+    const pr = meetProgress(r.st, r.ses);
+    eq(afterMiss.load, pr.lifts[0].attempts[0].load, 'at the same weight');
+  }
+
+  const afterGrind = advice({ squat: [10] });
+  eq(afterGrind.kind, 'grind', 'an opener at RPE 10 kills the planned jump');
+  {
+    const r = meetWith({ squat: [10] });
+    const pr = meetProgress(r.st, r.ses);
+    eq(afterGrind.load, pr.lifts[0].attempts[0].load + 2.5, 'one increment, and no more');
+    ok(afterGrind.load < pr.lifts[0].attempts[1].load, 'which is less than was planned');
+    ok(afterGrind.changed, 'so the app offers to change it');
+  }
+
+  const afterHard = advice({ squat: [9] });
+  eq(afterHard.kind, 'trim', 'RPE 9 halves the jump');
+  const afterEasy = advice({ squat: [8, 7] });
+  eq(afterEasy.kind, 'room', 'an easy second means the third was picked off a stale estimate');
+  {
+    const r = meetWith({ squat: [8, 7] });
+    const pr = meetProgress(r.st, r.ses);
+    ok(afterEasy.load > pr.lifts[0].attempts[2].load, 'and there is more there');
+  }
+  eq(advice({ squat: [8, 8.5] }).kind, 'planned', 'a second that went to plan leaves the third alone');
+  eq(advice({ squat: [8, 8, 8] }), null, 'a finished lift has nothing left to advise');
+
+  /* ---- every attempt on the board is one the platform allows ---- */
+  ({ st: mst, ses } = meetWith({}));
+  p = meetProgress(mst, ses);
+  for (const l of p.lifts) {
+    for (const a of l.attempts) {
+      ok(a.load == null || a.load % 2.5 === 0, `${l.lift} ${a.name} is a legal attempt`, `${a.load}`);
+    }
+  }
+}
+
+/* ======================================================================
+   24. Warm-ups in weights, not percentages
+   ====================================================================== */
+hr('24. Warm-up ramps');
+{
+  const kg = { barWeight: 20, plates: [25, 20, 15, 10, 5, 2.5, 1.25] };
+  const coarse = { barWeight: 20, plates: [25, 20, 10, 5], microplates: false };
+  const stack = { ...kg, loading: { mode: 'stack', start: 8, step: 8 } };
+
+  const w = warmupFor(140, 5, kg);
+  ok(w && w.sets.length >= 4, 'a heavy single-digit set gets the low-rep ramp', `${w?.sets.length} sets`);
+  ok(w.sets.every((x) => x.load < 140), 'nothing in a warm-up is at the working weight');
+  for (let i = 1; i < w.sets.length; i++) {
+    ok(w.sets[i].load > w.sets[i - 1].load, 'the ramp goes up', `${w.sets[i - 1].load} -> ${w.sets[i].load}`);
+  }
+  for (const x of w.sets) eq(roundToLoadable(x.load, kg), x.load, 'and every rung is loadable');
+  eq(w.sets[0].load, 20, 'starting from the empty bar');
+
+  eq(warmupFor(140, 9, kg).sets.length < w.sets.length, true, 'a set of nine gets the shorter ramp');
+
+  // The rungs collapse onto each other near the bottom of a coarse plate set.
+  const c = warmupFor(100, 3, coarse);
+  for (const x of c.sets) eq(roundToLoadable(x.load, coarse), x.load, 'a coarse gym ramps on its own plates');
+  eq(new Set(c.sets.map((x) => x.load)).size, c.sets.length, 'and never lists the same weight twice');
+
+  // A stack has no bar to warm up with.
+  const sw = warmupFor(72, 9, stack);
+  ok(sw.sets.every((x) => x.pct != null), 'a weight stack has no empty-bar set');
+  for (const x of sw.sets) eq(roundToLoadable(x.load, stack), x.load, 'and every rung is on the stack');
+
+  eq(warmupFor(null, 5, kg), null, 'no working weight, no ramp');
+  eq(warmupFor(22.5, 5, kg).sets.length, 1, 'a working weight barely above the bar gets one rung — the bar');
+  eq(warmupFor(20, 5, kg), null, 'and the empty bar itself gets no ramp at all');
+}
+
+/* ======================================================================
+   25. The app knows what day it is
+   ====================================================================== */
+hr('25. Rest between sessions');
+{
+  const iso = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return store.todayISO(d); };
+
+  /** A lifter whose last session was `daysAgo` days ago, on template day `day`. */
+  const lifterWhoTrained = (daysAgo, day) => {
+    store.update((s) => {
+      Object.assign(s, store.defaultState());
+      s.maxes = { squat: { value: 150 }, bench: { value: 100 }, deadlift: { value: 170 } };
+      s.program = buildProgram({});
+      for (const k of Object.keys(s.program.slots)) s.program.slots[k].week1Load = 100;
+      const ses = startSession(s, { ...s.program.cursor, day });
+      ses.date = iso(-daysAgo);
+      ses.status = 'done';
+      for (const e of ses.entries) {
+        e.sets = e.sets.map((x) => ({ ...x, reps: e.targetReps, rpe: 8, done: true }));
+      }
+      s.sessions.push(ses);
+    });
+    return store.getState();
+  };
+  const dayOf = (st, day) => resolveDay(st, { ...st.program.cursor, day });
+
+  // Day 3 and Day 4 are the two heavy competition-lift sessions, and the
+  // template's own schedule note asks for a rest day between them.
+  let stR = lifterWhoTrained(1, 3);
+  let adv = restAdvice(stR, dayOf(stR, 4));
+  ok(adv, 'day 4 the morning after day 3 is worth a word');
+  eq(adv.level, 'warn', 'as a warning, not a refusal');
+  ok(/back to back/i.test(adv.title), 'and it names the problem');
+
+  // The volume day after a heavy one is not the same problem.
+  stR = lifterWhoTrained(1, 3);
+  eq(restAdvice(stR, dayOf(stR, 1)), null, 'a volume day after a heavy one passes without comment');
+  stR = lifterWhoTrained(1, 1);
+  eq(restAdvice(stR, dayOf(stR, 3)), null, 'and so does a heavy day after a volume one');
+
+  // Two days is plenty, whatever the days are.
+  stR = lifterWhoTrained(2, 3);
+  eq(restAdvice(stR, dayOf(stR, 4)), null, 'two days apart is not a spacing problem');
+  stR = lifterWhoTrained(9, 3);
+  eq(restAdvice(stR, dayOf(stR, 4)), null, 'and neither is nine — that is the layoff advice\'s job');
+
+  // Twice in one day is, whatever the days are.
+  stR = lifterWhoTrained(0, 3);
+  adv = restAdvice(stR, dayOf(stR, 4));
+  ok(adv && /already trained today/i.test(adv.title), 'a second session on the same day is always flagged');
+  eq(adv.level, 'bad', 'and hard when both of them are heavy');
+  stR = lifterWhoTrained(0, 1);
+  eq(restAdvice(stR, dayOf(stR, 2)).level, 'warn', 'softer when neither is');
+  ok(restAdvice(lifterWhoTrained(0, 1), dayOf(lifterWhoTrained(0, 1), 3)),
+    'and a volume day followed by a heavy one on the same day still gets a word');
+
+  // A lifter who has never trained cannot be training too often.
+  store.update((s) => {
+    Object.assign(s, store.defaultState());
+    s.program = buildProgram({});
+  });
+  eq(restAdvice(store.getState(), resolveDay(store.getState(), {})), null, 'and a first session is never too soon');
+  eq(trainingRhythm(store.getState()).sessions, 0, 'with nothing to report about rhythm either');
+
+  // Meet week is deliberately tight and must not be nagged about.
+  stR = lifterWhoTrained(1, 3);
+  store.update((s) => {
+    s.program.meetDate = iso(1);
+    enterPeak(s);
+    s.program.cursor.phase = 'meetWeek';
+    s.program.cursor.week = PEAK_WEEKS;
+  });
+  const meetDay = resolveDay(store.getState(), { ...store.getState().program.cursor, day: 4 });
+  eq(restAdvice(store.getState(), meetDay), null, 'the day of the meet is not a spacing lecture');
 }
 
 /* ======================================================================
