@@ -1,18 +1,18 @@
 {
  "v": 1,
- "generatedAt": "2026-09-28T16:19:01.204Z",
+ "generatedAt": "2026-09-29T16:27:30.158Z",
  "athlete": {
   "firstName": null
  },
  "unit": "kg",
  "displayUnit": "kg",
  "totals": {
-  "sessions": 28,
-  "sets": 248,
-  "reps": 1392,
-  "tonnage": 109395,
+  "sessions": 29,
+  "sets": 259,
+  "reps": 1420,
+  "tonnage": 111695,
   "firstDate": "2026-08-05",
-  "lastDate": "2026-09-28"
+  "lastDate": "2026-09-29"
  },
  "lifts": [
   {
@@ -99,6 +99,12 @@
     {
      "date": "2026-09-24",
      "value": 150.6,
+     "deload": false,
+     "soft": false
+    },
+    {
+     "date": "2026-09-29",
+     "value": 154.1,
      "deload": false,
      "soft": false
     }
@@ -232,6 +238,12 @@
      "value": 99,
      "deload": false,
      "soft": true
+    },
+    {
+     "date": "2026-09-29",
+     "value": 98.6,
+     "deload": false,
+     "soft": false
     }
    ]
   },
@@ -321,6 +333,12 @@
      "value": 182.2,
      "deload": false,
      "soft": false
+    },
+    {
+     "date": "2026-09-29",
+     "value": 178.8,
+     "deload": false,
+     "soft": false
     }
    ]
   }
@@ -385,43 +403,42 @@
   }
  ],
  "lastSession": {
-  "date": "2026-09-28",
-  "label": "C3 W2 · Day 1 · Volume",
+  "date": "2026-09-29",
+  "label": "C3 W2 · Day 2 · Technique",
   "cycle": 3,
   "week": 2,
-  "day": 1,
+  "day": 2,
   "phase": "load",
-  "sets": 6,
-  "reps": 52,
-  "tonnage": 4000,
-  "avgRPE": 7.3,
-  "avgTargetRPE": 7.3,
-  "minutes": 34,
+  "sets": 11,
+  "reps": 28,
+  "tonnage": 2300,
+  "avgRPE": 5.5,
+  "avgTargetRPE": 5.5,
+  "minutes": 91,
   "unit": "kg",
   "lifts": [
    {
-    "exercise": "Explosive / Speed Squat",
-    "detail": "90×8@7, 90×8@7",
-    "topKg": 90
+    "exercise": "Low-Bar Back Squat",
+    "detail": "125×2@5, 125×2@5, 125×2@5",
+    "topKg": 125
    },
    {
     "exercise": "Bench Press",
-    "detail": "70×8@7, 70×8@7",
-    "topKg": 70
+    "detail": "80×2@5, 80×2@5, 80×2@5",
+    "topKg": 80
    },
    {
-    "exercise": "Lat Pulldown",
-    "detail": "72×12@8, 72×8@8",
-    "topKg": 72
+    "exercise": "Deadlift",
+    "detail": "145×2@5, 145×2@5, 145×2@5",
+    "topKg": 145
+   },
+   {
+    "exercise": "Dips",
+    "detail": "20×5@8, 20×5@8",
+    "topKg": 20
    }
   ],
-  "prs": [
-   {
-    "exercise": "Lat Pulldown",
-    "gain": 1.862,
-    "e1rm": 115.016
-   }
-  ]
+  "prs": []
  },
  "sessions": [
   {
@@ -815,6 +832,20 @@
    "avgRPE": 7.3,
    "avgTargetRPE": 7.3,
    "minutes": 34
+  },
+  {
+   "date": "2026-09-29",
+   "label": "C3 W2 · Day 2 · Technique",
+   "cycle": 3,
+   "week": 2,
+   "day": 2,
+   "phase": "load",
+   "sets": 11,
+   "reps": 28,
+   "tonnage": 2300,
+   "avgRPE": 5.5,
+   "avgTargetRPE": 5.5,
+   "minutes": 91
   }
  ],
  "bodyweight": [
