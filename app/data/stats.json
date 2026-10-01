@@ -1,6 +1,6 @@
 {
  "v": 1,
- "generatedAt": "2026-09-29T16:27:30.158Z",
+ "generatedAt": "2026-10-01T15:45:54.880Z",
  "athlete": {
   "firstName": null
  },
@@ -18,232 +18,269 @@
   {
    "lift": "squat",
    "label": "Squat",
-   "e1rm": 165.4,
-   "e1rmDate": "2026-09-22",
+   "e1rm": 150.6,
+   "e1rmDate": "2026-09-24",
    "tested": 150,
    "testedDate": "2026-09-13",
-   "change28": 9,
+   "maxSource": "estimated",
+   "change28": -5.8,
    "trend": [
     {
      "date": "2026-08-07",
      "value": 148,
      "deload": false,
-     "soft": false
+     "soft": false,
+     "submax": true
     },
     {
      "date": "2026-08-09",
      "value": 154.1,
      "deload": false,
-     "soft": false
+     "soft": false,
+     "submax": false
     },
     {
      "date": "2026-08-14",
      "value": 142.4,
      "deload": false,
-     "soft": false
+     "soft": false,
+     "submax": true
     },
     {
      "date": "2026-08-16",
      "value": 152.3,
      "deload": false,
-     "soft": false
+     "soft": false,
+     "submax": false
     },
     {
      "date": "2026-08-20",
      "value": 155.3,
      "deload": false,
-     "soft": false
+     "soft": false,
+     "submax": true
     },
     {
      "date": "2026-08-22",
      "value": 156.4,
      "deload": false,
-     "soft": false
+     "soft": false,
+     "submax": false
     },
     {
      "date": "2026-08-31",
      "value": 143.4,
      "deload": true,
-     "soft": false
+     "soft": false,
+     "submax": true
     },
     {
      "date": "2026-09-03",
      "value": 147.1,
      "deload": true,
-     "soft": false
+     "soft": false,
+     "submax": false
     },
     {
      "date": "2026-09-10",
      "value": 150,
      "deload": false,
-     "soft": false
+     "soft": false,
+     "submax": false
     },
     {
      "date": "2026-09-16",
      "value": 144.8,
      "deload": false,
-     "soft": false
+     "soft": false,
+     "submax": true
     },
     {
      "date": "2026-09-17",
      "value": 148,
      "deload": false,
-     "soft": false
+     "soft": false,
+     "submax": false
     },
     {
      "date": "2026-09-22",
      "value": 165.4,
      "deload": false,
-     "soft": false
+     "soft": false,
+     "submax": true
     },
     {
      "date": "2026-09-24",
      "value": 150.6,
      "deload": false,
-     "soft": false
+     "soft": false,
+     "submax": false
     },
     {
      "date": "2026-09-29",
      "value": 154.1,
      "deload": false,
-     "soft": false
+     "soft": false,
+     "submax": true
     }
    ]
   },
   {
    "lift": "bench",
    "label": "Bench press",
-   "e1rm": 101.8,
-   "e1rmDate": "2026-09-22",
+   "e1rm": 100,
+   "e1rmDate": "2026-09-13",
    "tested": 95,
    "testedDate": "2026-09-13",
-   "change28": 3.3,
+   "maxSource": "estimated",
+   "change28": 1.5,
    "trend": [
     {
      "date": "2026-08-05",
      "value": 95.6,
      "deload": false,
-     "soft": true
+     "soft": true,
+     "submax": false
     },
     {
      "date": "2026-08-07",
      "value": 95.4,
      "deload": false,
-     "soft": false
+     "soft": false,
+     "submax": true
     },
     {
      "date": "2026-08-09",
      "value": 95.6,
      "deload": false,
-     "soft": false
+     "soft": false,
+     "submax": false
     },
     {
      "date": "2026-08-13",
      "value": 99,
      "deload": false,
-     "soft": true
+     "soft": true,
+     "submax": false
     },
     {
      "date": "2026-08-14",
      "value": 95.6,
      "deload": false,
-     "soft": false
+     "soft": false,
+     "submax": true
     },
     {
      "date": "2026-08-16",
      "value": 95.6,
      "deload": false,
-     "soft": false
+     "soft": false,
+     "submax": false
     },
     {
      "date": "2026-08-18",
      "value": 94.7,
      "deload": false,
-     "soft": true
+     "soft": true,
+     "submax": false
     },
     {
      "date": "2026-08-20",
      "value": 95.6,
      "deload": false,
-     "soft": false
+     "soft": false,
+     "submax": true
     },
     {
      "date": "2026-08-22",
      "value": 98.5,
      "deload": false,
-     "soft": false
+     "soft": false,
+     "submax": false
     },
     {
      "date": "2026-08-30",
      "value": 99,
      "deload": true,
-     "soft": true
+     "soft": true,
+     "submax": false
     },
     {
      "date": "2026-08-31",
      "value": 95.6,
      "deload": true,
-     "soft": false
+     "soft": false,
+     "submax": true
     },
     {
      "date": "2026-09-03",
      "value": 98.5,
      "deload": true,
-     "soft": false
+     "soft": false,
+     "submax": false
     },
     {
      "date": "2026-09-13",
      "value": 100,
      "deload": false,
-     "soft": false
+     "soft": false,
+     "submax": false
     },
     {
      "date": "2026-09-14",
      "value": 88.2,
      "deload": false,
-     "soft": true
+     "soft": true,
+     "submax": false
     },
     {
      "date": "2026-09-16",
      "value": 98.6,
      "deload": false,
-     "soft": false
+     "soft": false,
+     "submax": true
     },
     {
      "date": "2026-09-17",
      "value": 98.6,
      "deload": false,
-     "soft": false
+     "soft": false,
+     "submax": false
     },
     {
      "date": "2026-09-21",
      "value": 95.6,
      "deload": false,
-     "soft": true
+     "soft": true,
+     "submax": false
     },
     {
      "date": "2026-09-22",
      "value": 101.8,
      "deload": false,
-     "soft": false
+     "soft": false,
+     "submax": true
     },
     {
      "date": "2026-09-24",
      "value": 96.8,
      "deload": false,
-     "soft": false
+     "soft": false,
+     "submax": false
     },
     {
      "date": "2026-09-28",
      "value": 99,
      "deload": false,
-     "soft": true
+     "soft": true,
+     "submax": false
     },
     {
      "date": "2026-09-29",
      "value": 98.6,
      "deload": false,
-     "soft": false
+     "soft": false,
+     "submax": true
     }
    ]
   },
@@ -254,91 +291,106 @@
    "e1rmDate": "2026-09-19",
    "tested": 175.7,
    "testedDate": "2026-09-13",
+   "maxSource": "estimated",
    "change28": 5.4,
    "trend": [
     {
      "date": "2026-08-07",
      "value": 178.1,
      "deload": false,
-     "soft": false
+     "soft": false,
+     "submax": true
     },
     {
      "date": "2026-08-11",
      "value": 175.7,
      "deload": false,
-     "soft": false
+     "soft": false,
+     "submax": false
     },
     {
      "date": "2026-08-14",
      "value": 178.8,
      "deload": false,
-     "soft": false
+     "soft": false,
+     "submax": true
     },
     {
      "date": "2026-08-17",
      "value": 179.2,
      "deload": false,
-     "soft": false
+     "soft": false,
+     "submax": false
     },
     {
      "date": "2026-08-20",
      "value": 179.2,
      "deload": false,
-     "soft": false
+     "soft": false,
+     "submax": true
     },
     {
      "date": "2026-08-26",
      "value": 179.6,
      "deload": false,
-     "soft": false
+     "soft": false,
+     "submax": false
     },
     {
      "date": "2026-08-31",
      "value": 179.2,
      "deload": true,
-     "soft": false
+     "soft": false,
+     "submax": true
     },
     {
      "date": "2026-09-04",
      "value": 172.6,
      "deload": true,
-     "soft": false
+     "soft": false,
+     "submax": false
     },
     {
      "date": "2026-09-08",
      "value": 181,
      "deload": false,
-     "soft": false
+     "soft": false,
+     "submax": false
     },
     {
      "date": "2026-09-16",
      "value": 184.5,
      "deload": false,
-     "soft": false
+     "soft": false,
+     "submax": true
     },
     {
      "date": "2026-09-19",
      "value": 185,
      "deload": false,
-     "soft": false
+     "soft": false,
+     "submax": false
     },
     {
      "date": "2026-09-22",
      "value": 179.2,
      "deload": false,
-     "soft": false
+     "soft": false,
+     "submax": true
     },
     {
      "date": "2026-09-26",
      "value": 182.2,
      "deload": false,
-     "soft": false
+     "soft": false,
+     "submax": false
     },
     {
      "date": "2026-09-29",
      "value": 178.8,
      "deload": false,
-     "soft": false
+     "soft": false,
+     "submax": true
     }
    ]
   }
