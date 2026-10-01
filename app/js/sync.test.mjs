@@ -95,6 +95,22 @@ function cleanSession(id, date, load, units = 'kg') {
   return ses;
 }
 
+/**
+ * A technique-day squat: three triples called RPE 5, as they were logged on the
+ * day this was written for. Prescribed to be easy, and read off the least
+ * accurate RPE call there is.
+ */
+function techSession(id, date, load) {
+  const ses = session(id, date, load);
+  ses.day = 2;
+  ses.entries = [{
+    slotKey: 'd2_squat', exerciseId: SQUAT, targetSets: 3, targetReps: 3, targetRPE: 5, rpeRange: null,
+    plannedLoad: load, pct: null, note: '',
+    sets: [0, 1, 2].map(() => ({ load, reps: 3, rpe: 5, done: true, ts: ses.startedAt })),
+  }];
+  return ses;
+}
+
 function seed(sessions) {
   const base = store.defaultState();
   store.replaceState({
@@ -412,7 +428,9 @@ hr('10. What the public dashboard is allowed to see');
   eq(squat.trend.length, 2, 'with one trend point per session');
   ok(squat.trend.every((p) => typeof p.value === 'number' && 'deload' in p && 'soft' in p),
      'and each point says whether it is trustworthy');
-  eq(squat.tested, 170, 'the tested max comes along for reference');
+  eq(squat.tested, 170, 'the recorded max comes along for reference');
+  eq(squat.maxSource, 'estimate', 'with where it came from — this one is not a tested max, and the page must not say it is');
+  eq(pub.lifts.find((l) => l.lift === 'deadlift').maxSource, null, 'and a lift with no max on file has no source either');
 
   ok(pub.prs.length > 0, 'there is a PR table');
   ok(pub.prs.every((p, i, a) => i === 0 || a[i - 1].e1rm >= p.e1rm), 'sorted strongest first');
@@ -664,6 +682,91 @@ hr('15. Weekly rollup');
   const wire = JSON.stringify(sent.body.weekly);
   ok(!/Slept badly/.test(wire), 'no session notes in the rollup');
   ok(!/"readiness"/.test(wire), 'no readiness data');
+}
+
+/* ======================================================================
+   16. Technique work is plotted, never the headline
+   ----------------------------------------------------------------------
+   The public squat read 165.4 against a tested 150: a 130 kg technique
+   triple called RPE 5, estimated off that call. The app's own Progress tab
+   already left such points out of its stats; the dashboard, the Discord
+   sparkline and the weekly rollup did not.
+   ====================================================================== */
+hr('16. Technique days on the dashboard');
+{
+  // Local dates, relative to now: `change28` is measured back from today.
+  const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const ago = (n) => { const d = new Date(); d.setDate(d.getDate() - n); return iso(d); };
+
+  seed([session('hard_old', ago(40), 140), session('hard_new', ago(10), 142.5), techSession('tech', ago(3), 150)]);
+  sync.enqueueAll();
+  await sync.flush({ force: true });
+
+  const squat = sent.body.public.lifts.find((l) => l.lift === 'squat');
+  const tech = squat.trend.find((p) => p.date === ago(3));
+  ok(!!tech, 'the technique day is still in the trend, so the chart can draw it');
+  eq(tech.submax, true, 'flagged as work written to be easy');
+  ok(squat.trend.every((p) => typeof p.submax === 'boolean'), 'every point carries the flag');
+  eq(squat.trend.filter((p) => p.submax).length, 1, 'and only the technique day has it set');
+
+  const hard = squat.trend.filter((p) => !p.submax && !p.deload && !p.soft);
+  eq(hard.length, 2, 'the two strength days are the hard points');
+  ok(tech.value > Math.max(...hard.map((p) => p.value)),
+     'the RPE-5 call reads a bigger squat than either strength day', `${tech.value}`);
+  ok(squat.e1rm < tech.value, 'but it is not the headline', `${squat.e1rm}`);
+  eq(squat.e1rm, Math.max(...hard.map((p) => p.value)), 'the headline is the best hard estimate');
+  eq(squat.e1rmDate, hard.find((p) => p.value === squat.e1rm).date, 'dated from the day it came from');
+  near(squat.change28, hard[1].value - hard[0].value, 'and the 28-day change runs between strength days only');
+
+  const spark = sent.body.discord.find((d) => d.sessionId === 'tech').sparks.find((x) => x.lift === 'squat');
+  eq(spark.sessions, 2, 'the Discord sparkline under the technique session is drawn from the strength days');
+  eq(spark.current, hard[hard.length - 1].value, 'and says the lift stands where the last of them put it');
+
+  // The weekly rollup's "where each lift stands", for a finished week holding
+  // both kinds of day.
+  const monday = (() => { const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return d; })();
+  const day = (offset) => iso(new Date(monday.getTime() + offset * 864e5));
+  seed([session('wk_hard', day(-6), 140), techSession('wk_tech', day(-3), 150)]);
+  sync.enqueueAll();
+  await sync.flush({ force: true });
+  const pubSquat = sent.body.public.lifts.find((l) => l.lift === 'squat');
+  const weekSquat = sent.body.weekly.maxes.find((m) => m.lift === 'squat');
+  ok(pubSquat.trend.some((p) => p.submax && p.value > weekSquat.value), 'the week holds a technique point above the strength day');
+  eq(weekSquat.value, pubSquat.e1rm, 'and the rollup reports the strength day, the same figure as the dashboard headline');
+
+  // The label under the headline: "Tested max" only for a max that was tested.
+  store.update((s) => { s.maxes.squat = { value: 150, date: ago(5), source: 'tested', reps: 1 }; });
+  sync.enqueueAll();
+  await sync.flush({ force: true });
+  const tested = sent.body.public.lifts.find((l) => l.lift === 'squat');
+  eq(`${tested.tested} ${tested.maxSource}`, '150 tested', 'a max from a test day goes out as tested');
+  store.update((s) => { s.maxes.squat = { value: 150, date: ago(5), source: 'estimated', reps: 1, fromLoad: 150, fromRPE: 10 }; });
+  sync.enqueueAll();
+  await sync.flush({ force: true });
+  eq(sent.body.public.lifts.find((l) => l.lift === 'squat').maxSource, 'estimated',
+     'and one typed into Settings as an estimate goes out as that');
+}
+
+/* ======================================================================
+   17. The offline cache knows about every module
+   ----------------------------------------------------------------------
+   sw.js is cache-first. A module missing from ASSETS is fetched on first
+   use and works — until the lifter is offline in a basement gym, where the
+   import fails and the view that needs it does not open. meet.js was missing
+   for exactly that long.
+   ====================================================================== */
+hr('17. Service worker assets');
+{
+  const { readFileSync, readdirSync } = await import('node:fs');
+  const sw = readFileSync(new URL('../sw.js', import.meta.url), 'utf8');
+  const listed = new Set([...sw.matchAll(/'\.\/(js\/[^']+\.js)'/g)].map((m) => m[1]));
+  const modules = [
+    ...readdirSync(new URL('./', import.meta.url)).filter((f) => f.endsWith('.js')).map((f) => `js/${f}`),
+    ...readdirSync(new URL('./views/', import.meta.url)).filter((f) => f.endsWith('.js')).map((f) => `js/views/${f}`),
+  ];
+  ok(modules.length > 10, 'the app\'s modules are found on disk', `${modules.length}`);
+  for (const m of modules) ok(listed.has(m), `sw.js caches ${m}`, 'add it to ASSETS and bump VERSION');
+  ok(/const VERSION = 'v\d+';/.test(sw), 'and declares a VERSION, which is what makes an update install');
 }
 
 /* ======================================================================

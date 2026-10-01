@@ -25,14 +25,18 @@ const { buildProgram, resolveDay, startSession, completeSession, resolveAssessme
         bestMaxFor, bestEstimateFor, workingMaxDetail, isSubmaximalSlot, gradeSets, maxBasisLabel,
         MISS_MEMORY_DAYS, discardSession, shouldEnterPeak, enterPeak, exitPeak, peakStatus,
         peakWeek, missedAttempts, entryStalled, entryShortfall, daysUntil, resolvePeakPrompt,
-        startPeakNow, loadOptsFor, peakSetsFor, warmupFor, PEAK_WEEKS, PEAK_MIN_DAYS } = await import('./program.js');
+        startPeakNow, loadOptsFor, peakSetsFor, warmupFor, PEAK_WEEKS, PEAK_MIN_DAYS,
+        goalFor, setGoalFor, goalPace, goalTargetFor, driftPerWeek, easyMaxDetail, bestEstimateDetail,
+        maxDraftFor, applyMaxUpdate, markSetMissed, CARD_RPE_SLACK, heavyCheckMax, readsHeavy, cardDropLoad,
+        pctCaption, competitionChoice, RECORD_BINDS_DAYS } = await import('./program.js');
 const { meetProgress, targetLine, attemptAdvice, MEET_ORDER } = await import('./meet.js');
+const { fmtDate } = await import('./ui.js');
 const { pctOf1RM, e1RM, loadFor, plateBreakdown, roundToLoadable, plateLabel, minIncrement, convertLoad,
-        loadBand, loadStep, gridFloor, isLadder, rpeFor, RPE_TOLERANCE } = await import('./rpe.js');
-const { assessDeload, INTERMEDIATE_PL, INTERMEDIATE_PL_3DAY } = await import('./templates.js');
+        loadBand, loadStep, gridFloor, isLadder, rpeFor, RPE_TOLERANCE, repsLeftWords } = await import('./rpe.js');
+const { assessDeload, INTERMEDIATE_PL, INTERMEDIATE_PL_3DAY, RPE_SCALE } = await import('./templates.js');
 const { strengthTrend, trendSummary, sessionBriefing, trainingAgeReport, TRAINING_AGE_BANDS, milestones,
         testReadiness, planTestBlock, testPromotion, activeInsights, restAdvice, trainingRhythm,
-        rpeCalibration, TEST_PROMPT_QUIET_DAYS } = await import('./coach.js');
+        rpeCalibration, TEST_PROMPT_QUIET_DAYS, goalNotes } = await import('./coach.js');
 
 let pass = 0, fail = 0;
 const problems = [];
@@ -75,6 +79,37 @@ near(pctOf1RM(2, 8), pctOf1RM(4, 10), '2 reps @ RPE 8 is the same load as a 4RM'
 // round trip
 const rt = loadFor(200, 5, 8);
 near(e1RM(rt, 5, 8), 200, 'loadFor and e1RM round-trip');
+
+/* ---- 1b. reps left, in words: one phrasing for the whole app -------- */
+hr('1b. Reps left, in words');
+{
+  const long = { 10: 'no reps left', 9.5: 'no reps left, a little more load', 9: '1 rep left', 8.5: '1-2 reps left',
+                 8: '2 reps left', 7.5: '2-3 reps left', 7: '3 reps left', 6.5: '3-4 reps left', 6: '4 reps left',
+                 5.5: '4-5 reps left', 5: '5 reps left', 4.5: '5-6 reps left', 4: '6+ reps left' };
+  for (const [rpe, want] of Object.entries(long)) eq(repsLeftWords(Number(rpe)), want, `RPE ${rpe} is "${want}"`);
+  const short = { 10: '0 left', 9.5: '0, more load', 9: '1 left', 8.5: '1-2 left', 8: '2 left', 7.5: '2-3 left',
+                  7: '3 left', 6: '4 left', 5: '5 left', 4: '6+ left' };
+  for (const [rpe, want] of Object.entries(short)) {
+    eq(repsLeftWords(Number(rpe), { short: true }), want, `and on the picker's button, "${want}"`);
+  }
+  eq(repsLeftWords(3), '6+ reps left', 'below the floor the table cannot count, so it is the floor\'s "6+"');
+  eq(repsLeftWords(9.7), 'no reps left, a little more load', 'an off-grid call is snapped the way every reading is');
+  eq(repsLeftWords(10.5), 'no reps left', 'and clamped at the top');
+  eq(repsLeftWords('7'), '3 reps left', 'a typed number reads the same as a number');
+  eq(repsLeftWords(null), null, 'nothing for no RPE');
+  eq(repsLeftWords('x'), null, 'or for something that is not a number');
+  for (let r = 4; r <= 10; r += 0.5) {
+    const w = repsLeftWords(r);
+    if (r < 9.5 && r > 4) {
+      const [lo, hi] = w.split(' ')[0].split('-').map(Number);
+      eq(lo, Math.floor(10 - r), `RPE ${r}: the words are 10 − RPE (RIR), rounded down at the low end`);
+      eq(hi ?? lo, Math.ceil(10 - r), 'and up at the high end');
+    }
+  }
+  ok(RPE_SCALE.every((x) => x.left === repsLeftWords(x.rpe, { short: true })),
+     'the RPE picker\'s buttons are this function, not a copy of it');
+  eq(new Set(RPE_SCALE.map((x) => x.left)).size, RPE_SCALE.length, 'and no two buttons say the same thing');
+}
 
 /* ======================================================================
    2. Plate math
@@ -1196,7 +1231,7 @@ hr('15c. Test day');
 
   const a = attemptsFor(st0, 'deadlift');
   ok(a.opener < a.second && a.second < a.third, 'attempts climb', `${a.opener}/${a.second}/${a.third}`);
-  ok(a.opener < a.max, 'the opener is below the estimated max — it is insurance, not a test');
+  ok(a.opener < a.max, 'the opener is below the max it is built from — it is insurance, not a test');
   ok(a.third > a.max, 'the third attempt is a weight the lifter has not done');
   for (const v of [a.opener, a.second, a.third, ...a.ramp.map((r) => r.load)]) {
     eq(roundToLoadable(v, st0.profile), v, 'every attempt and ramp load is loadable');
@@ -2793,7 +2828,906 @@ hr('26. Loads that match the RPE on the card');
      'and the same bar rated 7 then 5 is reported as one');
   const note = activeInsights(store.getState()).find((x) => x.kind === 'rpeCalibration');
   ok(note, 'which reaches the home screen');
-  ok(/RPE 5 means four to six reps left/.test(note.text), 'with the definition it is asking the lifter to apply');
+  ok(/RPE 5 means five more good reps/.test(note.text), 'with the definition it is asking the lifter to apply');
+  ok(/four to six shy of failure \(p\. 242\)/.test(note.text), 'and the book\'s technique band beside it');
+  ok(/easy days and meet attempts are built from the max you recorded/.test(note.text),
+     'promising only what is true: easy days and attempts come off the recorded max, not every load');
+
+  /* ---- against the number the lifter recorded, whatever it is filed as - */
+  // The Update maxes sheet filed everything it saved as `estimated`, a tested
+  // 150 squat included, and a max typed at onboarding may carry no date. The
+  // finding used to need `source: 'tested'`, so it never reached the lifter it
+  // was written for — and it rated against the working max while printing the
+  // tested one.
+  const calFor = (rec) => {
+    store.update((s) => { s.maxes.deadlift = rec; });
+    return rpeCalibration(store.getState()).find((x) => x.lift === 'deadlift');
+  };
+  for (const [rec, what] of [
+    [{ value: 170, date: iso(-10), source: 'estimated' }, 'an estimated max'],
+    [{ value: 170, date: iso(-10), source: 'entered' }, 'an entered one'],
+  ]) {
+    const x = calFor(rec);
+    ok(x, `the calibration reads against ${what}`);
+    eq(x?.max, 170, `${what}: and reads against that number`);
+  }
+  eq(calFor({ value: null, date: null, source: null }), undefined, 'with no recorded max there is nothing to read against');
+  // A record is evidence about a call only near the day it was recorded
+  // (RECORD_BINDS_DAYS). An undated one has no "near", and one recorded long
+  // before the sets would read an honest lifter who has got stronger since as
+  // calling everything light — so neither rates a single set.
+  eq(calFor({ value: 170 })?.sets ?? 0, 0, 'an undated record rates no sets');
+  eq(calFor({ value: 170, date: iso(-(RECORD_BINDS_DAYS + 60)), source: 'tested' })?.sets ?? 0, 0,
+     'nor does one recorded long before the sets it would be judging');
+
+  // One number, computed and printed. The squat and bench are cleared so the
+  // note is about the deadlift alone.
+  store.update((s) => { s.maxes.squat = { value: null }; s.maxes.bench = { value: null }; });
+  const at170 = calFor({ value: 170, date: iso(-10), source: 'estimated' });
+  const at165 = calFor({ value: 165, date: iso(-10), source: 'estimated' });
+  eq(at165.max, 165, 'the max it reports is the one on file');
+  eq(at165.worst.was, rpeFor(165, at165.worst.load, at165.worst.reps), 'and the worst call is rated against exactly that');
+  ok(at165.gap > at170.gap, 'a lower recorded max reads the same calls as lighter still', `${at165.gap} vs ${at170.gap}`);
+  ok(at165.contradictions.some((x) => x.load === 150 && x.first === 7 && x.then === 5),
+     'while the same-bar check, which needs no max at all, still finds the 7-then-5');
+  const note165 = activeInsights(store.getState()).find((x) => x.kind === 'rpeCalibration');
+  ok(note165.text.includes(`RPE ${at165.worst.was} against the deadlift max you recorded, 165 kg`),
+     'the note names the 165 the arithmetic used', note165.text);
+  ok(!/tested max/.test(note165.text), 'and does not call an estimate a tested max');
+}
+
+/* ======================================================================
+   27. A number on one lift, and what it asks of today
+   ----------------------------------------------------------------------
+   "What should I be hitting today if I want 180 in October." The arithmetic
+   exists in the app already — it just never met the card being logged.
+   ====================================================================== */
+hr('27. Training against a stated goal');
+{
+  const iso = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return store.todayISO(d); };
+
+  /** Daniel's own numbers: tested 150/100/170, a meet `out` days away. */
+  const lifter = (out, { goals = {} } = {}) => {
+    store.update((s) => {
+      Object.assign(s, store.defaultState());
+      s.settings.confirmPeak = false;
+      s.maxes = {
+        squat:    { value: 150, date: iso(-14), source: 'tested' },
+        bench:    { value: 100, date: iso(-14), source: 'tested' },
+        deadlift: { value: 170, date: iso(-14), source: 'tested' },
+      };
+      s.program = buildProgram({ meetDate: out == null ? null : iso(out) });
+      for (const k of Object.keys(s.program.slots)) s.program.slots[k].week1Load = 60;
+      s.program.slots.d3_squat.week1Load = 125;
+      s.program.slots.d3_bench.week1Load = 82.5;
+      s.program.slots.d4_dead.week1Load = 140;
+      for (const [lift, v] of Object.entries(goals)) setGoalFor(s, lift, v);
+    });
+    return store.getState();
+  };
+
+  /* ---- nothing to say without both halves of the question ------------ */
+  eq(goalPace(lifter(21), 'deadlift'), null, 'a meet date with no goal paces nothing');
+  eq(goalPace(lifter(null, { goals: { deadlift: 180 } }), 'deadlift'), null,
+     'and a goal with no date is a wish, not a schedule');
+  eq(goalFor(lifter(21, { goals: { deadlift: 0 } }), 'deadlift'), null, 'zero clears a goal');
+
+  /* ---- a goal is a third attempt ------------------------------------- */
+  // The invariant that keeps this from being a second opinion: a lifter whose
+  // max — the one the attempt card is built from, the lower of the working max
+  // and the one they recorded — arrives at `maxNeeded` finds the goal printed
+  // on their attempt card, to the kilo. If these two ever disagreed the app
+  // would be arguing with itself at the worst possible moment.
+  let st = lifter(21, { goals: { deadlift: 180 } });
+  let pace = goalPace(st, 'deadlift');
+  eq(pace.maxNeeded, 177.5, '180 as a third attempt asks for a 177.5 max');
+  store.update((s) => { s.maxes.deadlift = { value: pace.maxNeeded, date: iso(0), source: 'tested' }; });
+  eq(attemptsFor(store.getState(), 'deadlift').third, 180,
+     'and a lifter who gets there is handed exactly 180 as their third');
+  ok(goalPace(store.getState(), 'deadlift').reached, 'which the pace calls reached');
+
+  /* ---- the schedule walks back from meet day ------------------------- */
+  st = lifter(21, { goals: { deadlift: 180 } });
+  pace = goalPace(st, 'deadlift');
+  const drift = driftPerWeek(st, 'deadlift');
+  ok(drift > 0, 'the program has an opinion about how fast a deadlift moves', `${drift}/wk`);
+  near(pace.needNow, pace.maxNeeded - drift * 3, 'three weeks out, the line sits three increments back');
+  near(pace.perWeek, drift, 'and the pace reports the rate it used');
+  ok(goalPace(lifter(7, { goals: { deadlift: 180 } }), 'deadlift').needNow > pace.needNow,
+     'the line rises as the meet gets closer');
+  eq(goalPace(lifter(0, { goals: { deadlift: 180 } }), 'deadlift').needNow, pace.maxNeeded,
+     'and on the day itself it is the whole number');
+
+  /* ---- what it asks of the lifter, honestly -------------------------- */
+  eq(pace.have, 170, 'measured against the max the app trusts, not the best estimate on file');
+  eq(pace.toGo, 7.5, '7.5 to find');
+  near(pace.requiredPerWeek, 2.5, 'which is 2.5 a week over three weeks');
+  near(pace.perWeekShortfall, 2.5 - pace.perWeek, 'which is more than the block claims to add');
+  eq(pace.onTrack, false, 'so the lifter is behind the line this week needs');
+  eq(pace.outsized, false, 'but only by the ordinary amount a goal is meant to be out in front by');
+
+  /* ---- and with the numbers a real Settings sheet leaves behind ------- */
+  // The lifter above has tested maxes, which cap the working max, so the two
+  // maxes never come apart. The real log this feature was built for does not
+  // look like that: every lift saved from Settings as `estimated` — a guess,
+  // not a ceiling — and a strength-day five whose RPE call reads a 185
+  // deadlift off a recorded 175.7. Section 28 has the whole of that log; this
+  // is the part of it the goal reads.
+  const estimatedLifter = (out, { goals = {}, deadlift = 175.7 } = {}) => {
+    lifter(out, { goals });
+    store.update((s) => {
+      s.maxes = {
+        squat:    { value: 150,      date: iso(-16), source: 'estimated' },
+        bench:    { value: 95,       date: iso(-16), source: 'estimated' },
+        deadlift: { value: deadlift, date: iso(-16), source: 'estimated' },
+      };
+      const five = { load: 150, reps: 5, rpe: 8, done: true, ts: '2026-01-01T00:00:00Z' };
+      s.sessions = [{
+        id: 'five', date: iso(-10), status: 'done', units: 'kg', phase: 'load', cycle: 1, week: 1, day: 4,
+        entries: [{ slotKey: 'd4_dead', exerciseId: 'deadlift', targetReps: 5, targetRPE: 8,
+                    sets: [five, { ...five }, { ...five }] }],
+      }];
+    });
+    return store.getState();
+  };
+  st = estimatedLifter(21, { goals: { deadlift: 180 } });
+  ok(workingMaxDetail(st, 'deadlift').value > 180, 'the RPE call on its own reads a deadlift past the goal',
+     `${workingMaxDetail(st, 'deadlift').value}`);
+  pace = goalPace(st, 'deadlift');
+  eq(pace.have, 175.7, 'but the goal is measured against the 175.7 the lifter recorded, not the RPE call');
+  eq(pace.reached, false, 'so 180 is not "already in the deadlift"');
+  eq(attemptsFor(st, 'deadlift').third, 177.5,
+     'which is what the attempt card says too: its third is 177.5, one step past the recorded max');
+  st = estimatedLifter(21, { goals: { deadlift: 180 }, deadlift: 177.5 });
+  eq(attemptsFor(st, 'deadlift').third, 180, 'recorded at exactly maxNeeded, the card\'s third is the goal');
+  ok(goalPace(st, 'deadlift').reached, 'and the pace calls it reached — the invariant holds on estimated maxes');
+
+  // "Am I on the line" and "does the goal fit in the weeks left" are the same
+  // inequality, so the app must not report them as two findings. This pins it.
+  for (const goal of [150, 165, 175, 180, 200, 260]) {
+    const q = goalPace(lifter(21, { goals: { deadlift: goal } }), 'deadlift');
+    eq(q.onTrack, q.requiredPerWeek <= q.perWeek + 1e-9,
+       `a ${goal} goal: being on the line and the goal fitting are one fact`);
+  }
+  ok(goalPace(lifter(21, { goals: { deadlift: 260 } }), 'deadlift').outsized,
+     'a goal needing more than twice the block\'s rate is told apart from one that is merely ahead');
+  eq(goalPace(lifter(21, { goals: { deadlift: 150 } }), 'deadlift').outsized, false,
+     'and a goal already in the bank is not flagged at all');
+
+  /* ---- the target load is a weight you can actually load -------------- */
+  // The whole feature is "you should be hitting X". An X that cannot be built
+  // out of the plates in the room is not a target.
+  st = lifter(21, { goals: { deadlift: 180, squat: 165 } });
+  store.update((s) => { enterPeak(s); });
+  st = store.getState();
+  const d4 = resolveDay(st, { week: 1, day: 4, phase: 'load' });
+  const dead = d4.slots.find((x) => x.slotKey === 'd4_dead');
+  const target = goalTargetFor(st, dead);
+  ok(target, 'the strength-day deadlift gets a target');
+  eq(target.reps, 3, 'priced at the reps actually on the card — peak week 1 is triples');
+  eq(target.rpe, 8, 'and at the RPE actually on the card');
+  eq(target.load, roundToLoadable(target.load, loadOptsFor(st, dead.exerciseId)),
+     'and the number it prints sits on the bar');
+  near(target.load, loadFor(target.pace.needNow, 3, 8), 'it is the RPE table, read at the line', 1.5);
+
+  // A gym whose deadlift only stops every 10 kg gets a target on *that* grid.
+  store.update((s) => { s.profile.loading[dead.exerciseId] = { mode: 'fixed', start: 0, step: 10 }; });
+  const coarse = goalTargetFor(store.getState(),
+    resolveDay(store.getState(), { week: 1, day: 4, phase: 'load' }).slots.find((x) => x.slotKey === 'd4_dead'));
+  eq(coarse.load % 10, 0, 'a coarse grid moves the target onto it rather than printing a weight nobody can load');
+  store.update((s) => { s.profile.loading = {}; });
+
+  /* ---- and it reads that weight back honestly ------------------------ */
+  st = store.getState();
+  const t2 = goalTargetFor(st, resolveDay(st, { week: 1, day: 4, phase: 'load' }).slots.find((x) => x.slotKey === 'd4_dead'));
+  eq(t2.impliedRPE, rpeFor(t2.pace.have, t2.load, t2.reps),
+     'the target is rated against the max the lifter actually has');
+  ok(t2.impliedRPE >= t2.rpe, 'a lifter behind the line is being shown a harder set than the card asks for');
+
+  // The two axes come apart here, and that is the point. 170 against a 172.5
+  // line is 1.4% — smaller than the plate grid and smaller than one step of
+  // the RPE table — so today's number is genuinely reachable while the 180
+  // behind it still is not.
+  eq(t2.verdict, 'close', 'today\'s target sits inside the set already on the card');
+  eq(t2.pace.onTrack, false, 'while the max behind it is still short of the line');
+
+  /* ---- where the note is allowed to appear --------------------------- */
+  const keys = (r) => goalNotes(r, store.getState()).map((n) => n.slotKey).sort();
+
+  eq(JSON.stringify(keys(resolveDay(store.getState(), { week: 1, day: 4, phase: 'load' }))),
+     JSON.stringify(['d4_dead']), 'the strength-day deadlift, on a loading week');
+  eq(JSON.stringify(keys(resolveDay(store.getState(), { week: 1, day: 3, phase: 'load' }))),
+     JSON.stringify(['d3_squat']), 'the strength-day squat — and not the bench, which has no goal set');
+
+  // Technique work is RPE 5 skill practice on the competition lifts. It is the
+  // single worst place in the app to print "you should be hitting more".
+  const d2 = resolveDay(store.getState(), { week: 1, day: 2, phase: 'load' });
+  ok(d2.slots.some((x) => x.slotKey === 'd2_dead'), 'the technique day does train the deadlift');
+  eq(keys(d2).length, 0, 'but a technique single is never given a goal line');
+
+  // Neither is the volume day's squat variation: it is not the contested lift.
+  eq(keys(resolveDay(store.getState(), { week: 1, day: 1, phase: 'load' })).length, 0,
+     'nor is the volume day, whose sets the taper has already cut');
+
+  /* ---- week 3 keeps the mains, and only the mains -------------------- */
+  eq(JSON.stringify(keys(resolveDay(store.getState(), { week: 3, day: 3, phase: 'load' }))),
+     JSON.stringify(['d3_squat']), 'week 3 still prices the mains it still loads');
+  // Week 3's last day is the opener rehearsal, and an opener is the one weight
+  // in the block a lifter must not talk themselves into.
+  eq(resolveDay(store.getState(), { week: 3, day: 4, phase: 'load' }).peakKind, 'openers',
+     'week 3 day 4 is the opener rehearsal on this template');
+  eq(keys(resolveDay(store.getState(), { week: 3, day: 4, phase: 'load' })).length, 0,
+     'which gets no goal line at all');
+  const w3d1 = resolveDay(store.getState(), { week: 3, day: 1, phase: 'load' });
+  ok(w3d1.slots.every((x) => x.slotDeload || !x.slot.lift),
+     'while week 3 deloads the rest of the week, and the slots say so');
+  eq(keys(w3d1).length, 0, 'which silences the line there');
+
+  /* ---- and never on the days the taper exists for --------------------- */
+  const meetWeek = (day) => resolveDay(store.getState(), { week: 4, day, phase: 'meetWeek' });
+  eq(keys(meetWeek(1)).length, 0, 'meet week says nothing on the taper days');
+  eq(keys(meetWeek(3)).length, 0, 'nothing on the primer');
+  eq(keys(meetWeek(4)).length, 0, 'and nothing on meet day itself — the numbers are on the board by then');
+
+  /* ---- nothing outside the block at all ------------------------------ */
+  const ordinary = lifter(60, { goals: { deadlift: 180 } });
+  eq(goalNotes(resolveDay(ordinary, { week: 1, day: 4, phase: 'load' }), ordinary).length, 0,
+     'a lifter two months out is training, not peaking, and is left alone');
+
+  /* ---- a goal never moves the prescription ---------------------------- */
+  // The load on the card is chosen by autoregulation off the lifter's own
+  // anchor. This feature prices that load against a goal; it does not get a
+  // vote on it, or the goal would quietly become the program.
+  const noGoal = lifter(21);
+  store.update((s) => { enterPeak(s); });
+  const before = resolveDay(store.getState(), { week: 1, day: 4, phase: 'load' })
+    .slots.find((x) => x.slotKey === 'd4_dead');
+  store.update((s) => { setGoalFor(s, 'deadlift', 250); });
+  const after = resolveDay(store.getState(), { week: 1, day: 4, phase: 'load' })
+    .slots.find((x) => x.slotKey === 'd4_dead');
+  eq(after.plannedLoad, before.plannedLoad, 'an outrageous goal leaves the prescribed load exactly where it was');
+  eq(after.targetRPE, before.targetRPE, 'and the RPE it is written at');
+  const wild = goalNotes(resolveDay(store.getState(), { week: 1, day: 4, phase: 'load' }), store.getState())[0];
+  eq(wild.pace.outsized, true, 'the note simply reports that it will not happen on training alone');
+  eq(wild.tone, 'warn', 'in a tone that says so');
+  ok(/The card's third is .*is not this meet's number unless the second moves well/.test(wild.text),
+     'and leaves it where an unlikely number belongs — beside the third the card actually has', wild.text);
+  ok(/needs \d+(\.\d)? kg a week/.test(wild.text) && !/\d\.\d{2} kg a week/.test(wild.text),
+     'with the rate it would take stated to a tenth — a measurement, not a load to the hundredth', wild.text);
+  ok(wild.title.startsWith(`${wild.load}`),
+     'while still leading with the number the lifter came for, not the bad news');
+
+  /* ---- ahead of the line reads differently ---------------------------- */
+  store.update((s) => { setGoalFor(s, 'deadlift', 150); });
+  const easy = goalNotes(resolveDay(store.getState(), { week: 1, day: 4, phase: 'load' }), store.getState())[0];
+  ok(easy.pace.reached, 'a goal under the lifter\'s current max is already theirs');
+  eq(easy.tone, 'good', 'and is not dressed up as work still to do');
+
+  /* ---- and on the week the lifter actually trains --------------------- */
+  // The three-day template names its days differently but keeps the same slot
+  // keys, so the peak's rep-range override — and therefore this note — has to
+  // land on the same three lifts. A goal line that only worked on the four-day
+  // would be invisible to half the app's lifters.
+  store.update((s) => {
+    Object.assign(s, store.defaultState());
+    s.settings.confirmPeak = false;
+    s.maxes = { squat: { value: 150 }, bench: { value: 100 }, deadlift: { value: 170 } };
+    s.program = buildProgram({ templateId: 'intermediate-pl-3day', meetDate: iso(20) });
+    for (const k of Object.keys(s.program.slots)) s.program.slots[k].week1Load = 60;
+    s.program.slots.d4_dead.week1Load = 140;
+    setGoalFor(s, 'deadlift', 180);
+  });
+  store.update((s) => { enterPeak(s); });
+  const threeDay = templateOf(store.getState().program).days
+    .map((d) => goalNotes(resolveDay(store.getState(), { week: 1, day: d.n, phase: 'load' }), store.getState()))
+    .flat();
+  eq(threeDay.length, 1, 'the three-day week carries exactly one deadlift goal line');
+  eq(threeDay[0].slotKey, 'd4_dead', 'on the same strength-day main the four-day uses');
+
+  /* ---- the goal travels with a unit switch ---------------------------- */
+  store.update((s) => { setGoalFor(s, 'deadlift', 180); s.program.goalTotal = 400; });
+  store.update((s) => { convertUnits(s, 'lb'); });
+  const inLb = goalFor(store.getState(), 'deadlift');
+  near(inLb, 395, 'a 180 kg goal becomes 395 lb rather than staying 180', 5);
+  eq(inLb % 5, 0, 'on the platform\'s own increment, because a goal is a weight you declare');
+  ok(store.getState().program.goalTotal > 800, 'and the total converts with it');
+}
+
+/* ======================================================================
+   28. Easy days from the max you recorded
+   ----------------------------------------------------------------------
+   The fixture this suite was missing: Daniel's actual log, the night before
+   peak week 2's technique day, with the maxes his Settings sheet actually
+   left on file. Sessions from 17 August on are the set lists published in
+   the app's own stats snapshots; the first fortnight is reconstructed from
+   the published trend. The clock is frozen at 29 September for the section,
+   because a miss on 8 September is three weeks old on the 29th and the
+   answers here are about that day.
+
+   On it the app prescribed a technique double "at RPE 5" at 127.5, shown as
+   "Aim for 125 – 130" — RPE 7 against the 150 he had squatted — and a meet
+   card opening at 170, his best-ever pull. Easy work and attempts now come
+   from the lower of the working max and the recorded one (`easyMaxDetail`).
+   ====================================================================== */
+hr('28. Easy days from the max you recorded');
+{
+  const RealDate = globalThis.Date;
+  const FROZEN = new RealDate('2026-09-29T09:00:00').getTime();
+  globalThis.Date = class extends RealDate {
+    constructor(...a) { if (a.length) super(...a); else super(FROZEN); }
+    static now() { return FROZEN; }
+  };
+  try {
+    const X = (spec) => spec.split(',').map((t) => {
+      const [, load, reps, rpe] = t.trim().match(/^([\d.]+)x(\d+)@([\d.]+)$/);
+      return { load: +load, reps: +reps, rpe: +rpe, done: true, ts: '2026-01-01T00:00:00Z' };
+    });
+    const SQ = 'back-squat-low-bar', BP = 'bench-press', DL = 'deadlift';
+    let n = 0;
+    const day = (date, cycle, week, d, phase, entries) => ({
+      id: `dan${++n}`, date, status: 'done', units: 'kg', phase, cycle, week, day: d,
+      entries: entries.map(([slotKey, exerciseId, targetReps, targetRPE, sets]) =>
+        ({ slotKey, exerciseId, targetReps, targetRPE, sets: typeof sets === 'string' ? X(sets) : sets })),
+    });
+
+    /** Everything he logged up to the peak, and the peak so far. */
+    const log = () => {
+      n = 0;
+      const before = [
+        // reconstructed from the published trend
+        day('2026-08-05', 1, 1, 1, 'load', [['d1_bench', BP, 9, 7, '70x9@7, 70x9@7, 70x9@7']]),
+        day('2026-08-07', 1, 1, 2, 'load', [['d2_squat', SQ, 3, 5, '116.3x3@5'], ['d2_bench', BP, 3, 5, '75x3@5'], ['d2_dead', DL, 3, 5, '140x3@5']]),
+        day('2026-08-09', 1, 1, 3, 'load', [['d3_squat', SQ, 5, 8, '125x5@8'], ['d3_bench', BP, 5, 8, '77.5x5@8']]),
+        day('2026-08-11', 1, 1, 4, 'load', [['d4_dead', DL, 5, 8, '142.5x5@8']]),
+        day('2026-08-13', 1, 2, 1, 'load', [['d1_bench', BP, 8, 7, '70x8@7']]),
+        day('2026-08-14', 1, 2, 2, 'load', [['d2_squat', SQ, 2, 5, '115x2@5'], ['d2_bench', BP, 2, 5, '77.5x2@5'], ['d2_dead', DL, 2, 5, '145x2@5']]),
+        day('2026-08-16', 1, 2, 3, 'load', [['d3_squat', SQ, 4, 8, '130x4@8'], ['d3_bench', BP, 4, 8, '80x4@8']]),
+        // as published
+        day('2026-08-17', 1, 2, 4, 'load', [['d4_dead', DL, 4, 8, '150x4@8, 150x4@8, 150x4@8']]),
+        day('2026-08-18', 1, 3, 1, 'load', [['d1_bench', BP, 7, 7, '70x7@7, 70x7@7, 70x7@7']]),
+        day('2026-08-20', 1, 3, 2, 'load', [['d2_squat', SQ, 1, 5, '130x1@5, 130x1@5, 130x1@5'], ['d2_bench', BP, 1, 5, '80x1@5, 80x1@5, 80x1@5'], ['d2_dead', DL, 1, 5, '150x1@5, 150x1@5, 150x1@5']]),
+        day('2026-08-22', 1, 3, 3, 'load', [['d3_squat', SQ, 3, 8, '135x3@8, 135x2@9.5, 135x3@8.5'], ['d3_bench', BP, 3, 8, '85x3@8, 85x3@9, 85x3@8.5']]),
+        day('2026-08-26', 1, 3, 4, 'load', [['d4_dead', DL, 3, 8, '155x3@8, 155x3@8.5, 155x3@8']]),
+        day('2026-08-31', 1, 4, 2, 'deload', [['d2_squat', SQ, 1, 5, '120x1@5, 120x1@5'], ['d2_dead', DL, 1, 5, '150x1@5, 150x1@5']]),
+        day('2026-09-03', 1, 4, 3, 'deload', [['d3_squat', SQ, 3, 8, '125x3@7.5, 125x3@7.5']]),
+        day('2026-09-04', 1, 4, 4, 'deload', [['d4_dead', DL, 3, 6, '140x3@6, 140x3@6']]),
+        // The 180 went up in the log as a completed single at RPE 10. It was
+        // missed; the "I missed it" button arrived five days later.
+        day('2026-09-08', 2, 1, 0, 'test', [['test_deadlift', DL, 1, null, '160x1@7, 170x1@8.5, 180x1@10']]),
+        day('2026-09-10', 2, 1, 0, 'test', [['test_squat', SQ, 1, null, '130x1@7, 140x1@8.5, 150x1@10']]),
+        day('2026-09-13', 2, 1, 0, 'test', [['test_bench', BP, 1, null, '92.5x1@9, 100x1@10']]),
+        day('2026-09-16', 2, 1, 2, 'load', [['d2_squat', SQ, 3, 5, '125x3@8, 110x3@5, 110x3@5'], ['d2_bench', BP, 3, 5, '80x3@6, 80x3@7, 75x3@6'], ['d2_dead', DL, 3, 5, '145x3@5, 145x3@5, 145x3@5']]),
+        day('2026-09-17', 2, 1, 3, 'load', [['d3_squat', SQ, 5, 8, '120x5@8, 120x5@8, 120x5@8'], ['d3_bench', BP, 5, 8, '80x5@8, 80x5@8, 80x5@8']]),
+        day('2026-09-19', 2, 1, 4, 'load', [['d4_dead', DL, 5, 8, '150x5@8, 150x5@8, 150x5@8']]),
+      ];
+      const peak = [
+        day('2026-09-22', 3, 1, 2, 'load', [['d2_squat', SQ, 3, 5, '130x3@5, 130x3@7.5, 120x3@5'], ['d2_bench', BP, 3, 5, '80x3@5, 80x3@5, 80x3@5'], ['d2_dead', DL, 3, 5, '140x3@5, 150x3@7, 150x3@5']]),
+        day('2026-09-24', 3, 1, 3, 'load', [['d3_squat', SQ, 3, 8, '130x3@8, 130x3@8, 130x3@9'], ['d3_bench', BP, 3, 8, '80x3@7.5, 80x3@7.5, 85x3@8.5']]),
+        day('2026-09-26', 3, 1, 4, 'load', [['d4_dead', DL, 3, 8, '160x3@8.5, 160x3@8.5, 160x3@9']]),
+        day('2026-09-28', 3, 2, 1, 'load', [['d1_bench', BP, 8, 7, '70x8@7, 70x8@7']]),
+      ];
+      return { before, peak };
+    };
+
+    // What Settings › Update maxes left on file after he saved it on 10 and 13
+    // September: all three rewritten as `estimated` and dated the 13th, the
+    // deadlift lowered 181 → 175.7 and the bench 100 → 95 on purpose.
+    const RECORDED = {
+      squat:    { value: 150,   date: '2026-09-13', source: 'estimated', reps: 1, fromLoad: 150, fromRPE: 10 },
+      bench:    { value: 95,    date: '2026-09-13', source: 'estimated', reps: 1, fromLoad: 95,  fromRPE: 10 },
+      deadlift: { value: 175.7, date: '2026-09-13', source: 'estimated', reps: 1, fromLoad: 165, fromRPE: 8.5 },
+    };
+    const with_ = (lift, rec) => ({ ...JSON.parse(JSON.stringify(RECORDED)), [lift]: rec });
+
+    const daniel = ({ maxes = RECORDED, goals = {} } = {}) => {
+      const { before, peak } = log();
+      store.update((s) => {
+        Object.assign(s, store.defaultState());
+        s.onboarded = true;
+        s.settings.confirmPeak = false;
+        s.profile = { ...s.profile, units: 'kg', barWeight: 20, plates: [25, 20, 15, 10, 5, 2.5, 1.25], microplates: true };
+        s.maxes = JSON.parse(JSON.stringify(maxes));
+        s.program = buildProgram({ templateId: INTERMEDIATE_PL.id, startDate: '2026-08-05', meetDate: '2026-10-16',
+                                   choices: { d2_squat: SQ, d3_squat: SQ } });
+        s.sessions = before;
+        s.program.cursor = { cycle: 2, week: 1, day: 4, phase: 'load' };
+        enterPeak(s, { today: '2026-09-21' });
+        s.sessions.push(...peak);
+        // The anchors peak week 1 actually ran at.
+        s.program.slots.d3_squat.week1Load = 130;
+        s.program.slots.d3_bench.week1Load = 80;
+        s.program.slots.d4_dead.week1Load = 160;
+        s.program.cursor = { ...s.program.cursor, cycle: 3, week: 2, day: 2, phase: 'load' };
+        for (const [lift, v] of Object.entries(goals)) setGoalFor(s, lift, v);
+      });
+      return store.getState();
+    };
+    const at = (st, week, d, phase = 'load') => resolveDay(st, { cycle: 3, week, day: d, phase });
+    const slotAt = (st, week, d, key, phase) => at(st, week, d, phase).slots.find((x) => x.slotKey === key);
+    const onGrid = (st, x, v) => v === roundToLoadable(v, loadOptsFor(st, x.exerciseId));
+
+    let st = daniel();
+    eq(store.todayISO(), '2026-09-29', 'the section runs on the 29th');
+    eq(at(st, 2, 2).label, 'Peak week 2 · Day 2 · Technique', 'and tomorrow is peak week 2\'s technique day');
+
+    /* ---- tomorrow's squat ------------------------------------------------ */
+    const sq = slotAt(st, 2, 2, 'd2_squat');
+    eq(`${sq.sets}x${sq.reps}@${sq.targetRPE}`, '3x2@5', 'three doubles at RPE 5');
+    eq(sq.loadSource, 'submax', 'priced off a max, as technique work is');
+    eq(sq.plannedLoad, 122.5, '81.1% of the 150 he recorded is 121.65, which loads as 122.5 — not 127.5');
+    eq(sq.loadRange.low, 120, 'the window opens at the light end of the RPE tolerance');
+    eq(sq.loadRange.high, 122.5, 'and closes at the prescription — "Aim for 120 – 122.5", never 130');
+    eq(sq.loadRange.exact, false, 'which is still a window, not one number');
+    ok(/max you recorded, 150/.test(sq.loadNote), 'the note says which max it is a percentage of', sq.loadNote);
+    ok(/lower of the two/.test(sq.loadNote), 'and why that one', sq.loadNote);
+    // The note and the caption used to read as two answers: "81.1% of … 150"
+    // in one and "81.7% of 150" in the other. The note now walks the arithmetic
+    // to the bar, and the caption is the bar over the max, so they agree.
+    ok(sq.loadNote.startsWith(`81.1% of the squat max you recorded, 150 on ${fmtDate('2026-09-13')}, is 121.7 — 122.5 on your plates.`),
+       'the note states the target percentage, what it comes to, and what that loads as', sq.loadNote);
+    eq(pctCaption(sq, st), '81.7% of 150', 'the caption beside it is the loaded 122.5 over the same 150');
+    near(Number(pctCaption(sq, st).split('%')[0]), (sq.plannedLoad / sq.rateBasis.value) * 100,
+         'which is the plate-rounded weight the note ends on, as a percentage', 0.05);
+    const d2dead = slotAt(st, 2, 2, 'd2_dead');
+    ok(d2dead.loadNote.startsWith(`81.1% of the deadlift max you recorded, 175.7 on ${fmtDate('2026-09-13')}, is 142.5.`),
+       'where the plates already make the exact figure, the note does not pretend they changed it', d2dead.loadNote);
+    eq(pctCaption(slotAt(st, 2, 4, 'd4_dead'), st), `${slotAt(st, 2, 4, 'd4_dead').pct}% ref`,
+       'a wave slot keeps its book reference: its load is the anchor, not a percentage');
+    eq(pctCaption(null, st), null, 'and a missing slot has no caption');
+    eq(competitionChoice(st, 'squat'), 'back-squat-low-bar',
+       'the competition squat is the strength day\'s choice — the rule the Library calculator now shares');
+    eq(sq.impliedRPE, 5, 'the card reads its own load as RPE 5');
+    eq(rpeFor(150, sq.plannedLoad, sq.reps), 5, 'which is what 122.5 x 2 is against the 150 he actually squatted');
+    eq(rpeFor(150, 130, 2), 7, 'where 130 — the top of the old window — was RPE 7');
+    eq(JSON.stringify(sq.rateBasis), JSON.stringify({ value: 150, basis: 'recorded', lift: 'squat' }),
+       'the card carries the max a stepped load should be re-rated against');
+    eq(sq.recordedMax, 150, 'and the recorded max itself, for the second reading');
+
+    const easyMax = easyMaxDetail(st, 'squat');
+    eq(easyMax.basis, 'recorded', 'the easy max is the recorded 150');
+    near(easyMax.working, 150.64, 'because the working max above it is an estimate', 0.01);
+    eq(maxBasisLabel(easyMax, 'squat'), `the squat max you recorded, 150 on ${fmtDate('2026-09-13')}`, 'named as his own number');
+
+    /* ---- every easy window in the block tops out at its prescription ---- */
+    for (const [w, d] of [[1, 2], [2, 2], [3, 2], [1, 1], [2, 3], [2, 4]]) {
+      for (const x of at(st, w, d).slots) {
+        if (!isSubmaximalSlot(st, x.slotKey) || !x.loadRange) continue;
+        eq(x.loadRange.high, x.plannedLoad, `W${w}D${d} ${x.slotKey}: the window stops at the prescription`);
+        ok(x.loadRange.low <= x.loadRange.high, `W${w}D${d} ${x.slotKey}: and opens below it`);
+        ok(onGrid(st, x, x.plannedLoad) && onGrid(st, x, x.loadRange.low),
+           `W${w}D${d} ${x.slotKey}: every number in it is a weight that loads`);
+      }
+    }
+
+    /* ---- the deadlift, the bench ----------------------------------------- */
+    const dl = slotAt(st, 2, 2, 'd2_dead');
+    eq(dl.plannedLoad, 142.5, 'the technique double is 81.1% of his recorded 175.7, not 150 off an RPE call');
+    eq(JSON.stringify([dl.loadRange.low, dl.loadRange.high]), JSON.stringify([140, 142.5]), 'topped at 142.5');
+    eq(dl.impliedRPE, 5, 'RPE 5 against the number he recorded');
+    eq(slotAt(st, 2, 2, 'd2_bench').plannedLoad, 77.5, 'the bench double from his recorded 95');
+
+    st = daniel({ maxes: with_('deadlift', { value: 170, date: '2026-09-13', source: 'estimated' }) });
+    eq(slotAt(st, 2, 2, 'd2_dead').plannedLoad, 137.5, 'and 137.5 once the recorded deadlift is the 170 he pulled');
+
+    /* ---- the meet card ---------------------------------------------------- */
+    st = daniel();
+    let a = attemptsFor(st, 'deadlift');
+    eq(`${a.opener}/${a.second}/${a.third}`, '162.5/167.5/177.5',
+       'open at a triple, second at a double, third one step past the recorded 175.7 (p. 141)');
+    ok(a.opener < 170, 'an opener under his best-ever pull, not at it', `${a.opener}`);
+    eq(a.max, 175.7, 'built from the recorded max');
+    eq(slotAt(st, 3, 4, 'peak_open_dead').plannedLoad, a.opener, 'the opener he rehearses is the opener on the card');
+    ok(slotAt(st, 4, 3, 'peak_primer_dead', 'meetWeek').plannedLoad < a.opener, 'and the primer sits under it');
+    eq(slotAt(st, 4, 3, 'peak_primer_dead', 'meetWeek').rateBasis?.basis, 'recorded',
+       'the primer is easy work, and its readout is against the recorded max');
+    eq(slotAt(st, 3, 4, 'peak_open_dead').rateBasis?.basis, 'estimate',
+       'the opener single is a measurement, and its readout is against the working max');
+    // A test day has no board: the session shows `attemptAdvice` on meet day
+    // only, so nothing re-prices a test day's third off how the second moved.
+    // And the day exists to find out whether the recorded max is stale. So when
+    // the working max is higher the third moves one step toward it — and only
+    // one: that working max is his RPE calls (185 off a five at "8", after a
+    // missed 180), and taken whole it put a 187.5 third after a 167.5 second.
+    let td = resolveTestDay(st, {}).slots.find((x) => x.slotKey === 'test_deadlift');
+    eq(td.setLoads.slice(0, 2).join('/'), `${a.opener}/${a.second}`,
+       'a test day opens and seconds on the card\'s conservative weights');
+    eq(td.setLoads[2], 180, 'and takes its third one step past the card\'s 177.5 — not 187.5 off the working 185');
+    ok(td.setLoads[2] <= a.third + 2.5 + 1e-9, 'never more than one increment past the conservative third');
+    eq(td.attempts.thirdFrom?.basis, 'estimate', 'saying which max nudged it');
+    ok(/opener and second come off the deadlift max you recorded, 175\.7.*third one step further, because the app's working max \(185\)/.test(td.loadNote),
+       'and the note under it says so', td.loadNote);
+    ok(!/could only re-test/.test(td.loadNote), 'without calling a PR attempt a re-test');
+    ok(/Take the third only if the second moved well/.test(td.loadNote), 'still telling him to earn it with the second');
+    const meetDl = at(st, 4, 4, 'meetWeek').slots.find((x) => x.slotKey === 'test_deadlift');
+    eq(meetDl.setLoads.join('/'), `${a.opener}/${a.second}/${a.third}`,
+       'meet day keeps the card\'s third: there the board re-prices it live');
+    eq(meetDl.attempts.thirdFrom, null, 'with nothing borrowed from the working max');
+    eq(attemptsFor(st, 'deadlift', { platform: false, test: true }).third, td.setLoads[2],
+       'the Today tab\'s test-day picker shows the third the day will actually run');
+    // Where the working max is not higher there is nothing to borrow.
+    const sqTd = resolveTestDay(st, {}).slots.find((x) => x.slotKey === 'test_squat');
+    eq(sqTd.setLoads[2], attemptsFor(st, 'squat', { platform: false }).third,
+       'a squat recorded at 150 against a working 150.6 tests the same third either way');
+    const above = daniel({ maxes: with_('deadlift', { value: 190, date: '2026-09-13', source: 'estimated' }) });
+    td = resolveTestDay(above, {}).slots.find((x) => x.slotKey === 'test_deadlift');
+    eq(td.attempts.thirdFrom, null, 'and a recorded max above the working max keeps its own third');
+    // With the miss on record the working max is held under it, so the test
+    // day's third is the 180 he missed: a retest, which is what a test day is.
+    st = daniel();
+    store.update((s) => { markSetMissed(s.sessions.find((x) => x.date === '2026-09-08'), 'test_deadlift', 2); });
+    td = resolveTestDay(store.getState(), {}).slots.find((x) => x.slotKey === 'test_deadlift');
+    eq(td.setLoads.join('/'), '162.5/167.5/180', 'with the 180 recorded as missed, the test day asks for it again');
+    st = daniel();
+    for (const lift of ['squat', 'bench', 'deadlift']) {
+      const x = attemptsFor(st, lift);
+      for (const v of [x.opener, x.second, x.third]) eq(v % 2.5, 0, `${lift} ${v} is a legal attempt`);
+    }
+
+    st = daniel({ maxes: with_('deadlift', { value: 170, date: '2026-09-13', source: 'estimated' }) });
+    a = attemptsFor(st, 'deadlift');
+    eq(`${a.opener}/${a.second}/${a.third}`, '157.5/162.5/172.5', 'with 170 recorded: 157.5, 162.5, 172.5');
+    ok(a.opener < 170, 'still opening under 170');
+
+    /* ---- lowering your own number never makes the app heavier ------------ */
+    const easyLoads = (s, lift) => {
+      const key = { squat: 'squat', bench: 'bench', deadlift: 'dead' }[lift];
+      const x = attemptsFor(s, lift);
+      return [slotAt(s, 2, 2, `d2_${key}`).plannedLoad, slotAt(s, 1, 2, `d2_${key}`).plannedLoad,
+              slotAt(s, 3, 4, `peak_open_${key}`).plannedLoad, slotAt(s, 4, 3, `peak_primer_${key}`, 'meetWeek').plannedLoad,
+              x.opener, x.second, x.third];
+    };
+    const ladders = { squat: [170, 156, 152.5, 150, 145, 140], bench: [110, 100, 97.5, 95, 90],
+                      deadlift: [200, 185, 181, 177.5, 175.7, 170, 160] };
+    for (const source of ['estimated', 'entered', 'tested']) {
+      for (const [lift, values] of Object.entries(ladders)) {
+        let prev = null;
+        for (const value of values) {
+          const loads = easyLoads(daniel({ maxes: with_(lift, { value, date: '2026-09-13', source }) }), lift);
+          if (prev) {
+            ok(loads.every((v, i) => v <= prev.loads[i] + 1e-9),
+               `${lift} ${source} ${prev.value} → ${value}: no easy load or attempt goes up`,
+               `${prev.loads.join('/')} → ${loads.join('/')}`);
+          }
+          prev = { value, loads };
+        }
+      }
+    }
+
+    /* ---- heavy days keep the working max ---------------------------------- */
+    // The same numbers this fixture produced before the change: the wave, not
+    // the recorded max, prices the strength day.
+    st = daniel();
+    const heavy = slotAt(st, 2, 4, 'd4_dead');
+    eq(heavy.plannedLoad, 165, 'the strength-day deadlift is the 165 the wave gives, as before');
+    eq(heavy.loadSource, 'wave', 'off its anchor');
+    eq(JSON.stringify([heavy.loadRange.low, heavy.loadRange.high]), JSON.stringify([162.5, 167.5]),
+       'with the window either side of it, as before');
+    eq(heavy.rateBasis.basis, 'estimate', 'and it is rated against the working max');
+    near(heavy.rateBasis.value, 184.96, 'the 185 the strength days read', 0.01);
+    eq(heavy.impliedRPE, rpeFor(heavy.rateBasis.value, heavy.plannedLoad, heavy.reps), 'the card and its basis agree');
+    eq(slotAt(st, 2, 3, 'd3_squat').plannedLoad, 135, 'the strength-day squat is the wave\'s 135, as before');
+
+    /* ---- a measured single retires the triple before it ------------------- */
+    const est = bestEstimateDetail(st, 'squat');
+    near(est.value, 150.6, 'the squat estimate is 150.6 off the 24 September triple', 0.05);
+    eq(est.date, '2026-09-24', 'dated after the test');
+    near(slotE1RMDetail(st, 'd3_squat').value, 156.4,
+         'the strength slot on its own still holds the 22 August triple in its window', 0.05);
+    near(slotE1RMDetail(st, 'd3_squat', { since: '2026-09-10' }).value, 150.6,
+         'which the 10 September single sets aside', 0.05);
+    near(bestEstimateDetail(st, 'deadlift').value, 184.96,
+         'while readings after the single still compete: the 19 September five outranks the test day', 0.01);
+    eq(bestEstimateDetail(st, 'bench').value, 100, 'and the bench test single stands on its own');
+
+    /* ---- Update maxes: only what was touched ------------------------------ */
+    const draftsOf = (s) => Object.fromEntries(['squat', 'bench', 'deadlift'].map((l) => [l, maxDraftFor(s.maxes[l])]));
+    for (const lift of ['squat', 'bench', 'deadlift']) {
+      const d = maxDraftFor(st.maxes[lift]);
+      near(e1RM(d.load, d.reps, d.rpe), st.maxes[lift].value, `the ${lift} prefill implies the max on file`, 0.05);
+      eq(d.touched, false, 'and starts untouched');
+    }
+    const bare = maxDraftFor({ value: 150, date: '2026-09-13', source: 'tested' });
+    eq(JSON.stringify([bare.load, bare.reps, bare.rpe]), JSON.stringify([150, 1, 10]),
+       'a record with no set behind it prefills as the max itself, a single at RPE 10');
+    ok(e1RM(150, 3, 9) > 165, 'not as that weight x 3 @ 9, which reads 168 and was saved back as the max');
+    eq(maxDraftFor(null).load, '', 'an empty record leaves the weight blank for the lifter');
+
+    let before = JSON.stringify(st.maxes);
+    store.update((s) => { applyMaxUpdate(s, draftsOf(s), { today: '2026-09-29' }); });
+    eq(JSON.stringify(store.getState().maxes), before, 'saving the sheet untouched changes nothing at all');
+
+    // His squat is on file as exactly this set, filed as a guess. Saving it on
+    // purpose is how he says he did it.
+    store.update((s) => {
+      const drafts = draftsOf(s);
+      drafts.squat = { load: 150, reps: 1, rpe: 10, touched: true };
+      applyMaxUpdate(s, drafts, { today: '2026-09-29' });
+    });
+    st = store.getState();
+    eq(st.maxes.squat.source, 'entered', 'a single at RPE 10 is a weight he has done, and is saved as one');
+    eq(st.maxes.squat.date, '2026-09-29', 'dated today');
+    eq(JSON.stringify(st.maxes.bench), JSON.stringify(RECORDED.bench), 'the untouched bench keeps its record exactly');
+    eq(JSON.stringify(st.maxes.deadlift), JSON.stringify(RECORDED.deadlift), 'and so does the deadlift');
+    eq(workingMaxDetail(st, 'squat').basis, 'tested', 'the entered single is a ceiling on the working max now');
+    eq(slotAt(st, 2, 2, 'd2_squat').plannedLoad, 122.5, 'and tomorrow\'s double does not move');
+
+    store.update((s) => {
+      const drafts = draftsOf(s);
+      drafts.deadlift = { load: '140', reps: '3', rpe: '9', touched: true };
+      applyMaxUpdate(s, drafts, { today: '2026-09-29' });
+    });
+    st = store.getState();
+    eq(st.maxes.deadlift.source, 'estimated', 'a triple at RPE 9 is an estimate, and is saved as one');
+    near(st.maxes.deadlift.value, e1RM(140, 3, 9), 'read off the table, to a tenth', 0.05);
+    eq(st.maxes.squat.source, 'entered', 'while the squat saved a moment ago is left as it was');
+
+    store.update((s) => {
+      const drafts = draftsOf(s);
+      drafts.squat = { ...drafts.squat, touched: true };
+      s.maxes.squat = { value: 150, date: '2026-09-10', source: 'tested', reps: 1, fromLoad: 150, fromRPE: 10 };
+      applyMaxUpdate(s, drafts, { today: '2026-09-29' });
+    });
+    eq(store.getState().maxes.squat.date, '2026-09-10',
+       'a lift edited and put back to its prefill is untouched: a tested max is not re-dated or re-labelled');
+
+    /* ---- the goal, on his real numbers ------------------------------------ */
+    st = daniel({ goals: { deadlift: 180 } });
+    let pace = goalPace(st, 'deadlift');
+    eq(pace.have, 175.7, 'the goal is measured against the max the attempt card is built from');
+    eq(pace.reached, false, '180 is not already in a deadlift he recorded at 175.7');
+    eq(pace.reached, attemptsFor(st, 'deadlift').third >= 180, 'and the card agrees: its third is short of 180');
+    eq(pace.inFinalWeek, false, 'two and a half weeks out is not the final week');
+    const notesOf = (s) => [[1, 4], [2, 4], [2, 3], [3, 3]].flatMap(([w, d]) => goalNotes(at(s, w, d), s));
+    const claimsIt = (x) => /already in your|nothing left to build|a weight you own/.test(`${x.title} ${x.text}`);
+    ok(notesOf(st).length > 0, 'the strength days carry a goal line');
+    ok(!notesOf(st).some(claimsIt), 'none of which says 180 is already his');
+
+    // The card on 3 October: 165 x 2 at RPE 8, which is RPE 9.5 against 175.7.
+    const t = goalTargetFor(st, slotAt(st, 2, 4, 'd4_dead'));
+    eq(t.cardImpliedRPE, 9.5, 'the goal line reads the card\'s own load against the same max');
+    eq(t.verdict, 'cardHeavy', 'and more than one RPE over the target, it will not call the lifter ahead');
+    eq(t.rpeLoad, 157.5, 'naming the weight that is RPE 8 for two against that max');
+    ok(onGrid(st, slotAt(st, 2, 4, 'd4_dead'), t.rpeLoad), 'on the plate grid');
+    ok(notesOf(st).filter((x) => x.verdict === 'cardHeavy').every((x) => x.tone !== 'good'),
+       'a heavy card is never dressed up as good news');
+    const heavyNote = goalNotes(at(st, 2, 4), st).find((x) => x.slotKey === 'd4_dead');
+    eq(heavyNote.verdict, 'cardHeavy', 'the note on that card is the heavy-card one');
+    eq(heavyNote.tone, 'warn', 'in the warning tone');
+    ok(heavyNote.text.startsWith('The heavier set on your card is not what 180 kg needs'),
+       'leading with what the heavy card means for the goal', heavyNote.text);
+    ok(/157\.5 kg.*2 at RPE 8 against the deadlift max you recorded, 175\.7.*Taking the top set to 157\.5 kg/.test(heavyNote.text),
+       'and pointing at the weight to take it down to', heavyNote.text);
+    eq((heavyNote.text.match(/157\.5 kg/g) || []).length, 2, 'naming it no more often than it needs to');
+    ok(!/reads about RPE 9\.5|RPE 9\.5 against/.test(heavyNote.text),
+       'without repeating the banner above it, which already says what 165 reads against which max', heavyNote.text);
+
+    /* ---- one threshold, one max, one weight: banner and goal line agree --- */
+    // The session banner (views/session.js weightWarning) and the goal line
+    // judge the card with the same three program.js exports; these pin them.
+    const d4 = slotAt(st, 2, 4, 'd4_dead');
+    eq(CARD_RPE_SLACK, 1, 'one RPE over the target is "too heavy", in both places');
+    eq(heavyCheckMax(d4).value, 175.7, 'the heavy day is judged against the lower of 185 and his recorded 175.7');
+    eq(heavyCheckMax(d4).basis, 'recorded', 'which is his own number');
+    eq(heavyCheckMax(d4).value, goalPace(st, 'deadlift').have, 'the same figure the goal measures "have" with');
+    eq(readsHeavy(heavyCheckMax(d4).value, d4.plannedLoad, d4.reps, d4.targetRPE), true,
+       '165 x 2 at RPE 8 reads heavy against 175.7 — the banner now fires on the card the goal line flags');
+    eq(readsHeavy(d4.rateBasis.value, d4.plannedLoad, d4.reps, d4.targetRPE), false,
+       'but not against the working 185 — a disagreement the banner shows rather than a verdict it hands down');
+    eq(cardDropLoad(st, d4), t.rpeLoad, 'and the weight both of them name is one number: 157.5');
+    eq(readsHeavy(heavyCheckMax(d4).value, 160, 2, 8), false, '160 x 2 is inside the slack (RPE 9 against 175.7)');
+    eq(readsHeavy(175.7, 175, 2, 9.5), true, 'past the top of the table is heavy even on a card written at 9.5');
+    eq(readsHeavy(175.7, 165, 2, null), false, 'and a card with no RPE target is never judged');
+    const d2dl = slotAt(st, 2, 2, 'd2_dead');
+    eq(JSON.stringify(heavyCheckMax(d2dl)), JSON.stringify(d2dl.rateBasis),
+       'on easy work the check max is the card\'s own: it is already the lower');
+    eq(heavyCheckMax({ rateBasis: null, recordedMax: 175.7 }), null, 'and with nothing to rate against there is no check');
+    ok(!/past it|over the max behind it/.test(heavyNote.text),
+       'not the "behind" wording it used to fall into: "your card is already 10 kg past it", "-2.25 kg over"');
+    // "Already" belongs to the one note that means it; the rest are loads and
+    // measurements, never a placeholder or a rate of nothing. (A load may carry
+    // two decimals on a microplate grid, so the tenth rule for maxes is checked
+    // where a max is printed, not here.)
+    const clean = (x) => !/already|— kg|NaN|undefined|null|\b0 kg a week/.test(`${x.title} ${x.text}`);
+    const dirty = (s) => notesOf(s).filter((x) => !clean(x)).map((x) => `${x.title} :: ${x.text}`).join(' | ');
+    ok(notesOf(st).every(clean), 'no goal note on his log says "already", "— kg" or "0 kg a week"', dirty(st));
+    st = daniel({ goals: { deadlift: 180 }, maxes: with_('deadlift', { value: 185, date: '2026-09-13', source: 'estimated' }) });
+    const t185 = goalTargetFor(st, slotAt(st, 2, 4, 'd4_dead'));
+    ok(t185.cardImpliedRPE <= t185.rpe + 1, 'with a recorded 185 the same card reads on target', `${t185.cardImpliedRPE}`);
+    ok(t185.verdict !== 'cardHeavy', 'and the verdict is the pace\'s again');
+
+    // Record the miss the way the correction sheet now can.
+    st = daniel({ goals: { deadlift: 180 } });
+    store.update((s) => {
+      const ses = s.sessions.find((x) => x.date === '2026-09-08');
+      markSetMissed(ses, 'test_deadlift', 2, { at: '2026-09-29T08:00:00.000Z' });
+    });
+    st = store.getState();
+    pace = goalPace(st, 'deadlift');
+    eq(pace.goalMiss?.load, 180, 'the pace sees the 180 he missed');
+    eq(pace.reached, false, 'and a goal just missed is still not reached');
+    ok(!notesOf(st).some(claimsIt), 'nor described as his');
+    ok(notesOf(st).every(clean), 'and no note says "already"', dirty(st));
+    ok(notesOf(st).filter((x) => x.lift === 'deadlift').every((x) => /the 180 kg you loaded on .+ did not move/.test(x.text)),
+       'every deadlift note names the miss that stands against the goal');
+
+    // Where the arithmetic comes out exactly level: a recorded 181 and the miss.
+    // The working max is held one platform step under 180 — which is maxNeeded
+    // to the kilo — so only the miss stops "reached" being true.
+    store.update((s) => { s.maxes.deadlift = { value: 181, date: '2026-09-13', source: 'estimated' }; });
+    st = store.getState();
+    pace = goalPace(st, 'deadlift');
+    eq(pace.have, 177.5, 'the miss holds the max at 177.5');
+    eq(pace.toGo, 0, 'exactly the 177.5 a 180 third needs');
+    eq(pace.reached, false, 'which is not "already yours" three weeks after it stayed on the floor');
+    eq(attemptsFor(st, 'deadlift').third, 180, 'though 180 is on the card as a third attempt, which is what it is');
+    const level = goalNotes(at(st, 2, 4), st).find((x) => x.slotKey === 'd4_dead');
+    ok(level.text.includes('On paper the max behind it is enough: 177.5 kg is exactly what a 180 kg third needs'),
+       'the note says the arithmetic is level', level.text);
+    ok(/did not move, and until a rep at that weight answers it, 180 kg is your third attempt/.test(level.text),
+       'and that the miss is the reason it is not his yet — a third attempt, which is what the card says');
+    ok(level.tone !== 'good', 'which is not dressed up as good news');
+    ok(clean(level), 'and quotes no "0 kg a week" for a gap that is not there', level.text);
+    ok(level.text.includes('against the 173.5 kg the schedule asks for'),
+       'the line is a measurement, to a tenth — rounded half up, as the card in the gym rounds it', level.text);
+    // The working max forgets a miss after MISS_MEMORY_DAYS; the goal does not,
+    // for this meet's preparation. A 180 missed on 8 September is still the
+    // reason 180 is not "carried" on 1 October — and on meet week.
+    for (const day of ['2026-10-01', '2026-10-12']) {
+      const later = goalPace(st, 'deadlift', { today: day });
+      eq(later.reached, false, `on ${day} the miss at 180 still stands against a 180 goal`);
+      eq(later.goalMiss?.load, 180, `and is the miss the note names (${day})`);
+    }
+    ok(goalPace(st, 'deadlift', { today: '2026-10-21' }).goalMiss == null,
+       'but not past RECORD_BINDS_DAYS: an old miss is not evidence about a new block');
+
+    pace = goalPace(st, 'deadlift', { today: '2026-10-12' });
+    eq(pace.inFinalWeek, true, 'four days out is the final week');
+    eq(pace.requiredPerWeek, pace.toGo, 'where what is left is due by meet day, not divided by a fraction of a week');
+    st = daniel({ goals: { deadlift: 180 } });
+    const late = goalNotes(at(st, 2, 4), st, { today: '2026-10-12' }).find((x) => x.slotKey === 'd4_dead');
+    // His max is the recorded 175.7, which no week of a taper moves, so the gap
+    // is stated as what it is rather than as a rate.
+    ok(late.text.includes('a 180 kg third needs a 177.5 kg max, and the one you recorded is 175.7 kg — 1.8 kg short'),
+       'and the note states the gap as a gap', late.text);
+    ok(!/a week from here|by meet day, where the block adds/.test(late.text), 'not as a weekly rate a recorded max cannot follow');
+    // Where the max behind the card is the working max, the final week is a rate
+    // due by meet day rather than a fraction of a week.
+    st = daniel({ goals: { deadlift: 190 }, maxes: with_('deadlift', { value: 195, date: '2026-09-13', source: 'estimated' }) });
+    const lateWorking = goalNotes(at(st, 2, 4), st, { today: '2026-10-12' }).find((x) => x.slotKey === 'd4_dead');
+    ok(lateWorking.text.includes('190 kg needs 2.5 kg more by meet day'), 'the working-max case says "by meet day"', lateWorking.text);
+    ok(!/a week from here/.test(late.text), 'rather than calling the whole gap "a week"');
+
+    // A goal the max does carry, over a card that is still too heavy.
+    st = daniel({ goals: { deadlift: 150 } });
+    const owned = goalNotes(at(st, 2, 4), st).find((x) => x.slotKey === 'd4_dead');
+    ok(owned.pace.reached, 'a 150 goal is reached on a recorded 175.7');
+    ok(/^150 kg is your third attempt on /.test(owned.title), 'and says what "reached" means: a third the max carries', owned.title);
+    ok(!/already|a weight you own|nothing left to build/.test(owned.title + owned.text),
+       'never that a weight he has not lifted is already his', owned.text);
+    eq(owned.tone, 'warn', 'but over a card reading RPE 9.5 it is a warning, not good news');
+    ok(owned.text.includes('your card asks 165 kg. Nothing about 150 kg needs the heavier set: 157.5 kg holds it'),
+       'naming the same weight to come down to', owned.text);
+
+    // No max at all: nothing to price a line against.
+    st = daniel({ goals: { deadlift: 180 }, maxes: {} });
+    store.update((s) => { s.sessions = []; });
+    st = store.getState();
+    eq(goalPace(st, 'deadlift').have, null, 'with no max and no log there is no "have"');
+    eq(goalTargetFor(st, slotAt(st, 2, 4, 'd4_dead')), null, 'so there is no target');
+    eq(goalNotes(at(st, 2, 4), st).length, 0, 'and no goal line printing "— kg"');
+
+    /* ---- correcting a logged set as missed -------------------------------- */
+    st = daniel();
+    store.update((s) => {
+      const ses = s.sessions.find((x) => x.date === '2026-09-08');
+      const rec = markSetMissed(ses, 'test_deadlift', 2, { today: '2026-09-29' });
+      eq(JSON.stringify(Object.keys(rec).slice(0, 6)), JSON.stringify(['at', 'slotKey', 'setIndex', 'field', 'from', 'to']),
+         'the correction is the record the correction sheet writes');
+      eq(`${rec.field} ${rec.from} → ${rec.to}`, 'missed false → true', 'reading "missed false → true"');
+      eq(rec.at, '2026-09-29', 'stamped when it was made');
+      eq(JSON.stringify(rec.was), JSON.stringify({ reps: 1, rpe: 10 }), 'and keeping what the set said before');
+      eq(markSetMissed(ses, 'test_deadlift', 2), null, 'marking it twice does nothing');
+      eq(markSetMissed(ses, 'test_deadlift', 7), null, 'nor does a set that is not there');
+      eq(markSetMissed(ses, 'nope', 0), null, 'or a slot that is not');
+    });
+    st = store.getState();
+    let ses = st.sessions.find((x) => x.date === '2026-09-08');
+    const set = ses.entries[0].sets[2];
+    eq(JSON.stringify([set.load, set.reps, set.rpe, set.failed, set.done, set.ts]),
+       JSON.stringify([180, 0, null, true, true, '2026-01-01T00:00:00Z']),
+       'the set is the one the session screen\'s "missed" button writes');
+    eq(ses.corrections.length, 1, 'with one correction on the session');
+    eq(missedAttempts(st, { lift: 'deadlift' })[0]?.load, 180, 'which every reader of misses now finds');
+    eq(workingMaxDetail(st, 'deadlift').basis, 'miss', 'the working max is held under it');
+    eq(workingMaxDetail(st, 'deadlift').value, 177.5, 'at 177.5');
+    eq(slotAt(st, 2, 2, 'd2_dead').plannedLoad, 142.5, 'while the technique double stays on the lower, recorded 175.7');
+    eq(attemptsFor(st, 'deadlift').opener, 162.5, 'and so does the opener');
+
+    store.update((s) => {
+      const x = s.sessions.find((y) => y.date === '2026-09-08');
+      eq(markSetMissed(x, 'test_deadlift', 2, { missed: false, reps: 0 }), null, 'un-marking needs reps above zero');
+      eq(markSetMissed(x, 'test_deadlift', 2, { missed: false, reps: '1.5' }), null, 'in whole reps');
+      eq(markSetMissed(x, 'test_deadlift', 2, { missed: false, reps: 1, rpe: 11 }), null,
+         'and an RPE typed then is range-checked, not clamped');
+      const back = markSetMissed(x, 'test_deadlift', 2, { missed: false, reps: '1', rpe: '10', at: '2026-09-29T09:00:00Z' });
+      eq(`${back.field} ${back.from} → ${back.to}`, 'missed true → false', 'un-marking is recorded too');
+    });
+    ses = store.getState().sessions.find((x) => x.date === '2026-09-08');
+    eq(JSON.stringify([ses.entries[0].sets[2].reps, ses.entries[0].sets[2].rpe, ses.entries[0].sets[2].failed]),
+       JSON.stringify([1, 10, false]), 'and puts back the reps the lifter typed');
+    eq(ses.corrections.length, 2, 'leaving both corrections on the session');
+    eq(missedAttempts(store.getState(), { lift: 'deadlift' }).length, 0, 'and no miss on record');
+
+    /* ---- a recorded max binds for six weeks, and then lets go -------------- */
+    // Held against the lifter it was built for, all the way to the platform: the
+    // rule that ages a record by the program's weekly rate would have reached
+    // his RPE-built 185 by meet week and opened him at 170 again.
+    const Frozen = globalThis.Date;
+    const onDay = (iso, fn) => {
+      const t = new RealDate(`${iso}T09:00:00`).getTime();
+      globalThis.Date = class extends RealDate {
+        constructor(...a) { if (a.length) super(...a); else super(t); }
+        static now() { return t; }
+      };
+      try { return fn(); } finally { globalThis.Date = Frozen; }
+    };
+    for (const day of ['2026-09-29', '2026-10-05', '2026-10-10', '2026-10-16']) {
+      onDay(day, () => {
+        const s = daniel();
+        const x = attemptsFor(s, 'deadlift');
+        eq(`${x.opener}/${x.second}/${x.third}`, '162.5/167.5/177.5', `${day}: the deadlift card is still built from his 175.7`);
+        eq(easyMaxDetail(s, 'deadlift').basis, 'recorded', `${day}: because the record is still inside RECORD_BINDS_DAYS`);
+        eq(slotAt(s, 2, 2, 'd2_squat').plannedLoad, 122.5, `${day}: and the technique double is still 122.5`);
+      });
+    }
+    st = daniel();
+    // 13 September + 42 days = 25 October.
+    eq(easyMaxDetail(st, 'deadlift', { today: '2026-10-25' }).basis, 'recorded', 'a record 42 days old still binds');
+    eq(easyMaxDetail(st, 'deadlift', { today: '2026-10-26' }).value, workingMaxDetail(st, 'deadlift', { today: '2026-10-26' }).value,
+       'at 43 days it lets go, and the easy max is the working max exactly');
+    eq(easyMaxDetail(daniel({ maxes: with_('deadlift', { value: 175.7, source: 'estimated' }) }), 'deadlift').basis, 'estimate',
+       'an undated record never binds');
+    // A lifter months past their record is not held to it: no heavy card reads
+    // "too heavy" against a number from a different block.
+    onDay('2026-12-31', () => {
+      const s = daniel();
+      const d4 = slotAt(s, 2, 4, 'd4_dead');
+      eq(heavyCheckMax(d4).value, d4.rateBasis.value, 'a stale record does not become the heavy-card check');
+      eq(readsHeavy(heavyCheckMax(d4).value, d4.plannedLoad, d4.reps, d4.targetRPE), false,
+         'so a card that is on target against the working max is not flagged');
+      eq(attemptsFor(s, 'deadlift').max, workingMaxDetail(s, 'deadlift').value, 'and attempts come off the working max again');
+    });
+    const noCheck = { rateBasis: { value: 150.6, basis: 'estimate', lift: 'squat' } };
+    eq(heavyCheckMax(noCheck).value, 150.6, 'a slot without a stored check max falls back to its own rating max');
+
+    /* ---- which misses count against a goal -------------------------------- */
+    st = daniel({ goals: { deadlift: 180 } });
+    store.update((s) => { markSetMissed(s.sessions.find((x) => x.date === '2026-09-08'), 'test_deadlift', 2); });
+    eq(goalPace(store.getState(), 'deadlift').goalMiss?.load, 180, 'a miss at the goal stands against it');
+    store.update((s) => { setGoalFor(s, 'deadlift', 177.5); });
+    eq(goalPace(store.getState(), 'deadlift').goalMiss, null,
+       'a miss a full platform step above the goal says nothing about it');
+    // Now miss the 170 instead, on a day the (phantom) 180 went up: a rep at the
+    // goal or more on that same day answers it.
+    st = daniel({ goals: { deadlift: 170 } });
+    store.update((s) => { markSetMissed(s.sessions.find((x) => x.date === '2026-09-08'), 'test_deadlift', 1); });
+    eq(goalPace(store.getState(), 'deadlift').goalMiss, null, 'a miss answered the same day by a heavier rep does not count');
+
+    /* ---- lowering a measured max keeps it a ceiling ------------------------ */
+    st = daniel({ maxes: with_('deadlift', { value: 170, date: '2026-09-08', source: 'tested', reps: 1, fromLoad: 170, fromRPE: 10 }) });
+    store.update((s) => {
+      const out = applyMaxUpdate(s, { deadlift: { load: 160, reps: 1, rpe: 9.5, touched: true } });
+      eq(out[0]?.source, 'entered', 'a tested 170 lowered with a single at 9.5 stays a measurement');
+    });
+    ok(workingMaxDetail(store.getState(), 'deadlift').value <= 163.6 + driftPerWeek(store.getState(), 'deadlift') + 1e-9,
+       'so the working max stays under the lifter\'s lowered number instead of climbing back to 185');
+    store.update((s) => {
+      const out = applyMaxUpdate(s, { deadlift: { load: 160, reps: 3, rpe: 8, touched: true } });
+      eq(out[0]?.source, 'estimated', 'raising it off a triple at RPE 8 is an estimate, as before');
+    });
+  } finally {
+    globalThis.Date = RealDate;
+  }
 }
 
 /* ======================================================================

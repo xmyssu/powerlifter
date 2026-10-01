@@ -15,8 +15,9 @@ import { TEMPLATES, INTERMEDIATE_PL, INTERMEDIATE_PEAK, PEAK_DAYS, EMPHASIS,
 import { SLOT_DEFAULTS, byId } from './exercises.js';
 import { e1RM, loadFor, roundToLoadable, pctOf1RM, normalizeRPE, convertLoad, loadBand, minIncrement,
          loadStep, gridFloor, isLadder, rpeFor, fmtLoadBare, RPE_TOLERANCE, PLATE_PRESETS,
-         KG_PER_LB } from './rpe.js';
+         KG_PER_LB, parseNum, RPE_MIN, RPE_MAX } from './rpe.js';
 import { todayISO, uid } from './store.js';
+import { fmtDate } from './ui.js';
 
 /* ---- construction ----------------------------------------------------- */
 
@@ -77,6 +78,16 @@ export function buildProgram({
      * meet is one number, and every call after the opener is made against it.
      */
     goalTotal: null,
+    /**
+     * What the lifter is chasing on each lift, rather than on the total.
+     *
+     * A total is what a meet is scored on; a number on one lift is what a
+     * lifter actually trains for, and it is the thing they say out loud — "I
+     * want 180". The two are not derivable from each other and a lifter may
+     * well have one without the other, so this is its own field. `goalPace` is
+     * what turns it from a wish into this week's work.
+     */
+    goalLifts: { squat: null, bench: null, deadlift: null },
     forcedDeload: false,        // a stall forces week 4 regardless of checklist
     events: [],                 // program-level history for the coach log
   };
@@ -505,13 +516,19 @@ function reliableOf(sets, entry) {
  *    Where a slot offers anything shorter, that wins outright; where it never
  *    does, the estimate is returned marked `reliable: false` along with the rep
  *    count behind it, so callers can decline to extrapolate away from it.
+ *
+ * `since` drops every session dated before it *before* the window is taken, so
+ * the window is the last few sessions from that date on rather than the last
+ * few overall with the old ones blanked out. `bestEstimateDetail` uses it to
+ * let a measured single retire the readings that came before it.
  */
-export function slotE1RMDetail(state, slotKey, { lookback = 6, window = 3 } = {}) {
+export function slotE1RMDetail(state, slotKey, { lookback = 6, window = 3, since = null } = {}) {
   // Meet week is a taper: its loads were chosen to be light, exactly as a
   // deload's are, so an estimate drawn from one is a reading on the taper rather
   // than on the lifter. The opener day is week 3 and is not excluded by this.
   const hist = slotHistory(state, slotKey)
     .filter((h) => h.phase !== 'deload' && h.phase !== 'meetWeek')
+    .filter((h) => !since || h.date >= since)
     .slice(-lookback);
   if (!hist.length) return null;
   // Weight recency: take the best of the last few sessions, which smooths a
@@ -560,6 +577,34 @@ export function lastComparable(state, slotKey, { reps = null, excludeSessionId =
 /* ---- max testing ------------------------------------------------------ */
 
 /**
+ * The date of the newest completed test-day or opener single on a lift, or
+ * null — from the same history the estimate itself reads, so a session only
+ * counts if it left a rep `slotE1RMDetail` could have estimated from. Readings
+ * older than it are superseded by it (see `bestEstimateDetail`).
+ */
+function measuredSingleSince(state, singleKeys) {
+  let since = null;
+  for (const key of singleKeys) {
+    for (const h of slotHistory(state, key)) {
+      if (h.phase === 'deload' || h.phase === 'meetWeek' || !(h.reliable1RM > 0)) continue;
+      if (!since || h.date > since) since = h.date;
+    }
+  }
+  return since;
+}
+
+/** `measuredSingleSince` for a lift, for callers outside `bestEstimateDetail`. */
+export function singleSinceFor(state, lift) {
+  if (!lift) return null;
+  return measuredSingleSince(state, [
+    ...TEST_DAY.slots.filter((x) => x.lift === lift).map((x) => x.key),
+    ...Object.values(PEAK_DAYS)
+      .filter((d) => d.countsForMax)
+      .flatMap((d) => d.slots.filter((x) => x.lift === lift).map((x) => x.key)),
+  ]);
+}
+
+/**
  * The best estimate a competition lift's *measuring* work supports.
  *
  * A lift is trained in more than one place — the squat appears on the technique
@@ -567,34 +612,58 @@ export function lastComparable(state, slotKey, { reps = null, excludeSessionId =
  * The strength day is the one that knows what you can actually do; the technique
  * day was written to be easy, so what it says about the lifter is whatever the
  * RPE guess says, divided by a number close to 0.78. See `isSubmaximalSlot`.
+ *
+ * **A logged single retires the readings older than it.** Peak week 3's opener
+ * practice counts for the same reason a test day does — it is a real single,
+ * taken to a real RPE, seven days out. The primer is not in this list: RPE 4 by
+ * prescription, it says nothing about what the lifter can do.
+ *
+ * This used to be written as "a logged single beats any estimate drawn from a
+ * triple" and then implemented as "the biggest reliable number wins", which is
+ * not the same rule. The window is three sessions per slot, so a strength-day
+ * triple from five weeks ago was still in it — 135 x 3 called RPE 8 on 22 August
+ * reads 156.4 — and it outranked the 150 the lifter squatted on a test day on
+ * 10 September, eighteen days *later*, for no better reason than being bigger.
+ * That is the flattering-estimate problem again: the triple's number is an RPE
+ * call read off a table, the single's is a bar that went up, and the older of
+ * the two was winning.
+ *
+ * So the rule is applied as it was written, and no wider. The newest measured
+ * single sets a date; every reading from before that date is set aside, in the
+ * test-day and opener slots as much as the training ones, because a newer
+ * measurement of the same lift is what supersedes an old one. Readings from on
+ * or after that date still compete on value, the same way as before: a lifter
+ * who tests at 150 and then triples 130 at RPE 8 a fortnight later has trained
+ * since, and the newer triple is allowed to say so.
  */
 export function bestEstimateDetail(state, lift) {
   const tpl = templateOf(state.program);
-  let best = null;
-  const consider = (key) => {
-    const d = slotE1RMDetail(state, key);
-    if (!d?.value) return;
-    // A reliable reading beats an unreliable one outright, however big the
-    // unreliable one is — that is the whole point of the distinction.
-    if (!best || (d.reliable && !best.reliable) || (d.reliable === best.reliable && d.value > best.value)) best = d;
-  };
+  // A reliable reading beats an unreliable one outright, however big the
+  // unreliable one is — that is the whole point of the distinction.
+  const better = (d, than) => !than || (d.reliable && !than.reliable)
+    || (d.reliable === than.reliable && d.value > than.value);
+
+  const trainingKeys = [];
   for (const d of tpl.days) {
     for (const slot of d.slots) {
       if (slot.lift !== lift || isSubmaximalWork(d, slot)) continue;
-      consider(slot.key);
+      trainingKeys.push(slot.key);
     }
   }
-  // A logged single beats any estimate drawn from a triple. Peak week 3's opener
-  // practice counts for the same reason a test day does — it is a real single,
-  // taken to a real RPE, seven days out. The primer is not in this list: RPE 4
-  // by prescription, it says nothing about what the lifter can do.
   const singleKeys = [
     ...TEST_DAY.slots.filter((x) => x.lift === lift).map((x) => x.key),
     ...Object.values(PEAK_DAYS)
       .filter((d) => d.countsForMax)
       .flatMap((d) => d.slots.filter((x) => x.lift === lift).map((x) => x.key)),
   ];
-  for (const key of singleKeys) consider(key);
+
+  const since = measuredSingleSince(state, singleKeys);
+
+  let best = null;
+  for (const key of [...trainingKeys, ...singleKeys]) {
+    const d = slotE1RMDetail(state, key, { since });
+    if (d?.value && better(d, best)) best = d;
+  }
   return best;
 }
 
@@ -621,8 +690,14 @@ export const MISS_MEMORY_DAYS = 21;
  */
 const MEASURED_MAX = new Set(['tested', 'entered']);
 
-/** How fast this lift moves, in the program's own opinion, per week. */
-function driftPerWeek(state, lift) {
+/**
+ * How fast this lift moves, in the program's own opinion, per week.
+ *
+ * Exported because it is also the honest answer to "can I get there from
+ * here": a goal that needs more than this per week needs more than the program
+ * is offering, and `goalPace` says so rather than quietly hoping.
+ */
+export function driftPerWeek(state, lift) {
   const tpl = templateOf(state.program);
   let slot = null;
   for (const d of tpl.days) {
@@ -716,16 +791,110 @@ export function workingMaxDetail(state, lift, { today = todayISO() } = {}) {
   // The lowest recent miss that the lifter has not since answered with a rep.
   let cappedBy = null;
   const step = state.profile?.units === 'lb' ? 5 : 2.5;
-  const recent = missedAttempts(state, { lift }).filter((m) => -daysUntil(m.date, today) <= MISS_MEMORY_DAYS);
-  const completed = recent.length ? completedOn(state, lift) : [];
-  for (const miss of recent) {
-    if (completed.some((x) => x.date > miss.date && x.load >= miss.load - 1e-9)) continue;
+  for (const miss of standingMisses(state, lift, { today })) {
     const cap = miss.load - step;
     if (cap < value) { value = cap; basis = 'miss'; cappedBy = miss; }
   }
 
   return { value: +value.toFixed(2), basis, estimate: est?.value ?? null, reliable: !!est?.reliable,
            tested, recorded: known, ceiling, cappedBy };
+}
+
+/**
+ * Misses that still count as evidence about a weight: recent enough to remember
+ * (`MISS_MEMORY_DAYS`), and not since answered by a completed rep at that load
+ * or more. Newest first.
+ *
+ * One definition, used both by the working max — which holds itself under these
+ * — and by `goalPace`, which will not call a goal "already yours" while one of
+ * them sits at or above it.
+ */
+function standingMisses(state, lift, { today = todayISO() } = {}) {
+  const recent = missedAttempts(state, { lift }).filter((m) => -daysUntil(m.date, today) <= MISS_MEMORY_DAYS);
+  if (!recent.length) return [];
+  const completed = completedOn(state, lift);
+  return recent.filter((miss) => !completed.some((x) => x.date > miss.date && x.load >= miss.load - 1e-9));
+}
+
+/**
+ * The max that easy work and meet attempts are built from: the lower of the
+ * app's working max and the max the lifter has recorded, whatever its source.
+ *
+ * `workingMaxDetail` is the right number for a heavy day and the wrong one for
+ * an easy one, and the reason is where the RPE calls it rests on were made. On a
+ * strength day the first set lands at RPE 8 or 9, close enough to failure that
+ * lifters rate it accurately (Zourdos et al. 2016, JSCR 30(1); 2021, JSCR
+ * 35(S1)), and the day autoregulates from that set anyway — a load that comes
+ * out a notch heavy is corrected by the set that follows it. A technique day is
+ * written at RPE 5, "4-6 reps shy of failure" (Helms, Pyramid Training v2,
+ * p. 242), which is exactly where calls are least reliable and where nothing on
+ * the day pushes back: an RPE-5 triple is completable at almost any load, so it
+ * never fails, and it never tells the app it was wrong. The book's answer is to
+ * use %1RM alongside RPE rather than instead of it (pp. 65-66, 217), and a
+ * percentage is only as good as the max it is a percentage *of*.
+ *
+ * So where being wrong costs something in one direction only, the app picks the
+ * direction that is free. An easy day that comes out a little light costs
+ * nothing; one that comes out heavy costs fatigue, in the one block where
+ * fatigue decides the meet. The same asymmetry holds for an opener. And it
+ * closes a hole that was not hypothetical: a lifter who *lowered* their own
+ * deadlift in Settings, from 181 to 175.7, was answered by the app dropping the
+ * figure it had been treating as a ceiling and prescribing from a higher
+ * estimate instead. Lowering your own number must never make the app heavier.
+ *
+ * No drift is added to the recorded figure. Easy work does not chase growth —
+ * it is not trying to progress, it is trying to stay easy — so it moves when a
+ * new max is recorded, on a test day or in Settings, and not because a week
+ * went by. Heavy days keep the working max and carry on progressing off it.
+ *
+ * But a record only binds while it is recent: `RECORD_BINDS_DAYS` from its own
+ * date, and never when it has no date. A number the lifter wrote down is the
+ * best evidence there is in the weeks after they wrote it, and a stale one is
+ * not evidence of anything — a lifter who tested 140 in January and has
+ * trained honestly since would otherwise open a meet in April off January,
+ * fifteen kilos light, with every heavy card warning them and the coach
+ * calling their calls light. Once the record ages out this returns the
+ * working max exactly, ceiling and all, as though it had never been consulted.
+ *
+ * Returns the working detail, with `working` (the working value) added; when the
+ * recorded max is the lower of the two, `value` is the recorded figure and
+ * `basis` is 'recorded'. `recorded` stays what `workingMaxDetail` puts there —
+ * the record itself, with its date and source.
+ */
+export function easyMaxDetail(state, lift, { today = todayISO() } = {}) {
+  return easyFromWorking(state, lift, workingMaxDetail(state, lift, { today }), today);
+}
+
+/**
+ * How long a max the lifter recorded holds the easy max, the attempts and the
+ * heavy-card check down, counted from the record's own date.
+ *
+ * Six weeks is long enough to carry a max recorded before a peak through to the
+ * meet it was recorded for — the book's peak is four weeks (Helms, Pyramid
+ * Training v2, p. 245) and the test sits a week or two before it — and short
+ * enough that a lifter who has trained a whole cycle since is not held to it.
+ * The window deliberately does not grow the record by the program's weekly
+ * rate while it binds: over a taper that allowance reaches the flattering
+ * estimate by meet week, which is exactly the day it must not.
+ */
+export const RECORD_BINDS_DAYS = 42;
+
+/** Whether the lifter's record for `lift` is recent enough to bind. Undated records never do. */
+function recordBinds(state, lift, today = todayISO()) {
+  const rec = state?.maxes?.[lift];
+  if (!(Number(rec?.value) > 0) || !rec.date) return false;
+  const age = -daysUntil(rec.date, today);
+  return age != null && Number.isFinite(age) && age <= RECORD_BINDS_DAYS;
+}
+
+/** `easyMaxDetail` with the working max already in hand, so a caller resolving a whole day computes it once. */
+function easyFromWorking(state, lift, working, today = todayISO()) {
+  if (!working) return null;
+  const recorded = Number(state?.maxes?.[lift]?.value);
+  if (recorded > 0 && recorded < working.value - 1e-9 && recordBinds(state, lift, today)) {
+    return { ...working, value: recorded, basis: 'recorded', working: working.value };
+  }
+  return { ...working, working: working.value };
 }
 
 /**
@@ -747,31 +916,165 @@ export function maxBasisLabel(detail, lift) {
   if (!detail) return null;
   // A max is an estimate rather than something anyone loads, so it is shown to a
   // tenth and is not snapped to the plate grid.
-  const v = String(+detail.value.toFixed(1));
+  const v = String(Math.round((Number(detail.value) + 1e-9) * 10) / 10);
+  // Dates in the same form as every other date on the screen (`fmtDate`), not
+  // as ISO — this phrase sits in a paragraph next to "Oct 16" and "Sep 8".
   if (detail.basis === 'miss') {
-    return `your ${lift} max, ${v} — held under the ${fmtLoadBare(detail.cappedBy.load)} you loaded and missed on ${detail.cappedBy.date}`;
+    return `your ${lift} max, ${v} — held under the ${fmtLoadBare(detail.cappedBy.load)} you loaded and missed on ${fmtDate(detail.cappedBy.date)}`;
   }
   if (detail.basis === 'tested') {
-    return `your tested ${lift} max, ${v}${detail.tested?.date ? ` from ${detail.tested.date}` : ''}`;
+    return `your tested ${lift} max, ${v}${detail.tested?.date ? ` from ${fmtDate(detail.tested.date)}` : ''}`;
+  }
+  // From `easyMaxDetail`: the lifter's own number, lower than the app's.
+  if (detail.basis === 'recorded') {
+    return `the ${lift} max you recorded, ${v}${detail.recorded?.date ? ` on ${fmtDate(detail.recorded.date)}` : ''}`;
   }
   return `your ${lift} max, ${v}, estimated from your recent sets`;
+}
+
+/* ---- the lifter's own numbers ----------------------------------------- */
+
+/** The lowest RPE the Update maxes sheet offers; a set called lighter is too far from failure to read a max off. */
+const MAX_SHEET_MIN_RPE = 7;
+
+/**
+ * What the Update maxes sheet shows for one lift before anything is typed:
+ * `{ load, reps, rpe, touched: false }`.
+ *
+ * The sheet shows the set a max came from and the estimate that set implies,
+ * so the prefill has to imply the max that is actually on file. It did not. A
+ * record with no set behind it — a known max typed in at onboarding, or one
+ * written before `fromLoad` existed — was prefilled as its value "× 3 @ RPE 9",
+ * which reads a 150 kg squat as 168.2; and because the sheet saved every lift
+ * whether or not it had been touched, opening it and pressing Save raised a max
+ * nobody had changed by eighteen kilos.
+ *
+ * So the set on file is used only when it reproduces the value on file, and
+ * otherwise the value itself is shown as a single at RPE 10 — the one set whose
+ * estimate *is* its load. A record that has neither gets the book's preferred
+ * test shape, a triple at RPE 9, for the lifter to fill in.
+ */
+export function maxDraftFor(record) {
+  const m = record || {};
+  const value = Number(m.value) > 0 ? Number(m.value) : null;
+  const load = Number(m.fromLoad) > 0 ? Number(m.fromLoad) : null;
+  if (load != null) {
+    const reps = Number(m.reps) >= 1 ? Math.round(Number(m.reps)) : 1;
+    const rpe = m.fromRPE != null && Number.isFinite(Number(m.fromRPE)) ? normalizeRPE(m.fromRPE) : 10;
+    const est = e1RM(load, reps, rpe);
+    const agrees = value == null || (est && Math.abs(Math.round(est * 10) / 10 - value) < 0.051);
+    if (agrees && rpe >= MAX_SHEET_MIN_RPE) return { load, reps, rpe, touched: false };
+  }
+  if (value != null) return { load: value, reps: 1, rpe: 10, touched: false };
+  return { load: '', reps: 3, rpe: 9, touched: false };
+}
+
+/**
+ * Save what the lifter typed into Update maxes. Mutates `state`, so call it
+ * inside `store.update`. `drafts[lift]` is `{ load, reps, rpe, touched }`;
+ * returns `[{ lift, value, source }]` for the lifts it rewrote.
+ *
+ * Two rules, and both are the lifter's number being taken at its word.
+ *
+ *  - **Only a lift the lifter touched is rewritten.** The sheet used to save all
+ *    three, each stamped `estimated` and dated today. Lowering one deadlift
+ *    therefore also demoted a squat tested three days earlier from a measured
+ *    max to a guess, which lifted the ceiling off it, and the app went back to
+ *    prescribing from a higher RPE-derived estimate: a lifter who took his own
+ *    numbers *down* on 10 and 13 September was handed heavier easy days for
+ *    it. An untouched lift keeps its record exactly — value, date and source.
+ *
+ *  - **A single at RPE 10 is saved as `entered`.** That is a weight the lifter
+ *    has done, which is precisely what `MEASURED_MAX` means by the word — "they
+ *    know this number because they have done it" — so it acts as a ceiling on
+ *    the working max from today. So is a measured max the lifter *lowers*,
+ *    whatever set they lower it with: that is their number overruling a
+ *    measurement downward, and demoting it to an estimate would lift the
+ *    ceiling it was put there to be. Anything else is an estimate off a table,
+ *    the same kind of number the app makes itself, and is saved as one.
+ *
+ * One case sits between the two. A lift whose boxes were edited and then put
+ * back to exactly what the sheet prefilled is the set already on file; saving
+ * it is a statement about that set, not a new one. If the record is already a
+ * measurement it is left alone: rewriting it would re-date it, and a tested
+ * triple would come back as an estimate — the demotion this function exists to
+ * stop — over an edit the lifter undid. If it is an estimate, the save goes
+ * through, because that is how a lifter whose 150 was filed as a guess says
+ * "I did this one": the same single at RPE 10, saved on purpose, is `entered`.
+ */
+export function applyMaxUpdate(state, drafts, { today = todayISO() } = {}) {
+  const changed = [];
+  if (!state.maxes) state.maxes = {};
+  for (const lift of ['squat', 'bench', 'deadlift']) {
+    const d = drafts?.[lift];
+    if (!d?.touched) continue;
+    const load = parseNum(d.load);
+    const repsIn = parseNum(d.reps);
+    const reps = repsIn >= 1 ? Math.round(repsIn) : 1;
+    const rpeIn = parseNum(d.rpe);
+    const rpe = rpeIn == null ? 10 : normalizeRPE(rpeIn);
+    const est = load > 0 ? e1RM(load, reps, rpe) : null;
+    if (!est) continue;
+    const onFile = state.maxes[lift];
+    const prefill = onFile?.value > 0 && MEASURED_MAX.has(onFile.source) ? maxDraftFor(onFile) : null;
+    if (prefill && Math.abs(parseNum(prefill.load) - load) < 1e-9 && prefill.reps === reps && prefill.rpe === rpe) continue;
+    const value = Math.round(est * 10) / 10;
+    // Taking a measured max *down* is the lifter overruling a measurement with
+    // their own, lower number, and it keeps the measurement's authority: saved
+    // as an estimate it would stop being a ceiling, and the working max would
+    // climb back to the RPE-built figure the lifter was correcting.
+    const lowered = MEASURED_MAX.has(onFile?.source) && value < Number(onFile.value) - 1e-9;
+    const source = (reps === 1 && rpe === 10) || lowered ? 'entered' : 'estimated';
+    state.maxes[lift] = { value, date: today, source, reps, fromLoad: load, fromRPE: rpe };
+    changed.push({ lift, value, source });
+  }
+  return changed;
 }
 
 /**
  * Opener, second and third for one lift, plus the ramp to get there.
  *
- * Openers and seconds come off the RPE table rather than off flat percentages:
- * a weight you could triple *is* your opener, and the table already knows what
- * that is relative to a max. The third is the next thing you have not done —
- * one increment past the estimate, because a PR attempt that is not a PR is a
- * wasted attempt.
+ * The book's rule, made literal: "open with your current 3RM, do your current
+ * 2RM as a second attempt, and then go for the next incremental personal
+ * record" (Helms, Pyramid Training v2, p. 141). Openers and seconds come off
+ * the RPE table rather than off flat percentages — a weight you could triple
+ * *is* your opener, and the table already knows what that is relative to a
+ * max. The third is the next thing you have not done: one increment past the
+ * max, because a PR attempt that is not a PR is a wasted attempt.
+ *
+ * The max is `easyMaxDetail`'s — the lower of the working max and the one the
+ * lifter recorded — and not the working max on its own. The rule is stated
+ * against a *personal record*, which is a number the lifter has, not one the
+ * app has inferred; and the loss is as lopsided here as it is on an easy day.
+ * An opener a notch light is a free first lift and a total on the board. An
+ * opener a notch heavy is the attempt the whole meet stands on, at a weight
+ * the app got by believing an RPE call: a working max of 185 read off a
+ * five-rep set at "RPE 8" opened a lifter at 170 — his best-ever pull — with a
+ * recorded max of 175.7 and a miss at 180 the month before.
  *
  * Every number is rounded onto the lifter's own plate grid. These are loads
  * someone walks up to a bar and lifts; a figure they cannot load is not an
  * attempt, it is a suggestion.
+ *
+ * `test` is a test day, and there the third is different. On a test day the
+ * lifter is alone with the plan — meet day has the board and `attemptAdvice`
+ * re-pricing the third off how the second moved; a test day has neither — and
+ * the whole reason for the day is to find out whether the recorded max is still
+ * true. A third one increment past the recorded max can only ever re-measure
+ * it: a lifter whose recorded 175.7 is stale by ten kilos would be handed a
+ * third they could double, and the test would come back "175.7, confirmed".
+ * So when the working max is the higher of the two, the third moves one more
+ * increment toward it — and only one. The working max is built from RPE calls,
+ * and for a lifter whose calls run light it is exactly the number that must not
+ * set a weight unchecked: taken whole it put a 187.5 third after a 167.5 second,
+ * seven and a half kilos past a 180 he had missed. One step keeps the third a
+ * real PR attempt past the recorded max without making the second meaningless
+ * as a test of it. The opener and second stay on the conservative base — they
+ * are the attempts the day stands on. The note under the third says to take it
+ * only if the second moved. `thirdFrom` says which max nudged it, when one did.
  */
-export function attemptsFor(state, lift, { max = null, platform = true } = {}) {
-  const est = max ?? bestMaxFor(state, lift);
+export function attemptsFor(state, lift, { max = null, platform = true, test = false } = {}) {
+  const est = max ?? easyMaxDetail(state, lift)?.value ?? null;
   if (!est) return null;
   const opts = {
     barWeight: state.profile.barWeight,
@@ -794,6 +1097,22 @@ export function attemptsFor(state, lift, { max = null, platform = true } = {}) {
   const opener = roundToLoadable(loadFor(est, 3, 10), grid);
   const second = roundToLoadable(loadFor(est, 2, 10), grid);
   let third = roundToLoadable(est + inc, grid);
+  let thirdFrom = null;
+  if (test && max == null) {
+    const working = workingMaxDetail(state, lift);
+    if (working?.value > est + 1e-9) {
+      // At most one increment further than the conservative third. The
+      // working max is the RPE-built figure — for a lifter whose calls run
+      // light, a five at "RPE 8" read as 185 when he had missed 180 — so it
+      // may nudge the third up a step, and never turn a test into a 20 kg
+      // leap from the second with nothing on the day to check it.
+      const fromWorking = Math.min(roundToLoadable(working.value + inc, grid), roundToLoadable(third + inc, grid));
+      if (fromWorking > third) {
+        third = fromWorking;
+        thirdFrom = { value: working.value, basis: working.basis };
+      }
+    }
+  }
   // Rounding can collapse the jumps; keep them ordered and distinct, or the
   // lifter is handed the same weight three times.
   const step = platform ? inc : Math.max(inc, minIncrement(state.profile.plates, { microplates: state.profile.microplates }));
@@ -807,7 +1126,359 @@ export function attemptsFor(state, lift, { max = null, platform = true } = {}) {
     .map((w) => ({ reps: w.reps, load: roundToLoadable((opener * w.pct) / 100, opts), pct: w.pct }))
     .filter((w, i, xs) => i === 0 || w.load > xs[i - 1].load);
 
-  return { lift, max: est, opener, second: second2, third, ramp, platform };
+  return { lift, max: est, opener, second: second2, third, thirdFrom, ramp, platform };
+}
+
+/* ---- a number on one lift, and the weeks between here and it ---------- */
+
+/**
+ * Where "behind the pace" turns into "a different kind of number".
+ *
+ * Being short of the line is ordinary — it is what a goal is for, and the app
+ * should say so without alarm. Needing more than twice what the block claims to
+ * add is not a shortfall on the same plan, and it is worth telling the two
+ * apart: a lifter warned in the same tone every session for four weeks stops
+ * reading the warning well before the week it matters.
+ */
+const OUTSIZED_GOAL_RATIO = 2;
+
+/**
+ * The goal the lifter has set for one lift, or null.
+ *
+ * Read through a function because a program built before goals existed does
+ * not have the field at all, and every caller would otherwise have to remember
+ * that.
+ */
+export function goalFor(state, lift) {
+  const v = Number(state?.program?.goalLifts?.[lift]);
+  return v > 0 ? v : null;
+}
+
+/** Store or clear one lift's goal. Mutates, so call it inside `store.update`. */
+export function setGoalFor(state, lift, value) {
+  const program = state?.program;
+  if (!program) return null;
+  if (!program.goalLifts) program.goalLifts = { squat: null, bench: null, deadlift: null };
+  const v = Number(value);
+  program.goalLifts[lift] = v > 0 ? v : null;
+  return program.goalLifts[lift];
+}
+
+/**
+ * The miss that stands against a goal, or null: loaded within
+ * `RECORD_BINDS_DAYS`, at the goal weight or less than one platform step above
+ * it, and not answered since — on that day or after — by a completed rep at the
+ * goal or more.
+ *
+ * The upper bound is what keeps this honest in the other direction. A miss at
+ * 182.5 on a day 180 went up says nothing against a 180 goal: the lifter has
+ * lifted it. Only a miss that could hold the max under what the goal needs is
+ * evidence against it.
+ */
+function goalMissFor(state, lift, goal, platformStep, today = todayISO()) {
+  const misses = missedAttempts(state, { lift })
+    .filter((m) => -daysUntil(m.date, today) <= RECORD_BINDS_DAYS)
+    .filter((m) => m.load >= goal - 1e-9 && m.load < goal + platformStep - 1e-9);
+  if (!misses.length) return null;
+  const done = completedOn(state, lift);
+  return misses.find((m) => !done.some((x) => x.date >= m.date && x.load >= goal - 1e-9)) || null;
+}
+
+/**
+ * A goal on one lift, turned into a schedule you can check today's bar against.
+ *
+ * "I want 180" is a sentence about a day in October. What a lifter standing in
+ * a rack in September can act on is a weight, and the arithmetic between the
+ * two is short enough that nobody does it and important enough that it decides
+ * whether the goal happens.
+ *
+ * Three steps, each borrowed from something already in here rather than
+ * invented for this:
+ *
+ *  - **What max the goal asks for.** A goal is a third attempt — the next thing
+ *    you have not done — because that is what `attemptsFor` makes a third, and
+ *    a goal that resolved to a different weight than the attempt card prints
+ *    would be two apps arguing. So `maxNeeded` is the goal minus one platform
+ *    increment, and the invariant is exact: a lifter whose max — the one the
+ *    attempt card is built from — reaches `maxNeeded` gets the goal printed as
+ *    their third attempt.
+ *
+ *  - **Where that max has to be today.** The program adds `driftPerWeek` to a
+ *    lift per week and says so — it is literally what `startNextCycle` and the
+ *    wave do, not a forecast. Walking that back from meet day gives the figure
+ *    the max has to be at *now* to arrive on time, and that figure is what
+ *    today's loads get priced from.
+ *
+ *  - **How far off the pace it is.** `requiredPerWeek` is what closing the
+ *    remaining gap would actually take, and `perWeekShortfall` is how much
+ *    faster than the program's own claimed rate that is. Note that "is the
+ *    lifter on the line" and "does the goal fit in the weeks left" are the same
+ *    inequality written twice — `have >= maxNeeded - perWeek * weeksOut` — so
+ *    this deliberately does not report them as two findings. What is genuinely
+ *    separate is the *size* of the miss, and `outsized` is the only threshold
+ *    here: a goal needing more than twice what the block adds is not a plan
+ *    with a shortfall, it is a different kind of number, and it is told apart
+ *    so the app can stop crying wolf about the ordinary kind.
+ *
+ * `have` comes from `easyMaxDetail`, never from a bare estimate: the whole
+ * point of measuring against a goal is that the measurement pushes back. It is
+ * the easy max rather than the working max for the invariant above — that is
+ * the figure `attemptsFor` builds the card from, so "have reaches maxNeeded"
+ * and "the goal is printed as your third" stay the same statement. Measured
+ * against the working max instead, a lifter with a recorded 175.7 and an
+ * RPE-inferred 185 was told "180 kg is already in your deadlift — nothing left
+ * to build" beside an attempt card whose third was 177.5.
+ *
+ * `reached` also needs the bar to agree. A goal the lifter loaded and missed,
+ * and has not since answered with a rep at that weight or more, is not
+ * "carried by your max" however the arithmetic comes out — and it can come out
+ * exactly level, because the working max is itself held one platform step under
+ * the miss, which is `maxNeeded` to the kilo. The miss counts for this meet's
+ * preparation (`RECORD_BINDS_DAYS`), not only the working max's three weeks: a
+ * 180 missed on 8 September was otherwise forgotten on the 30th and the goal
+ * line went back to calling it done. `goalMiss` is that attempt, for the note
+ * to name — see `goalMissFor` for which misses count.
+ *
+ * In the final week (`inFinalWeek`) there is no second week to spread the gap
+ * over, so `requiredPerWeek` is the whole of it — due by meet day, not "a
+ * week" — rather than the gap divided by a fraction, which doubled it on the
+ * card three and a half days out.
+ */
+export function goalPace(state, lift, { today = todayISO() } = {}) {
+  const program = state?.program;
+  const goal = goalFor(state, lift);
+  if (!goal || !program?.meetDate) return null;
+  const days = daysUntil(program.meetDate, today);
+  if (days == null) return null;
+
+  // The platform's increment, not the lifter's plates: a goal is a weight you
+  // declare on a card, and every federation moves in 2.5 kg / 5 lb.
+  const platformStep = state.profile?.units === 'lb' ? 5 : 2.5;
+  const maxNeeded = +(goal - platformStep).toFixed(2);
+  const weeksOut = Math.max(0, days / 7);
+  const perWeek = driftPerWeek(state, lift);
+  const detail = easyMaxDetail(state, lift, { today });
+  // A recorded max does not move with training — only a test day or Settings
+  // moves it — so walking the line back from meet day at the program's weekly
+  // rate would measure a number that cannot move against one that moves every
+  // day, and "on track" would decay with the calendar alone. Against a
+  // recorded max the line is simply the max the goal needs.
+  const frozen = detail?.basis === 'recorded';
+  const needNow = frozen ? maxNeeded : +Math.max(0, maxNeeded - perWeek * weeksOut).toFixed(2);
+  const have = detail?.value ?? null;
+  const gap = have == null ? null : +(needNow - have).toFixed(2);
+  const toGo = have == null ? null : +(maxNeeded - have).toFixed(2);
+  const inFinalWeek = weeksOut < 1;
+  const requiredPerWeek = toGo == null ? null : +(inFinalWeek ? toGo : toGo / weeksOut).toFixed(2);
+
+  const goalMiss = goalMissFor(state, lift, goal, platformStep, today);
+  const reached = toGo != null && toGo <= 1e-9 && !goalMiss;
+  return {
+    lift, goal, meetDate: program.meetDate, days,
+    weeksOut: +weeksOut.toFixed(2),
+    maxNeeded, needNow, perWeek: +perWeek.toFixed(2),
+    have, detail, gap, toGo, requiredPerWeek,
+    /** Under a week to go: `requiredPerWeek` is the whole gap, due by meet day. */
+    inFinalWeek,
+    /** `have` is the lifter's recorded max, which training does not move — see above. */
+    frozen,
+    /** A recent, unanswered miss at or above the goal — see above. */
+    goalMiss,
+    /** Already at or past the figure this week needs. */
+    onTrack: gap != null && gap <= 1e-9,
+    /** Already at or past the figure the *goal* needs, with no standing miss against it. */
+    reached,
+    /** How much faster than the block's own rate the rest of the gap would need. */
+    perWeekShortfall: requiredPerWeek == null || reached ? null
+      : +(requiredPerWeek - perWeek).toFixed(2),
+    /** Off the pace by a different order of magnitude — see `OUTSIZED_GOAL_RATIO`. */
+    outsized: !reached && requiredPerWeek != null && perWeek > 0
+      && requiredPerWeek > perWeek * OUTSIZED_GOAL_RATIO,
+    past: days < 0,
+  };
+}
+
+/**
+ * Today's prescribed sets, priced against the goal.
+ *
+ * Takes a slot as `resolveDay` returns it, so the reps and the RPE are the ones
+ * actually on the card — a deloaded slot asks a different question from a
+ * loading one and must not be priced as though it were loading.
+ *
+ * `load` is what a lifter who was exactly on schedule would have on the bar for
+ * this set, and it is rounded onto *this exercise's* grid, because "you should
+ * be hitting X" is a prescription like any other and a weight that cannot be
+ * loaded is not a target, it is noise.
+ *
+ * `impliedRPE` is the number that keeps this honest. It reads `load` back
+ * against the max the app actually trusts, so the app can say "that is RPE 9.5
+ * for you today" instead of pretending a goal changes what a weight feels like.
+ *
+ * `cardImpliedRPE` reads the *card's* load back against the max the session
+ * banner judges it by (`heavyCheckMax`: the lower of the card's own rating max
+ * and the recorded one — on a card from `resolveDay` that is `have`), and it
+ * outranks everything else here. A goal line that says "you are ahead — take
+ * the prescription as written" under a card the session banner is already
+ * telling the lifter to take down is the app contradicting itself on one
+ * screen, and the lifter will believe whichever half they wanted to. So when
+ * the card reads heavy by the banner's own test (`readsHeavy`, one
+ * `CARD_RPE_SLACK` over its target) the verdict is `cardHeavy`, whatever the
+ * pace says, and `rpeLoad` — `cardDropLoad`, the same weight the banner names —
+ * is the weight to take it down to.
+ *
+ * Null when there is no max to price against: a line with nothing on the other
+ * end of it is not a target.
+ */
+export function goalTargetFor(state, slot, { today = todayISO(), pace = null } = {}) {
+  const lift = slot?.slot?.lift || null;
+  if (!lift || !(slot.reps > 0)) return null;
+  const p = pace || goalPace(state, lift, { today });
+  if (!p || p.past || !(p.needNow > 0) || !(p.have > 0)) return null;
+
+  const rpe = slot.targetRPE ?? (slot.rpeRange ? (slot.rpeRange[0] + slot.rpeRange[1]) / 2 : null);
+  if (rpe == null) return null;
+
+  const grid = loadOptsFor(state, slot.exerciseId);
+  const load = roundToLoadable(loadFor(p.needNow, slot.reps, rpe), grid);
+  if (!(load > 0)) return null;
+
+  const planned = slot.plannedLoad ?? null;
+  const delta = planned == null ? null : +(load - planned).toFixed(2);
+  const impliedRPE = rpeFor(p.have, load, slot.reps);
+  // The card is judged exactly as the session banner judges it — same max, same
+  // threshold, same weight to come down to — so the two cannot disagree about it.
+  const check = heavyCheckMax(slot)?.value ?? p.have;
+  const cardImpliedRPE = planned > 0 ? rpeFor(check, planned, slot.reps) : null;
+  const rpeLoad = cardDropLoad(state, slot) ?? roundToLoadable(loadFor(check, slot.reps, rpe), grid);
+  const cardHeavy = planned > 0 && readsHeavy(check, planned, slot.reps, rpe);
+
+  // `verdict` answers one question only: is the line's weight inside the set
+  // that is already on the card? That is a different question from how far
+  // behind the line the lifter is, because the plate grid and the RPE table
+  // both have a resolution. A 2.5 kg gap on a 177.5 max is 1.4% — finer than
+  // either — so a lifter who is genuinely short on the max can still be handed
+  // a target identical to their prescription, and telling them to chase
+  // something heavier would be inventing a difference the equipment cannot
+  // express. `pace.outsized` is what carries the size of the gap instead.
+  const verdict = cardHeavy ? 'cardHeavy'
+    : p.onTrack ? 'ahead'
+    : impliedRPE != null && impliedRPE <= rpe + RPE_TOLERANCE ? 'close'
+    : 'behind';
+
+  return { lift, pace: p, sets: slot.sets, reps: slot.reps, rpe, load, planned, delta, impliedRPE,
+           cardImpliedRPE, rpeLoad, verdict };
+}
+
+/* ---- "this card is too heavy": one threshold, one max, one weight ------ */
+
+/**
+ * How far over its own target RPE a weight may read before the app says it is
+ * too heavy for the card — one RPE, used by both of the places that say it: the
+ * session's "Check this weight" banner (views/session.js `weightWarning`, via
+ * `readsHeavy`) and the goal line's `cardHeavy` verdict (`goalTargetFor`, via
+ * the same). There used to be a copy of this number in each, and a copy of the
+ * max it is measured against too, and the two had drifted: on a 165 × 2 at
+ * RPE 8 the goal line said "take the top set down to 157.5" while the banner
+ * underneath it said nothing at all.
+ *
+ * A point either way is ordinary noise in a rating out of ten, and the table's
+ * own window around a prescription is half that (`RPE_TOLERANCE`), so one RPE
+ * over is a weight that is no longer the set on the card.
+ */
+export const CARD_RPE_SLACK = 1;
+
+/**
+ * The max a card's weight is judged "too heavy" against: the lower of the
+ * slot's `rateBasis` and the lifter's recorded max, as `{ value, basis, lift }`.
+ *
+ * On easy work that is `rateBasis` itself — it is already `easyMaxDetail`, the
+ * lower of the two. On a heavy day `rateBasis` is the working max, which the
+ * card was built from and which can sit above what the lifter has recorded on
+ * the strength of RPE calls; judged against it alone, a strength-day card can
+ * never read heavy however far past the lifter's own number it goes, because
+ * it is a percentage of the very max it is being checked against. The lower
+ * figure is the same one `goalPace` measures `have` with, so the banner and the
+ * goal line are judging the card by one number. Whether the working max *also*
+ * finds it heavy is a separate question, and the banner asks it separately —
+ * a card that is heavy against one and not the other is a disagreement to be
+ * shown, not a verdict to be handed down.
+ *
+ * It is `easyMaxDetail`'s figure, recency rule and all (`RECORD_BINDS_DAYS`), so
+ * a record months old does not flag every heavy card of a lifter who has simply
+ * got stronger since. And two maxes within one load step of each other are one
+ * max as far as this is concerned: the readout already treats them so, and a
+ * 0.6 kg difference sitting on a table boundary must not turn into "your two
+ * maxes disagree, drop 5 kg". `resolveDay` stores the answer as `checkMax`.
+ *
+ * Null on a slot with nothing to rate against.
+ */
+export function heavyCheckMax(slot) {
+  const rate = slot?.rateBasis;
+  if (!(rate?.value > 0)) return null;
+  if (slot.checkMax !== undefined) return slot.checkMax?.value > 0 ? slot.checkMax : rate;
+  return rate;
+}
+
+/**
+ * `heavyCheckMax`'s figure, worked out once while the day is resolved: the easy
+ * max when it sits more than one grid step under the max the card is rated
+ * against, and that max otherwise.
+ */
+function checkMaxFor(rateDetail, easyDetail, lift, gridStep) {
+  if (!(rateDetail?.value > 0)) return null;
+  const pick = easyDetail?.value > 0 && easyDetail.value < rateDetail.value - (gridStep || 0) - 1e-9
+    ? easyDetail : rateDetail;
+  return { value: pick.value, basis: pick.basis, lift: lift ?? null };
+}
+
+/**
+ * Whether `load` × `reps` reads more than `CARD_RPE_SLACK` over `targetRPE`
+ * against `max` — or past the top of the table, which `rpeFor` would otherwise
+ * report as a plain RPE 10 and so let through on a card written at 9.5.
+ */
+export function readsHeavy(max, load, reps, targetRPE) {
+  if (!(max > 0) || !(load > 0) || !(reps >= 1) || targetRPE == null) return false;
+  if ((load / max) * 100 > pctOf1RM(reps, RPE_MAX) + 0.05) return true;
+  const implied = rpeFor(max, load, reps);
+  return implied != null && implied > targetRPE + CARD_RPE_SLACK + 1e-9;
+}
+
+/**
+ * The weight a too-heavy card comes down to: the card's reps at the card's RPE
+ * against `heavyCheckMax`, on this exercise's grid. The banner names it and the
+ * goal line names it, and because both get it from here it is one number.
+ */
+export function cardDropLoad(state, slot) {
+  const max = heavyCheckMax(slot);
+  const rpe = slot?.targetRPE ?? (slot?.rpeRange ? (slot.rpeRange[0] + slot.rpeRange[1]) / 2 : null);
+  if (!max || rpe == null || !(slot.reps > 0)) return null;
+  const load = roundToLoadable(loadFor(max.value, slot.reps, rpe), loadOptsFor(state, slot.exerciseId));
+  return load > 0 ? load : null;
+}
+
+/**
+ * The percentage printed beside a card's load, on the Today list and in the
+ * session caption alike.
+ *
+ * On a wave slot `pct` is the book's printed band for the week and the load is
+ * built from the lifter's own anchor, so "82.5% ref" is what it says it is: a
+ * reference. On easy work it was a misprint. The load there is a percentage of
+ * the lower of the working max and the recorded one (see `easyMaxDetail`),
+ * capped by what the slot's RPE allows and rounded onto the plates — so the
+ * caption said 82.5% over a bar that was 81.7% of the lifter's own 150. It now
+ * prints what the bar actually is, of the max it was actually built from: the
+ * loaded weight over that max, which is why it can differ by a few tenths from
+ * the target percentage the load note states before rounding. The note shows
+ * both steps ("81.1% … is 121.7 — 122.5 on your plates"), so the two agree on
+ * the screen rather than looking like two answers.
+ */
+export function pctCaption(slot, state) {
+  if (!slot) return null;
+  const basis = slot.rateBasis?.value;
+  if (basis && slot.plannedLoad && isSubmaximalSlot(state, slot.slotKey)) {
+    return `${+((slot.plannedLoad / basis) * 100).toFixed(1)}% of ${+Number(basis).toFixed(1)}`;
+  }
+  return slot.pct != null ? `${slot.pct}% ref` : null;
 }
 
 /**
@@ -816,9 +1487,12 @@ export function attemptsFor(state, lift, { max = null, platform = true } = {}) {
  * A lift is trained in several slots and they can hold different exercises — a
  * front squat on the volume day, a low-bar on the strength day. The strength
  * day's main is the one that is the competition lift, so it wins; anything else
- * is a fallback for a program that does not have one.
+ * is a fallback for a program that does not have one. Null when no slot for the
+ * lift has a choice recorded; callers wanting an exercise regardless fall back
+ * to `SLOT_DEFAULTS`. Exported for the Library's calculator, which rounds onto
+ * this exercise's grid and used to carry its own copy of the rule.
  */
-function competitionChoice(state, lift) {
+export function competitionChoice(state, lift) {
   const tpl = templateOf(state.program);
   const choices = state.program?.choices || {};
   let fallback = null;
@@ -840,7 +1514,7 @@ function competitionChoice(state, lift) {
  * touches a wave anchor for one of these, so taking a heavy single on a whim
  * costs you nothing except the fatigue of having taken it.
  */
-export function resolveTestDay(state, { lifts = null, platform = false } = {}) {
+export function resolveTestDay(state, { lifts = null, platform = false, meet = false } = {}) {
   const wanted = lifts && lifts.length ? lifts : TEST_DAY.slots.map((s) => s.lift);
   const opts = {
     barWeight: state.profile.barWeight,
@@ -851,7 +1525,10 @@ export function resolveTestDay(state, { lifts = null, platform = false } = {}) {
   const slots = TEST_DAY.slots
     .filter((slot) => wanted.includes(slot.lift))
     .map((slot, i) => {
-      const a = attemptsFor(state, slot.lift, { platform });
+      // Meet day keeps the conservative third: the board and `attemptAdvice`
+      // re-price it live off the second. A test day has no such thing, so its
+      // third may come off the working max (see `attemptsFor`).
+      const a = attemptsFor(state, slot.lift, { platform, test: !meet });
       const exId = competitionChoice(state, slot.lift) || SLOT_DEFAULTS[slot.slotType] || null;
       return {
         index: i,
@@ -876,7 +1553,14 @@ export function resolveTestDay(state, { lifts = null, platform = false } = {}) {
         loadRange: null,
         loadSource: a ? 'test' : 'discover',
         loadNote: a
-          ? `Opener ${a.opener}, second ${a.second}, third ${a.third}. Take the third only if the second moved well — and change it on the spot if it did not.`
+          ? `Opener ${a.opener}, second ${a.second}, third ${a.third}.`
+            + (a.thirdFrom
+              ? ` The opener and second come off ${maxBasisLabel(easyMaxDetail(state, slot.lift), slot.lift)}; the third`
+                + ` one step further, because the app's working max (${String(+a.thirdFrom.value.toFixed(1))}) sits above it and a`
+                + ` test day is where a recorded max that has gone stale gets overturned. Only one step, because that working max`
+                + ` rests on how hard you rated your sets.`
+              : '')
+            + ' Take the third only if the second moved well — and change it on the spot if it did not.'
           : 'No estimate yet for this lift. Work up by feel and stop at the first grinder.',
         rpeCheckLoad: null,
         increment: null,
@@ -1114,6 +1798,12 @@ function resolvePeakDay(state, kind, { week, day, phase }) {
     const load = !a ? null
       : kind === 'openers' ? a.opener
       : roundToLoadable(a.opener * 0.85, loadOpts);
+    // The same readout basis `resolveDay` hands its slots, by the same rule: the
+    // primer is easy work and is read against the easy max, the opener single
+    // is a measurement and is read against the working max.
+    const working = workingMaxDetail(state, slot.lift);
+    const rate = isSubmaximalWork(dayDef, slot) ? easyFromWorking(state, slot.lift, working) : working;
+    const recorded = Number(state.maxes?.[slot.lift]?.value);
 
     return {
       index: i,
@@ -1132,6 +1822,10 @@ function resolvePeakDay(state, kind, { week, day, phase }) {
       prescription: null,
       plannedLoad: load,
       loadRange: null,
+      rateBasis: rate?.value ? { value: rate.value, basis: rate.basis, lift: slot.lift } : null,
+      checkMax: checkMaxFor(rate, easyFromWorking(state, slot.lift, working), slot.lift, loadStep(loadOptsFor(state, exId))),
+      recordedMax: recorded > 0 ? recorded : null,
+      recordedFresh: recordBinds(state, slot.lift),
       loadSource: a ? 'peak' : 'discover',
       loadNote: !a
         ? 'No estimate for this lift yet — work up by feel and stop well short.'
@@ -1170,10 +1864,12 @@ function resolvePeakDay(state, kind, { week, day, phase }) {
  * Three attempts a lift, in meet order, off the same `attemptsFor` the plan has
  * been printing for four weeks — so this is a test day with a date on it, and it
  * is built as one deliberately. What it does not share with a test day is the
- * aftermath: logging it is what ends the peak.
+ * aftermath: logging it is what ends the peak. Nor the third: a test day may
+ * reach for the working max with it, and meet day keeps the card's, because on
+ * meet day the board re-prices the third off the second (`attemptAdvice`).
  */
 function resolveMeetDay(state, { week, day, phase }) {
-  const base = resolveTestDay(state, { lifts: ['squat', 'bench', 'deadlift'], platform: true });
+  const base = resolveTestDay(state, { lifts: ['squat', 'bench', 'deadlift'], platform: true, meet: true });
   return {
     ...base,
     // Its own day definition: inheriting the test day's would have every pill
@@ -1348,6 +2044,18 @@ export function resolveDay(state, { cycle, week, day, phase } = {}) {
   const isDeload = phase === 'deload' || peak?.kind === 'taper';
   const isPainWeek = phase === 'painWeek';
 
+  // Both maxes, once per lift per day: every slot on a lift reads the same two
+  // numbers, and each one is a walk over the whole log.
+  const maxMemo = new Map();
+  const maxesOf = (lift) => {
+    if (!lift) return null;
+    if (!maxMemo.has(lift)) {
+      const working = workingMaxDetail(state, lift);
+      maxMemo.set(lift, { working, easy: easyFromWorking(state, lift, working) });
+    }
+    return maxMemo.get(lift);
+  };
+
   const slots = dayDef.slots.map((slot, i) => {
     const st = program.slots[slot.key] || {};
     const exId = program.choices[slot.key];
@@ -1446,10 +2154,18 @@ export function resolveDay(state, { cycle, week, day, phase } = {}) {
     if (peakThinned) sets = peakSetsFor(slot, program, peak?.kind);
 
     // --- load --------------------------------------------------------
+    const submaximal = isSubmaximalWork(dayDef, slot);
+    const maxes = maxesOf(slot.lift);
     const plan = plannedLoad({ state, program, slot, week: waveWeek, isDeload: slotDeload, repsRaised,
-                               inc, pct, reps, targetRPE, rpeRange, submaximal: isSubmaximalWork(dayDef, slot) });
+                               inc, pct, reps, targetRPE, rpeRange, submaximal, maxes, loadOpts });
     const planned = plan.load == null ? null : roundToLoadable(plan.load, loadOpts);
-    const loadRange = bandFor(planned, reps, targetRPE, rpeRange, loadOpts);
+    const loadRange = submaximal
+      ? easyBandFor(planned, reps, targetRPE, rpeRange, loadOpts)
+      : bandFor(planned, reps, targetRPE, rpeRange, loadOpts);
+    // The max this card's RPE is read against: the one its load was built from.
+    const rateDetail = !slot.lift ? null : submaximal ? maxes?.easy : maxes?.working;
+    const recordedMax = slot.lift && Number(state.maxes?.[slot.lift]?.value) > 0
+      ? Number(state.maxes[slot.lift].value) : null;
 
     return {
       index: i,
@@ -1467,6 +2183,14 @@ export function resolveDay(state, { cycle, week, day, phase } = {}) {
       timed: !!slot.timed,
       prescription: slot.prescription || null,
       peakThinned,
+      /**
+       * Whether *this slot* is deloaded, which is not the same question as
+       * whether the day is. Peak week 3 deloads everything the block is not
+       * made of while the strength-day mains carry on climbing, so a caller
+       * that reads `resolved.isDeload` gets the wrong answer for half the day.
+       * Anything that decides whether to push has to read this one.
+       */
+      slotDeload,
       plannedLoad: planned,
       loadRange,
       /**
@@ -1501,9 +2225,27 @@ export function resolveDay(state, { cycle, week, day, phase } = {}) {
        * triples. Left unrestricted this fired on one competition-lift slot in
        * six, almost all of them the volume day's bench, and a warning that
        * common is one nobody reads by the time it is true.
+       *
+       * Submaximal work is read against the max it was built from — the lower
+       * of the working max and the recorded one, see `easyMaxDetail` — so the
+       * figure is the cautious reading rather than the flattering one.
        */
-      impliedRPE: slot.lift && planned && reps && reps <= RELIABLE_E1RM_REPS
-        ? rpeFor(bestMaxFor(state, slot.lift), planned, reps) : null,
+      impliedRPE: rateDetail?.value && planned && reps && reps <= RELIABLE_E1RM_REPS
+        ? rpeFor(rateDetail.value, planned, reps) : null,
+      /**
+       * The max a readout on this card should rate a weight against, for a
+       * view that re-rates the load as the lifter steps it or types over it:
+       * `easyMaxDetail` on submaximal work, the working max everywhere else —
+       * the same figure `impliedRPE` above uses, so the two can never disagree
+       * about the prescription itself. Null on a slot with no competition lift.
+       */
+      rateBasis: rateDetail?.value ? { value: rateDetail.value, basis: rateDetail.basis, lift: slot.lift } : null,
+      /** The max "is this card too heavy" is judged against — see `heavyCheckMax`. */
+      checkMax: checkMaxFor(rateDetail, maxes?.easy, slot.lift, loadStep(loadOpts)),
+      /** The lifter's own recorded max for this lift, whatever its source, or null. */
+      recordedMax,
+      /** Whether that record is recent enough to bind (`RECORD_BINDS_DAYS`) — a stale one is not quoted. */
+      recordedFresh: slot.lift ? recordBinds(state, slot.lift) : false,
       loadSource: plan.source,
       loadNote: plan.note,
       rpeCheckLoad: plan.rpeCheck == null ? null : roundToLoadable(plan.rpeCheck, loadOpts),
@@ -1532,21 +2274,27 @@ export function resolveDay(state, { cycle, week, day, phase } = {}) {
 
 /**
  * Where the suggested load comes from, in priority order:
- *   0. work that is submaximal by prescription: a percentage of the working max,
- *      recomputed every week and never waved
+ *   0. work that is submaximal by prescription: a percentage of the lower of the
+ *      working max and the recorded one (`easyMaxDetail`), recomputed every week
+ *      and never waved
  *   1. the wave anchor from this cycle's week 1, plus one increment per week
  *   2. the %1RM reference against the working max
  *   3. what your own recent RPE data implies for these reps at this RPE
  *   4. nothing — you work up by feel and the app learns from it
+ *
+ * `maxes` is `{ working, easy }` for the slot's lift, computed once per day by
+ * `resolveDay`; it is looked up here when a caller does not pass it.
  */
 function plannedLoad({ state, program, slot, week, isDeload, repsRaised, inc, pct, reps, targetRPE, rpeRange,
-                       submaximal = false }) {
+                       submaximal = false, maxes = null, loadOpts = null }) {
   const st = program.slots[slot.key] || {};
   const hist = slotHistory(state, slot.key);
   const last = hist.length ? hist[hist.length - 1] : null;
 
   const targetForRPE = rpeRange ? (rpeRange[0] + rpeRange[1]) / 2 : targetRPE;
-  const detail = slotE1RMDetail(state, slot.key);
+  // The same supersession the working max applies: a reading older than the
+  // lifter's newest measured single is not what they can do now.
+  const detail = slotE1RMDetail(state, slot.key, { since: singleSinceFor(state, slot.lift) });
   const est = detail?.value ?? null;
 
   // Whether the estimate is allowed to argue with the program today.
@@ -1577,9 +2325,18 @@ function plannedLoad({ state, program, slot, week, isDeload, repsRaised, inc, pc
   //    on the day whose entire purpose is to add skill without adding fatigue.
   //
   //    Pinned to the max it finally behaves the way the day is described. The
-  //    load moves when the lifter gets stronger, and not because a week passed.
+  //    load moves when the max moves, and not because a week passed.
+  //
+  //    *Which* max is the second half of the fix. The working max is allowed to
+  //    run ahead of what the lifter has recorded on the strength of RPE calls,
+  //    and the calls it rests on are the ones this day cannot check — see
+  //    `easyMaxDetail`. So this is a percentage of the lower of the two. On the
+  //    log that prompted it, a 150 kg squat tested on 10 September and a
+  //    working max of 156.4 read off a triple from 22 August, the day asked for
+  //    127.5 x 2 "at RPE 5" with 130 at the top of its window: RPE 7 against
+  //    the number the lifter had actually squatted.
   if (submaximal && slot.lift) {
-    const max = workingMaxDetail(state, slot.lift);
+    const max = (maxes || { easy: easyMaxDetail(state, slot.lift) }).easy;
     // Two ceilings, and the lower one wins. `pct` is the book's printed band for
     // the slot; `rpePct` is what the slot's own RPE target allows. They disagree
     // by half a point of RPE at the top of the range, and on a day that exists
@@ -1587,12 +2344,40 @@ function plannedLoad({ state, program, slot, week, isDeload, repsRaised, inc, pc
     const rpePct = reps && targetForRPE ? pctOf1RM(reps, targetForRPE) : null;
     const p = pct == null ? rpePct : (rpePct == null ? pct : Math.min(pct, rpePct));
     if (max?.value && p != null) {
+      const rpe = normalizeRPE(targetForRPE);
+      // Half up, and past the float error in the product: 81.1% of 150 is
+      // 121.65, which `toFixed` alone prints as 121.6.
+      const tenth = (v) => String(Math.round((Number(v) + 1e-9) * 10) / 10);
+      const label = maxBasisLabel(max, slot.lift);
+      // The note states the arithmetic all the way to the bar: the target
+      // percentage, what it comes to, and what that loads as. The caption beside
+      // the load prints the loaded weight over the max (`pctCaption`), which is
+      // a few tenths off the target once the plates have had their say — 81.1%
+      // here, 81.7% there — and without the middle step the note and the caption
+      // read as two different answers about the same bar.
+      const exact = (max.value * p) / 100;
+      const loaded = loadOpts ? roundToLoadable(exact, loadOpts) : null;
+      const onBar = !(loaded > 0) || Math.abs(loaded - Number(tenth(exact))) < 1e-9 ? ''
+        : isLadder(loadOpts?.loading) ? ` — ${fmtLoadBare(loaded)} is the nearest it loads` : ` — ${fmtLoadBare(loaded)} on your plates`;
+      const sum = `${+p.toFixed(1)}% of ${label}, is ${tenth(exact)}${onBar}.`;
+      // Two notes, because the load moves for two different reasons. Built
+      // off the recorded figure it moves only when a new max is recorded; built
+      // off the working max — which is already the lower of the two — it moves
+      // with that. The recorded figure is only named in the second case when it
+      // is genuinely higher, so the note never offers a choice that was not one.
+      const higherRecord = max.basis !== 'recorded' && max.recorded?.value > max.value + 0.05;
+      const note = max.basis === 'recorded'
+        ? `${sum} It is built from that rather than from the app's working max, ${tenth(max.working)}, because `
+          + `easy work takes the lower of the two: an easy day that comes out light costs nothing and one that comes `
+          + `out heavy costs fatigue. It stays at RPE ${rpe} and moves when you record a new max, not when a week goes by; `
+          + `a max you record holds for six weeks from the day you record it.`
+        : sum
+          + (higherRecord ? ` That is lower than the ${tenth(max.recorded.value)} you recorded, and easy work is built from the lower of the two.` : '')
+          + ` It stays at RPE ${rpe}, so it moves when that max does, not when a week goes by.`;
       return {
-        load: (max.value * p) / 100,
+        load: exact,
         source: 'submax',
-        note: `${+p.toFixed(1)}% of ${maxBasisLabel(max, slot.lift)}. This work is meant to stay at RPE `
-            + `${normalizeRPE(targetForRPE)} forever, so it tracks your max rather than climbing week to week — `
-            + `it moves when you get stronger, not when a week goes by.`,
+        note,
         rpeCheck: null,
         lastTime: last,
       };
@@ -1644,7 +2429,7 @@ function plannedLoad({ state, program, slot, week, isDeload, repsRaised, inc, pc
 
   // 2. %1RM reference against the working max
   if (pct != null && slot.lift) {
-    const max = workingMaxDetail(state, slot.lift);
+    const max = maxes ? maxes.working : workingMaxDetail(state, slot.lift);
     if (max?.value) {
       return {
         load: (max.value * pct) / 100,
@@ -1706,6 +2491,35 @@ function bandFor(load, reps, targetRPE, rpeRange, loadOpts) {
   const high = roundToLoadable(band.high, loadOpts);
   if (low == null || high == null) return null;
   return { low: Math.min(low, high), high: Math.max(low, high), exact: low === high };
+}
+
+/**
+ * The same window for work that is meant to be easy, topped at the prescription.
+ *
+ * A window centred on the load hands the lifter a number above it, and on a
+ * technique day that number is the one that gets loaded. A lifter reading
+ * "Aim for 125 – 130" under a 127.5 prescription reads 130, and 130 x 2 against
+ * a 150 kg squat is RPE 7 on a day written at 5: the upper half of a symmetric
+ * band is exactly the half an RPE-5 day has no use for. Nothing is lost by
+ * cutting it off, because an easy set that comes out lighter than planned is
+ * still an easy set — and nothing on an easy day ever fails to tell the app it
+ * was too heavy.
+ *
+ * So the top of the window is the prescribed load itself and the bottom is the
+ * light end of the tolerance: RPE target − `RPE_TOLERANCE`, or the bottom of a
+ * declared RPE range. For a technique double off a 150 kg squat that is
+ * "Aim for 120 – 122.5".
+ */
+function easyBandFor(load, reps, targetRPE, rpeRange, loadOpts) {
+  if (load == null || !reps) return null;
+  const center = rpeRange ? (rpeRange[0] + rpeRange[1]) / 2 : targetRPE;
+  if (center == null) return null;
+  const band = loadBand(load, reps, center, { low: rpeRange ? rpeRange[0] : center - RPE_TOLERANCE, high: center });
+  if (!band) return null;
+  const low = roundToLoadable(band.low, loadOpts);
+  if (low == null) return null;
+  const lo = Math.min(low, load);
+  return { low: lo, high: load, exact: lo === load };
 }
 
 function dayLabel(tpl, dayDef, { week, cycle, phase, peak }) {
@@ -1790,6 +2604,76 @@ export function discardSession(state, sessionId) {
   if (state.activeSessionId === sessionId) state.activeSessionId = null;
   if (ses.phase === 'test' && state.program) delete state.program.testLifts;
   return { discarded: { id: ses.id, phase: ses.phase, date: ses.date, logged } };
+}
+
+/**
+ * Correct a logged set to what actually happened: the bar did not go up.
+ *
+ * The session screen has had a "missed" button since mid-September; the logs
+ * from before it do not know that. A 180 kg deadlift missed on a test day
+ * sits in them as a completed 180 x 1 @ RPE 10, and nothing in the correction
+ * sheet could fix it — it only edits loads, reps and RPEs, and only to reps
+ * above zero. So the one fact that should hold a working max down, and keep a
+ * goal from being called "already yours", was unrecordable, and an opener at
+ * the lifter's best-ever pull followed from it.
+ *
+ * This writes exactly the set `markMissed` in views/session.js writes — reps 0,
+ * no RPE, `failed`, `done` — so every reader downstream already knows what it
+ * means: `slotHistory` drops it, `missedAttempts` finds it, and the working max
+ * is held a platform step under it for `MISS_MEMORY_DAYS`. And it appends one
+ * record to `session.corrections` in the shape the correction sheet appends
+ * (`{ at, slotKey, setIndex, field, from, to }`, field 'missed'), so it shows on
+ * the session and travels with it into every backup and every sync — the
+ * caller still has to enqueue the session, as the sheet does. The record also
+ * carries `was`, the reps and RPE the set held before, because a correction
+ * that throws away what it corrected is not traceable.
+ *
+ * `missed: false` is the undo: the set's reps come back from `reps` — the
+ * number the lifter types — or, failing that, from the `was` of the correction
+ * that marked it. It does not re-run anything `completeSession` already worked
+ * out from the session, for the reason the correction sheet gives.
+ *
+ * `at` is the correction's timestamp, as the sheet writes it; `today` is
+ * accepted in its place (a date or a full ISO time), so a caller that already
+ * carries the app's notion of today can pass that. Neither changes the
+ * session's own date — the miss happened when the session did.
+ *
+ * Mutates `session`; call it inside `store.update`. Returns the correction
+ * record, or null when there was nothing to do.
+ */
+export function markSetMissed(session, slotKey, i, { at = null, today = null, missed = true, reps = null, rpe = null } = {}) {
+  const entry = (session?.entries || []).find((e) => e.slotKey === slotKey);
+  const set = entry?.sets?.[i];
+  if (!set) return null;
+  at = at || today || new Date().toISOString();
+
+  let record;
+  if (missed) {
+    if (set.failed) return null;
+    record = { at, slotKey, setIndex: i, field: 'missed', from: false, to: true,
+               was: { reps: set.reps ?? null, rpe: set.rpe ?? null } };
+    entry.sets[i] = {
+      ...set,
+      load: set.load ?? entry.plannedLoad,
+      reps: 0, rpe: null, failed: true, done: true,
+      ts: set.ts || at,
+    };
+  } else {
+    if (!set.failed) return null;
+    const marked = [...(session.corrections || [])].reverse()
+      .find((c) => c.slotKey === slotKey && c.setIndex === i && c.field === 'missed' && c.to === true);
+    const n = reps != null ? parseNum(reps) : marked?.was?.reps ?? null;
+    if (!(n > 0) || !Number.isInteger(n)) return null;
+    // An RPE typed now is range-checked rather than clamped, for the reason the
+    // correction sheet gives: clamping turns a typo into a plausible number.
+    const typed = rpe != null ? parseNum(rpe) : null;
+    if (typed != null && (typed < RPE_MIN || typed > RPE_MAX)) return null;
+    const r = typed != null ? normalizeRPE(typed) : reps == null ? marked?.was?.rpe ?? null : null;
+    record = { at, slotKey, setIndex: i, field: 'missed', from: true, to: false, was: { reps: 0, rpe: null } };
+    entry.sets[i] = { ...set, reps: n, rpe: r, failed: false, done: true };
+  }
+  session.corrections = [...(session.corrections || []), record];
+  return record;
 }
 
 /**
@@ -2545,6 +3429,18 @@ export function convertUnits(state, to) {
       start: +(Number(g.start || 0) * f).toFixed(2),
       step: +(Number(g.step) * f).toFixed(2),
     };
+  }
+
+  // The numbers the lifter is chasing. They are declarations rather than loads,
+  // so they round onto the platform's increment rather than onto a plate grid —
+  // and they have to round onto something, because a 180 kg goal left alone
+  // through a switch to pounds silently becomes a 180 lb one.
+  const goalStep = to === 'kg' ? 2.5 : 5;
+  const asGoal = (v) => Math.round((Number(v) * f) / goalStep) * goalStep;
+  if (state.program?.goalTotal > 0) state.program.goalTotal = asGoal(state.program.goalTotal);
+  for (const k of ['squat', 'bench', 'deadlift']) {
+    const g = state.program?.goalLifts?.[k];
+    if (g > 0) state.program.goalLifts[k] = asGoal(g);
   }
 
   for (const key of Object.keys(state.program?.slots || {})) {

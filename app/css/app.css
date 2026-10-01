@@ -282,6 +282,10 @@ table.tbl th {
 table.tbl td { padding: 9px 10px 9px 0; border-bottom: 1px solid var(--line-soft); }
 table.tbl td:last-child, table.tbl th:last-child { padding-right: 0; }
 table.tbl .r { text-align: right; }
+/* Eight numeric columns (the %1RM grid) have to fit a 375px phone without a
+   sideways scroll nobody knows is there. */
+table.tbl--dense { font-size: .78rem; }
+table.tbl--dense th, table.tbl--dense td { padding-right: 5px; }
 
 /* ---- misc ---- */
 .divider { height: 1px; background: var(--line-soft); border: 0; }

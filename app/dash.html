@@ -329,13 +329,35 @@ function liftTile(l) {
       <span>${esc(deltaTxt)}</span></div>
     ${sparkSVG(l.trend, color)}
     <div class="lift__foot">${l.tested != null
-      ? `Estimated from your sets. Tested max ${fmt(l.tested)} ${unit}.`
+      ? `Estimated from your sets. ${maxLine(l.maxSource, `${fmt(l.tested)} ${unit}`)}`
       : 'Estimated from your logged sets.'}</div>
   </div>`;
 }
 
+/**
+ * What to call the max on file. "Tested" only when a test day or meet put it
+ * there: a number typed into Settings — as an estimate, or even as a single the
+ * lifter says they did — is theirs, but it is not a test, and a public page
+ * saying otherwise is the page inventing a measurement. A file published before
+ * the source was sent has none, and gets the word that is true of every max.
+ */
+function maxLine(source, value) {
+  if (source === 'tested') return `Tested max ${value}.`;
+  if (source === 'estimated' || source === 'estimate') return `Recorded max ${value}, entered as an estimate.`;
+  return `Recorded max ${value}.`;
+}
+
+/**
+ * Whether the app trusts a trend point enough to plot it solid and count it:
+ * not a deload, not a set too high-rep to extrapolate from, and not work the
+ * program wrote to be easy. A technique triple is rated five reps from failure,
+ * where RPE calls are least accurate, and one called RPE 5 that was really an 8
+ * plotted a squat of 165.4 against a tested 150 — solid, and setting the scale.
+ */
+const trusted = (p) => !p.deload && !p.soft && !p.submax;
+
 function sparkSVG(trend, color) {
-  const pts = (trend || []).filter((p) => !p.deload && !p.soft && p.value > 0);
+  const pts = (trend || []).filter((p) => trusted(p) && p.value > 0);
   if (pts.length < 2) return '<div class="spark"></div>';
   const W = 200, H = 40, lo = Math.min(...pts.map((p) => p.value)), hi = Math.max(...pts.map((p) => p.value));
   const span = hi - lo || 1;
@@ -370,8 +392,9 @@ function trendChart(host) {
   const t1 = parseDate(dates[dates.length - 1]).getTime();
   const spanT = Math.max(t1 - t0, dayMs);
 
-  // Hard estimates set the scale; a deload dip must not squash the whole axis.
-  const hard = all.filter((p) => !p.deload && !p.soft);
+  // Hard estimates set the scale; a deload dip must not squash the whole axis,
+  // and a technique-day spike must not stretch it.
+  const hard = all.filter(trusted);
   const pool = hard.length ? hard : all;
   const vLo = Math.min(...pool.map((p) => p.value)) * 0.94;
   const vHi = Math.max(...pool.map((p) => p.value)) * 1.04;
@@ -407,9 +430,9 @@ function trendChart(host) {
       'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'vector-effect': 'non-scaling-stroke' }, svg);
 
     // A hollow marker means "the app does not fully trust this estimate" —
-    // a deload week, or a set too high-rep to extrapolate from.
+    // a deload week, a technique day, or a set too high-rep to extrapolate from.
     for (const p of s.pts) {
-      const soft = p.deload || p.soft;
+      const soft = !trusted(p);
       el('circle', {
         cx: px(p.date), cy: py(p.value), r: soft ? 3 : 4,
         fill: soft ? 'var(--surface)' : color, stroke: color, 'stroke-width': 2,
@@ -447,7 +470,7 @@ function trendChart(host) {
         const p = s.pts.find((q) => q.date === best);
         return p ? `<div class="tip__r"><span style="display:inline-flex;align-items:center;gap:6px">
           <span class="dot" style="background:${LIFT_COLOR[s.lift]}"></span>${esc(s.label)}</span>
-          <b>${fmt(p.value)}${p.deload || p.soft ? '*' : ''}</b></div>` : '';
+          <b>${fmt(p.value)}${trusted(p) ? '' : '*'}</b></div>` : '';
       }).join('');
       tip.innerHTML = `<div class="tip__t">${esc(fmtDate(best, { day: 'numeric', month: 'short', year: 'numeric' }))}</div>${rows || '<div class="tip__r">no lifts</div>'}`;
       placeTip(tip, svg, box, px(best), M.t);
@@ -455,13 +478,13 @@ function trendChart(host) {
     onLeave() { cross.setAttribute('opacity', 0); },
   });
 
-  const soft = all.some((p) => p.deload || p.soft);
+  const soft = all.some((p) => !trusted(p));
   if (soft) {
     const n = document.createElement('p');
     n.className = 'note';
     n.textContent = 'Hollow points are estimates the app does not fully trust — a deload week, '
-      + 'or a set with too many reps to extrapolate a single-rep max from. They are plotted for '
-      + 'completeness but excluded from the headline numbers above.';
+      + 'a technique day, or a set with too many reps to extrapolate a single-rep max from. They are '
+      + 'plotted for completeness but excluded from the headline numbers above.';
     host.appendChild(n);
   }
 }

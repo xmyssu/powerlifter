@@ -6,10 +6,10 @@ import { html, raw, esc, icon, $, $$, toast, sheet, closeSheet, fmtDate, relDays
 import { fmtLoadBare, plateBreakdown, fmtRPE } from '../rpe.js';
 import { resolveDay, startSession, templateOf, resolveAssessment, cyclePlan, loadingWeeks, resolveTestDay,
          attemptsFor, discardSession, exitPeak, loadOptsForSlot, resolvePeakPrompt, startPeakNow,
-         peakStatus, daysUntil, warmupFor, PEAK_WEEKS, PEAK_MIN_DAYS } from '../program.js';
+         peakStatus, daysUntil, warmupFor, pctCaption, PEAK_WEEKS, PEAK_MIN_DAYS } from '../program.js';
 import { DELOAD_CHECKLIST, WARMUP, RPE_SCALE, INTERMEDIATE_PL, ADVANCED_ACCUMULATION } from '../templates.js';
 import { activeInsights, sessionBriefing, readinessVerdict, READINESS_QUESTIONS, PAIN_PROTOCOL,
-         testReadiness, planTestBlock, testPromotion, restAdvice, TEST_PROMPT_QUIET_DAYS } from '../coach.js';
+         testReadiness, planTestBlock, testPromotion, restAdvice, TEST_PROMPT_QUIET_DAYS, fmtMax } from '../coach.js';
 import { byId } from '../exercises.js';
 import { buildProgram } from '../program.js';
 import { todayISO } from '../store.js';
@@ -176,7 +176,7 @@ function milestoneCard(st, rows, promo) {
           ? `<span class="pill pill--bad">missed ${n.missed.daysAgo}d ago</span>`
           : n.inRange
             ? '<span class="pill pill--good">in range</span>'
-            : `<span class="dim" style="font-weight:400">${fmtLoadBare(n.away)} ${esc(units)} away${n.weeksOff ? ` · ~${n.weeksOff} wk` : ''}</span>`}
+            : `<span class="dim" style="font-weight:400">${fmtMax(n.away)} ${esc(units)} away${n.weeksOff ? ` · ~${n.weeksOff} wk` : ''}</span>`}
       </span>
     </div>`).join('');
   }).join('');
@@ -249,8 +249,10 @@ function openTestDay(ctx) {
 
   const table = () => ['squat', 'bench', 'deadlift'].map((lift) => {
     // A test day happens in the lifter's own gym, so these have to be weights
-    // their plates can make — not the platform's 2.5 kg ladder.
-    const a = attemptsFor(st, lift, { platform: false });
+    // their plates can make — not the platform's 2.5 kg ladder. And they are
+    // the test day's attempts, whose third may reach for the working max (see
+    // `attemptsFor`), so the picker shows the day that will actually run.
+    const a = attemptsFor(st, lift, { platform: false, test: true });
     const name = { squat: 'Squat', bench: 'Bench', deadlift: 'Deadlift' }[lift];
     return `<label class="pick" style="cursor:pointer">
       <input type="checkbox" data-lift="${lift}" ${chosen.has(lift) ? 'checked' : ''} style="margin-right:10px">
@@ -404,7 +406,7 @@ function slotRow(s, i, units, st) {
       <div class="ex__num">${i + 1}</div>
       <div class="grow">
         <div class="ex__name">${esc(ex?.short || s.slot.slotType)}</div>
-        <div class="ex__role">${esc(s.role)}${s.pct != null ? ` · ${s.pct}% ref` : ''}${s.peakThinned ? ' · tapered' : ''}</div>
+        <div class="ex__role">${esc([s.role, pctCaption(s, st), s.peakThinned ? 'tapered' : null].filter(Boolean).join(' · '))}</div>
         <div class="ex__target">${raw(target)}</div>
       </div>
       <div style="text-align:right;flex:0 0 auto">

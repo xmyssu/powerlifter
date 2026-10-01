@@ -19,6 +19,8 @@
      inc            'lower' (+5 kg / +10 lb) or 'other' (+2.5 kg / +5 lb)
    ========================================================================== */
 
+import { repsLeftWords } from './rpe.js';
+
 /** Weekly load increments by unit, per p. 243. */
 export const INCREMENTS = {
   kg: { lower: 5, other: 2.5, small: 2.5, micro: 1.25 },
@@ -492,7 +494,29 @@ export const VOLUME_BY_AGE = [
   { age: 'Advanced',     sets: '16-20', freq: '3-5x / week' },
 ];
 
-/** RPE scale, p. 65. */
+/**
+ * RPE scale, after p. 65 — read as exact reps in reserve.
+ *
+ * The book's chart stops giving each point its own row below 7: it lumps RPE 5
+ * and 6 together as "4 to 6" reps left, and everything under that as very light
+ * effort. That is fine on a printed page and wrong in this app, for two reasons.
+ * The app does not use the chart's wording, it uses its definition — RPE = 10 −
+ * RIR, stated in the rpe.js header — and every percentage it prescribes or reads
+ * back is indexed on that exact figure, so to the engine RPE 6 *is* four reps
+ * left and RPE 5 *is* five. And printing both as "4-6" made the two calls look
+ * identical in the picker, on the day that is made of nothing else: the
+ * technique day is written at RPE 5, and the difference between a set with four
+ * left and one with six is the difference between technique work and a
+ * strength-day triple. RPE 4 is the app's own floor, for the primer and taper
+ * singles (see RPE_MIN in rpe.js); the book has no row for it.
+ *
+ * `left` is the short label on each button of the RPE picker — reps left, in the
+ * words a lifter would use between sets — and `meaning` is the full sentence.
+ * `left` is not written out here: it is `repsLeftWords` in rpe.js, the same
+ * phrasing the session card's readout and the Library's calculator use, so the
+ * button a lifter presses and the line that later reads the set back to them
+ * cannot describe the same RPE two different ways.
+ */
 export const RPE_SCALE = [
   { rpe: 10,  rir: '0',   meaning: 'Could not do more reps or more load.' },
   { rpe: 9.5, rir: '0+',  meaning: 'Could not do more reps, could do slightly more load.' },
@@ -501,10 +525,10 @@ export const RPE_SCALE = [
   { rpe: 8,   rir: '2',   meaning: 'Could do 2 more reps.' },
   { rpe: 7.5, rir: '2-3', meaning: 'Could definitely do 2 more reps, chance at 3.' },
   { rpe: 7,   rir: '3',   meaning: 'Could do 3 more reps.' },
-  { rpe: 6,   rir: '4-6', meaning: 'Could do 4 to 6 more reps.' },
-  { rpe: 5,   rir: '4-6', meaning: 'Could do 4 to 6 more reps. Light.' },
+  { rpe: 6,   rir: '4',   meaning: 'Could do 4 more reps.' },
+  { rpe: 5,   rir: '5',   meaning: 'Could do 5 more reps. Light — technique work.' },
   { rpe: 4,   rir: '6+',  meaning: 'Could do 6 or more reps. Primer and taper work.' },
-];
+].map((r) => ({ ...r, left: repsLeftWords(r.rpe, { short: true }) }));
 
 /**
  * The test day — a day outside the program, for going heavy on purpose.

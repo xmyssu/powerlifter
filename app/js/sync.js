@@ -19,7 +19,7 @@
 import * as store from './store.js';
 import { todayISO } from './store.js';
 import { convertLoad, e1RM, fmtLoadBare, fmtRPE, loadStep } from './rpe.js';
-import { templateOf, slotHistory, entryStalled, loadOptsFor, isSubmaximalSlot, gradeSets } from './program.js';
+import { templateOf, slotHistory, entryStalled, loadOptsFor, isSubmaximalSlot, gradeSets, singleSinceFor } from './program.js';
 import { strengthTrend } from './coach.js';
 import { nameOf } from './exercises.js';
 
@@ -508,9 +508,11 @@ function sparksFor(st, ses) {
   const from = st.profile.units;
   const out = [];
   for (const lift of lifts) {
-    // Deloads and high-rep estimates are plotted on the dashboard but never
-    // drive a headline, and a sparkline is a headline.
-    const pts = strengthTrend(st, lift).filter((p) => !p.deload && !p.estimatedFromHighReps);
+    // Deloads, high-rep estimates and technique work are plotted on the
+    // dashboard but never drive a headline, and a sparkline is a headline —
+    // `current` on it is read as "where the lift stands" — so it takes the
+    // same points `liftBlock` does.
+    const pts = strengthTrend(st, lift).filter((p) => !p.deload && !p.estimatedFromHighReps && !p.submax);
     if (pts.length < 2) continue;
     const recent = pts.slice(-8);
     out.push({
@@ -631,7 +633,8 @@ function weeklyRollup(st) {
   const kg = (v) => round3(convertLoad(v, from, 'kg'));
   const maxes = [];
   for (const lift of ['squat', 'bench', 'deadlift']) {
-    const pts = strengthTrend(st, lift).filter((p) => !p.deload && !p.estimatedFromHighReps);
+    // "Where each lift stands" on the same terms as the dashboard's headline.
+    const pts = strengthTrend(st, lift).filter((p) => !p.deload && !p.estimatedFromHighReps && !p.submax);
     const upto = (d) => { const f = pts.filter((p) => p.date <= d); return f.length ? Math.max(...f.map((p) => p.value)) : null; };
     const now = upto(weekEnd);
     const before = upto(addDays(weekKey, -1));
@@ -737,10 +740,11 @@ function totals(st, done) {
 /**
  * A lift's headline number and its history.
  *
- * `soft` and `deload` ride along per point because the app refuses to treat all
- * estimates alike — one from a set of nine, or from a deliberately light deload
- * week, is not evidence of peak capability. The dashboard renders those points
- * differently rather than letting them bend the line.
+ * `soft`, `deload` and `submax` ride along per point because the app refuses to
+ * treat all estimates alike — one from a set of nine, from a deliberately light
+ * deload week, or from technique and primer work prescribed at RPE 5, is not
+ * evidence of peak capability. The dashboard renders those points differently
+ * rather than letting them bend the line.
  */
 function liftBlock(st, { lift, label }, kg) {
   const raw = strengthTrend(st, lift);
@@ -749,21 +753,41 @@ function liftBlock(st, { lift, label }, kg) {
     value: kg(p.value),
     deload: !!p.deload,
     soft: !!p.estimatedFromHighReps,
+    submax: !!p.submax,
   }));
 
   // The headline is the best hard estimate, on the same terms the app's own
-  // Progress tab uses: nothing from a deload, nothing from a high-rep set.
-  const hard = trend.filter((p) => !p.deload && !p.soft);
-  const best = hard.length ? hard.reduce((a, b) => (b.value > a.value ? b : a)) : null;
-  const tested = st.maxes[lift] || {};
+  // Progress tab uses (`trendSummary`): nothing from a deload, nothing from a
+  // high-rep set, and nothing from work written to be easy. A technique triple
+  // is rated five reps from failure, where RPE calls are least accurate, and
+  // its estimate is the load over the 78.6% the table gives a triple at RPE 5
+  // — so 130 × 3 called a 5 that was really an 8 went out as a public squat of
+  // 165.4 against a tested 150. The points stay in `trend`, flagged, so the
+  // chart can still draw them.
+  const hard = trend.filter((p) => !p.deload && !p.soft && !p.submax);
+  // And the rule the app's own working max follows (`bestEstimateDetail`): a
+  // measured single supersedes every estimate dated before it. A squat triple
+  // read as 156.4 in August, then a tested 150 in September, is not a 156.4
+  // squat — so the headline is the best reading since the newest test single.
+  const since = singleSinceFor(st, lift);
+  const current = since ? hard.filter((p) => p.date >= since) : hard;
+  const pool = current.length ? current : hard;
+  const best = pool.length ? pool.reduce((a, b) => (b.value > a.value ? b : a)) : null;
+  const recorded = st.maxes[lift] || {};
 
   return {
     lift,
     label,
     e1rm: best ? best.value : null,
     e1rmDate: best ? best.date : null,
-    tested: tested.value != null ? kg(tested.value) : null,
-    testedDate: tested.date || null,
+    // The max the lifter has on file, whatever its source. The field is named
+    // `tested` for the dashboards already reading it; `maxSource` says what it
+    // actually is. Without it the page labelled every recorded max "Tested
+    // max" — including three typed into Settings as estimates, one of them a
+    // deadlift lowered on purpose to below a weight that was missed.
+    tested: recorded.value != null ? kg(recorded.value) : null,
+    testedDate: recorded.date || null,
+    maxSource: recorded.value != null ? recorded.source || null : null,
     change28: change(hard, 28),
     trend,
   };

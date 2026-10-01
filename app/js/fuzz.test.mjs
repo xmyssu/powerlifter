@@ -37,7 +37,7 @@ const {
   repsForWeek, pctForWeek, loadingWeeks, slotE1RM, slotE1RMDetail, slotHistory,
   lastComparable, convertUnits, templateOf, entryStalled, entryShortfall, enterPeak, peakPlanFor,
   loadOptsFor, loadOptsForSlot, startNextCycle, warmupFor, attemptsFor,
-  bestMaxFor, isSubmaximalSlot, slotTargetRPE,
+  bestMaxFor, isSubmaximalSlot, slotTargetRPE, easyMaxDetail,
   RELIABLE_E1RM_REPS, PAIN_WEEK_REPS, DELOAD_RPE_FLOOR, PEAK_WEEKS,
 } = await import('./program.js');
 const { meetProgress, targetLine, attemptAdvice } = await import('./meet.js');
@@ -505,6 +505,14 @@ for (let seed = 1; seed <= SEEDS; seed++) {
       bench: { value: Math.round(between(r, 60, 150) * scale) },
       deadlift: { value: Math.round(between(r, 110, 260) * scale) },
     };
+    // Half the lifters carry a dated record, as the Update maxes sheet and a
+    // test day write them, so the easy max's recorded-max path is swept too.
+    // Derived from the seed rather than drawn from `r`, so every other draw —
+    // and so every lifter this sweep has always generated — is unchanged.
+    if (seed % 2 === 0) {
+      const source = ['tested', 'estimated', 'entered'][seed % 3];
+      for (const k of Object.keys(s.maxes)) s.maxes[k] = { ...s.maxes[k], source, date: store.todayISO() };
+    }
     s.program = buildProgram({ templateId, emphasis: pick(r, ['balanced', 'squat', 'bench', 'deadlift']) });
   });
 
@@ -559,7 +567,13 @@ for (let seed = 1; seed <= SEEDS; seed++) {
        ------------------------------------------------------------------ */
     for (const sl of resolveDay(st, cur).slots) {
       if (!sl.slot?.lift || sl.plannedLoad == null || !sl.reps) continue;
-      const max = bestMaxFor(st, sl.slot.lift);
+      // Easy work promises its RPE against the *easy* max — the lower of the
+      // working max and a recent recorded one — so that is what it is held to.
+      // Against the working max alone this could not notice easy work being
+      // priced off the flattering figure again.
+      const max = isSubmaximalSlot(st, sl.slotKey)
+        ? easyMaxDetail(st, sl.slot.lift)?.value ?? null
+        : bestMaxFor(st, sl.slot.lift);
       const target = slotTargetRPE(sl.slot) == null ? null
         : (sl.rpeRange ? (sl.rpeRange[0] + sl.rpeRange[1]) / 2 : sl.targetRPE);
       if (!max || target == null) continue;

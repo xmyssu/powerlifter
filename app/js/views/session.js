@@ -9,11 +9,15 @@
    ========================================================================== */
 
 import { html, raw, esc, icon, $, $$, toast, sheet, closeSheet, confirmSheet, fmtDuration, haptic } from '../ui.js';
-import { fmtLoadBare, plateBreakdown, roundToLoadable, loadStep, e1RM, fmtRPE, normalizeRPE, loadFor, parseNum, convertLoad } from '../rpe.js';
+import { fmtLoadBare, plateBreakdown, roundToLoadable, loadStep, e1RM, fmtRPE, normalizeRPE, loadFor, parseNum, convertLoad,
+         rpeFor, pctOf1RM, repsLeftWords, RPE_MIN, RPE_MAX } from '../rpe.js';
 import { resolveDay, completeSession, discardSession, slotHistory, lastComparable, templateOf,
-         loadOptsFor, warmupFor } from '../program.js';
+         loadOptsFor, warmupFor, isSubmaximalSlot, isCompetitionSlot, easyMaxDetail, RELIABLE_E1RM_REPS,
+         pctCaption, heavyCheckMax, readsHeavy, cardDropLoad } from '../program.js';
 import { RPE_SCALE, REST_GUIDE } from '../templates.js';
-import { sessionBriefing } from '../coach.js';
+// `fmtMax` is the shared formatter for a max, a rate or a gap: to a tenth, never
+// snapped to the plate grid — the same one the goal line and the meet sheet use.
+import { sessionBriefing, goalNotes, fmtMax } from '../coach.js';
 import { meetProgress, targetLine, attemptAdvice, ATTEMPT_NAMES as MEET_ATTEMPT_NAMES } from '../meet.js';
 import { optionsForSlot, SLOT_INFO, byId } from '../exercises.js';
 import * as timer from '../timer.js';
@@ -21,6 +25,15 @@ import * as sync from '../sync.js';
 
 let expanded = null;      // slotKey of the open exercise card
 let unsubTimer = null;
+/**
+ * What the open card's weight readout is rated from, by slotKey — filled in by
+ * the render and read by the input handlers, so the readout can follow the
+ * lifter's typing without a store update (and so without a re-render that would
+ * take the caret away mid-number).
+ */
+const liveCards = new Map();
+/** `${sessionId}:${slotKey}` pairs already given the RPE-calibration note, so it is said once per lift per session. */
+const calibrationShown = new Set();
 
 /* ---- helpers ---------------------------------------------------------- */
 
@@ -47,7 +60,13 @@ function view(ctx) {
 
   const resolved = resolveDay(st, { cycle: ses.cycle, week: ses.week, day: ses.day, phase: ses.phase });
   const brief = sessionBriefing(resolved, st);
+  // One pass for the whole day rather than one per card: every note runs the
+  // same working-max reconciliation, and the day has at most three of them.
+  // With the loads on the cards now, so a top set already stepped down to the
+  // weight the goal line asked for is not still called too heavy.
+  const goals = goalNotes(resolved, st, { loads: Object.fromEntries(ses.entries.map((e) => [e.slotKey, e.plannedLoad])) });
   if (expanded == null) expanded = firstUnfinished(ses) || ses.entries[0]?.slotKey;
+  liveCards.clear();
 
   const totalSets = ses.entries.reduce((n, e) => n + e.sets.length, 0);
   const doneSets = ses.entries.reduce((n, e) => n + e.sets.filter((s) => s.done).length, 0);
@@ -70,7 +89,7 @@ function view(ctx) {
 
       ${raw(resolved.isMeet ? meetCard(st, ses) : '')}
 
-      ${raw(ses.entries.map((entry, i) => exerciseCard(entry, resolved, i, st, ses)).join(''))}
+      ${raw(ses.entries.map((entry, i) => exerciseCard(entry, resolved, i, st, ses, goals)).join(''))}
 
       <div class="stack-sm" style="margin-top:8px">
         <button class="btn ${allDone ? 'btn--primary' : 'btn--ghost'} btn--lg btn--block" data-finish>
@@ -165,13 +184,16 @@ function meetCard(st, ses) {
   </div>`;
 }
 
-function exerciseCard(entry, resolved, i, st, ses) {
+function exerciseCard(entry, resolved, i, st, ses, goals = []) {
   const slot = resolved.slots.find((s) => s.slotKey === entry.slotKey);
   const ex = byId(entry.exerciseId);
   const isOpen = expanded === entry.slotKey;
   const done = entry.sets.every((s) => s.done);
   const units = st.profile.units;
   const nextIdx = entry.sets.findIndex((s) => !s.done);
+  const attemptMode = !!(resolved.isTest || resolved.isMeet);
+  const rate = isOpen && !attemptMode ? rateCard(entry, slot, st, nextIdx) : null;
+  if (rate) liveCards.set(entry.slotKey, rate);
 
   const a = slot?.attempts;
   const targetStr = resolved.isTest || resolved.isMeet
@@ -196,13 +218,14 @@ function exerciseCard(entry, resolved, i, st, ses) {
 
     ${isOpen ? `<div class="ex__body">
       ${rxStrip(entry, slot, st)}
-      ${(resolved.isTest || resolved.isMeet) ? rampStrip(slot, units) : lastTimeStrip(st, entry, slot)}
-      ${nextIdx === 0 && !resolved.isTest && !resolved.isMeet ? warmupStrip(entry, st) : ''}
+      ${attemptMode ? rampStrip(slot, units) : lastTimeStrip(st, entry, slot)}
+      ${nextIdx === 0 && !attemptMode ? warmupStrip(entry, st) : ''}
       ${slot?.loadNote && nextIdx === 0 ? `<p class="cite" style="margin-bottom:10px">${esc(slot.loadNote)}</p>` : ''}
       ${coarseNote(slot, st)}
-      ${impliedRPENote(slot, entry, units)}
       ${rpeCheckNote(slot, entry, units)}
-      ${loadStepper(entry, st, { attempts: resolved.isTest || resolved.isMeet, index: Math.max(0, nextIdx), platform: !!resolved.isMeet })}
+      ${loadStepper(entry, st, { attempts: attemptMode, index: Math.max(0, nextIdx), platform: !!resolved.isMeet })}
+      ${rate ? `<div data-readout="${esc(entry.slotKey)}" aria-live="polite">${readoutInner(rate, rateInputs(rate))}</div>` : ''}
+      ${goalStrip(goals.find((g) => g.slotKey === entry.slotKey))}
       <div class="sets">
         ${entry.sets.map((s, si) => setRow(entry, s, si, si === nextIdx, units, !!(resolved.isTest || resolved.isMeet))).join('')}
       </div>
@@ -235,7 +258,7 @@ function rxStrip(entry, slot, st) {
   const caption = [
     `${entry.targetSets}×${entry.targetReps ?? '—'}`,
     rpeStr,
-    slot?.pct != null ? `${slot.pct}% ref` : null,
+    pctCaption(slot, st),
   ].filter(Boolean).join(' · ');
 
   return `<div class="rx">
@@ -246,6 +269,37 @@ function rxStrip(entry, slot, st) {
     </div>
   </div>
   ${pb ? plateStrip(pb, units) : ''}`;
+}
+
+/**
+ * The goal line, on the card of the lift it is about.
+ *
+ * On the card rather than at the top of the session, because it is a statement
+ * about *this* bar: at the top of the screen it is a slogan, and next to the
+ * weight it is a comparison. Folded into a single block with no button on it —
+ * there is nothing to tap, because the whole point is that the prescription
+ * stays the prescription and this is the context around it.
+ *
+ * It sits *after* the weight readout and its warning, not above them. Above
+ * them, the card could say "take the prescription as written" in the goal
+ * line and then, one block further down, "check this weight — take it down";
+ * the lifter reads top to bottom and acts on the first instruction. What the
+ * weight is for them comes first, and the goal is the context around it. For
+ * the same reason a goal note that has found the card itself too heavy
+ * (`cardHeavy`) is never shown in the good-news colour, whatever tone it arrives
+ * with.
+ */
+function goalStrip(note) {
+  if (!note) return '';
+  const tone = note.verdict === 'cardHeavy' && note.tone === 'good' ? 'warn' : note.tone;
+  return `<div class="insight insight--${esc(tone)}" style="margin-bottom:12px">
+    <div class="insight__icon">${icon('target')}</div>
+    <div class="grow">
+      <div class="insight__t">${esc(note.title)}</div>
+      <div class="insight__b">${esc(note.text)}</div>
+      ${note.cite ? `<p class="cite" style="margin:8px 0 0">${esc(note.cite)}</p>` : ''}
+    </div>
+  </div>`;
 }
 
 function plateStrip(pb, units) {
@@ -362,20 +416,186 @@ function coarseNote(slot, st) {
   return `<p class="cite" style="margin-bottom:10px">The smallest jump here is ${fmtLoadBare(slot.gridStep)} ${esc(st.profile.units)} — about ${weeks} weeks of this lift's ${fmtLoadBare(slot.increment)} ${esc(st.profile.units)} increment. The weight holds and then steps; that is the progression working, not stalling. Add reps inside the range rather than weight while it holds.</p>`;
 }
 
-/** How far above its own target RPE a prescribed load may sit before it is worth saying. */
-const IMPLIED_RPE_SLACK = 1;
+/* ---- what this weight is for you --------------------------------------- */
 
 /**
- * If the weight on the card is heavier than the RPE on the card, say so before
- * the set.
+ * How far above the lifter's own call the table has to put a set before the
+ * call is worth questioning out loud. A point either way is ordinary noise in a
+ * rating out of ten; a point and a half is the same margin `afterSet` uses for
+ * "you opened too heavy", and on a technique day it is the difference between
+ * the RPE 5 the day is written at and a set with three reps left in it.
+ */
+const CALIBRATION_GAP = 1.5;
+
+/** The RPE a card is asked for: a single target, or the middle of a range. */
+const targetRPEOf = (entry) => entry.targetRPE ?? (entry.rpeRange ? (entry.rpeRange[0] + entry.rpeRange[1]) / 2 : null);
+
+/**
+ * What `load` × `reps` asks of a lifter whose max is `max`, read off the same
+ * table every prescription in the app is built from.
+ *
+ * `rpeFor` pins to the ends of the table outside it, and both ends are worth
+ * naming instead of printing: "RPE 10" for a double heavier than the max says is
+ * possible, and "RPE 4" for a bar that is barely a warm-up, are each an
+ * understatement a lifter would take as the real number.
+ */
+function rateLoad(max, load, reps) {
+  const rpe = rpeFor(max, load, reps);
+  if (rpe == null) return null;
+  const pct = (load / max) * 100;
+  return {
+    rpe, pct,
+    over: pct > pctOf1RM(reps, RPE_MAX) + 0.05,
+    under: rpe <= RPE_MIN && pct < pctOf1RM(reps, RPE_MIN) - 0.05,
+  };
+}
+
+const rpeWords = (r, { about = true } = {}) => r.over ? 'past RPE 10'
+  : r.under ? `under RPE ${RPE_MIN}` : `${about ? 'about ' : ''}RPE ${fmtRPE(r.rpe)}`;
+// Reps left in the app's one phrasing (`repsLeftWords`). Under the floor the
+// table cannot count, and its floor's own words — "6+ reps left" — are the
+// true thing to say about a bar lighter than it.
+const leftWords = (r) => r.over ? 'more than that max has in it'
+  : repsLeftWords(r.under ? RPE_MIN : r.rpe);
+
+/**
+ * The max a readout is rated against, named so the lifter can tell which one it
+ * is. Only the app's own estimate is labelled: a tested, recorded or miss-capped
+ * figure is simply theirs, and the recorded one is named in full wherever it is
+ * the *other* number on the line.
+ */
+const maxWords = (basis) => basis.basis === 'estimate' ? `your estimated ${fmtMax(basis.value)}`
+  : basis.basis === 'miss' ? `your ${fmtMax(basis.value)} (held under your miss)`
+  : `your ${fmtMax(basis.value)}`;
+
+/**
+ * The app's working max, named by what it was read from — for the one line
+ * that sets it beside the recorded max and has to say which is which.
+ */
+const workingWords = (basis) => {
+  const v = fmtMax(basis.value);
+  if (basis.basis === 'estimate') return `your recent sets (${v})`;
+  if (basis.basis === 'miss') return `the app's working max (${v}, held under your miss)`;
+  if (basis.basis === 'tested') return `your tested max (${v})`;
+  return `the app's working max (${v})`;
+};
+
+/**
+ * Everything the weight readout needs, fixed when the card renders.
+ *
+ * The max comes from the resolved slot (`rateBasis`) rather than being worked
+ * out again here, so the readout and the prescription cannot disagree about
+ * which number the day was built from: the lower of the working and recorded
+ * maxes on easy work, the working max on everything else. Null on a card with
+ * no competition-lift max behind it — an accessory, or a lift with no data yet.
+ */
+function rateCard(entry, slot, st, nextIdx) {
+  const basis = slot?.rateBasis;
+  if (!basis?.value) return null;
+  const next = nextIdx >= 0 ? entry.sets[nextIdx] : null;
+  return {
+    slotKey: entry.slotKey,
+    nextIdx,
+    basis,
+    // What "too heavy" is judged against, and the weight to come down to —
+    // from program.js, so the goal line on the same card uses the same two.
+    check: heavyCheckMax(slot),
+    dropTo: cardDropLoad(st, slot),
+    recorded: slot.recordedMax,
+    recordedFresh: !!slot.recordedFresh,
+    step: loadStep(loadOptsFor(st, entry.exerciseId)),
+    target: targetRPEOf(entry),
+    prescribed: slot.plannedLoad,
+    working: entry.plannedLoad,
+    targetReps: entry.targetReps,
+    nextLoad: next?.load ?? null,
+    nextReps: next?.reps ?? null,
+    submax: isSubmaximalSlot(st, entry.slotKey),
+    units: st.profile.units,
+  };
+}
+
+/**
+ * The set the tick would log right now: the next set's own load and reps if it
+ * has them, otherwise the working load and the target — the same fallbacks
+ * `logSet` uses, so the readout describes exactly the set about to be recorded.
+ *
+ * With `root` it reads what is typed in the next set's boxes, for the input
+ * handlers; `load` is a value being typed into the stepper, which only reaches
+ * the sets when it is committed.
+ */
+function rateInputs(c, { root = null, load = null, reps = null } = {}) {
+  const k = c.nextIdx >= 0 ? `${c.slotKey}-${c.nextIdx}` : null;
+  const loadEl = root && k ? root.querySelector(`[data-set-load="${CSS.escape(k)}"]`) : null;
+  const repsEl = root && k ? root.querySelector(`[data-set-reps="${CSS.escape(k)}"]`) : null;
+  return {
+    load: load ?? (loadEl ? num(loadEl.value) : c.nextLoad) ?? c.working,
+    reps: reps ?? (repsEl ? num(repsEl.value) : c.nextReps) ?? c.targetReps,
+  };
+}
+
+/**
+ * What this weight is for you: the load about to go on the bar, as a percentage
+ * of the lifter's max and as the RPE the table says it is.
+ *
+ * The app has always had this number and has only ever used it on itself. A
+ * lifter asked for RPE 5 had to judge RPE 5 — at four to six reps shy of
+ * failure, exactly where RPE calls are least accurate (Zourdos et al. 2016, JSCR
+ * 30(1); 2021, JSCR 35(S1)) — and nothing on the screen said what the bar in
+ * front of them was against their own max. The book's advice is to use %1RM
+ * alongside RPE rather than instead of it (Helms, Pyramid Training v2,
+ * pp. 65-66, 217), and this is that, for the one set about to be taken: it
+ * follows the stepper and the typed load, so the lifter who reads 130 where the
+ * card says 122.5 sees, before loading it, that 130 × 2 is RPE 7 for them.
+ *
+ * When the card is rated against something other than the recorded max — the
+ * working max on a heavy day — and the two are more than a plate step apart,
+ * the recorded figure gets its own clause, so the number the lifter actually
+ * knows is never hidden behind one the app worked out.
+ *
+ * Only up to `RELIABLE_E1RM_REPS`, for the reason that constant exists: past
+ * about six reps the table stops describing individuals.
+ */
+function readoutInner(c, { load, reps }) {
+  if (!(load > 0) || !(reps >= 1) || reps > RELIABLE_E1RM_REPS) return '';
+  const r = rateLoad(c.basis.value, load, reps);
+  if (!r) return '';
+  let line = `<b class="mono">${esc(`${fmtLoadBare(load)} × ${reps}`)}</b> — `
+    // To a tenth, like the caption beside it (`pctCaption`): one bar, one percentage.
+    + esc(`${fmtMax(r.pct)}% of ${maxWords(c.basis)} · ${rpeWords(r)} (${leftWords(r)})`);
+  const rec = c.recorded;
+  // Only a record recent enough to count (`RECORD_BINDS_DAYS`): a max from a
+  // previous block, quoted on every heavy card as "past RPE 10", is noise.
+  if (c.basis.basis !== 'recorded' && c.recordedFresh && rec > 0 && Math.abs(rec - c.basis.value) > c.step + 1e-9) {
+    const rr = rateLoad(rec, load, reps);
+    if (rr) line += `<span class="dim">${esc(` · ${rpeWords(rr, { about: false })} against the ${fmtMax(rec)} you recorded`)}</span>`;
+  }
+  return `<div class="card card--flat card--pad-sm" style="margin-bottom:12px">
+      <div class="tiny dim" style="margin-bottom:2px">What this weight is for you</div>
+      <div class="small">${line}</div>
+    </div>
+    ${c.nextIdx >= 0 ? weightWarning(c, load, reps) : ''}`;
+}
+
+/**
+ * If the weight about to go on the bar is heavier than the RPE on the card, say
+ * so before the set.
  *
  * Every other check on this screen compares the prescription against the
  * lifter's logged RPEs, which is the wrong way round when the logged RPEs are
  * the thing that has drifted. A load prescribed at RPE 5, completed, and then
  * logged at RPE 5 agrees with itself perfectly while being an RPE 8 triple.
- * This compares it against the working max instead — the one figure the program
- * cannot talk itself into — and does it before the bar is loaded rather than
- * three cycles later.
+ * This compares it against the max the card was built from instead, and does it
+ * before the bar is loaded rather than three cycles later.
+ *
+ * It rates the load the lifter is about to take, not the one the app printed.
+ * Checking only the prescription made it circular — the easy-day load is a
+ * percentage of a max, so rated against the same max it always agrees with
+ * itself — and it said nothing at all about the weight the lifter actually
+ * steps or types, which on the day that prompted this was 130 on a card that
+ * meant 122.5. On easy work it is phrased for easy work: the question there is
+ * not whether the set is completable (it always is) but whether it is still the
+ * day it is written as.
  *
  * Only in the heavy direction. "Your recent sets say you could do more" is a
  * real thing to tell someone, but `rpeCheckNote` already tells them, off this
@@ -383,26 +603,136 @@ const IMPLIED_RPE_SLACK = 1;
  * better comparison for it. Firing here as well turned one competition-lift slot
  * in ten into a warning; kept to the direction nothing else covers, it is three
  * in a thousand, and every one of them is a load the lifter should question.
+ *
+ * One threshold and one max, shared with the goal line on the same card: the
+ * load is judged by `readsHeavy` (one `CARD_RPE_SLACK` over the target) against
+ * `heavyCheckMax` — the lower of the card's own rating max and the recorded
+ * one — both from program.js. Judged against the working max alone, a heavy
+ * day could never warn, because its card is a percentage of that max; and the
+ * goal line, judging by the lower figure, said "take the top set down to
+ * 157.5" over a banner that said nothing.
+ *
+ * But on a heavy day the lower figure and the working max can genuinely
+ * disagree, and the working max is not a guess to be overruled: it is what the
+ * lifter's recent sets say, the day is autoregulated, and its first set is
+ * rated near failure, where calls are accurate. So when the weight is heavy
+ * against the recorded max and *not* against the working max, the banner does
+ * not tell the lifter to take it down. It shows both readings, lets the first
+ * set decide, names the weight to drop to if it grinds (`cardDropLoad`, the
+ * goal line's number too), and points at Settings for the case where the
+ * recorded max is the stale one. Only when the working max agrees that it is
+ * heavy is the wording firm.
  */
-function impliedRPENote(slot, entry, units) {
-  const target = entry.targetRPE ?? (entry.rpeRange ? (entry.rpeRange[0] + entry.rpeRange[1]) / 2 : null);
-  if (!slot?.impliedRPE || target == null || !entry.plannedLoad) return '';
-  if (slot.impliedRPE - target <= IMPLIED_RPE_SLACK) return '';
-  return `<div class="banner banner--warn" style="margin-bottom:12px">
-    <b>Check this weight.</b> ${fmtLoadBare(entry.plannedLoad)} ${esc(units)} × ${entry.targetReps} is RPE
-    ${fmtRPE(slot.impliedRPE)} against your current max, and this slot is asking for RPE ${fmtRPE(target)}.
-    Take it down until the two agree — the RPE is the prescription and the weight is only the app's guess at it.
-  </div>`;
+function weightWarning(c, load, reps) {
+  const target = c.target;
+  const check = c.check;
+  if (target == null || !check || !readsHeavy(check.value, load, reps, target)) return '';
+  const r = rateLoad(check.value, load, reps);
+  if (!r) return '';
+  const what = `${fmtLoadBare(load)} ${c.units} × ${reps}`;
+  const rx = c.prescribed != null ? `${fmtLoadBare(c.prescribed)} ${c.units}` : null;
+  const atRx = rx == null || Math.abs(load - c.prescribed) < 1e-9;
+  const agree = 'take it down until the two agree — the RPE is the prescription and the weight is only the app\'s guess at it.';
+  // The card's own max finds it heavy too — or is the same number.
+  const same = Math.abs(check.value - c.basis.value) < 1e-9;
+  const firm = same || readsHeavy(c.basis.value, load, reps, target);
+  const w = same ? null : rateLoad(c.basis.value, load, reps);
+  let title = 'Check this weight.';
+  let body;
+  if (c.submax) {
+    // Easy work: `rateBasis` is already the lower max, so there is nothing to disagree about.
+    // Past the table there is no "kind" of day it belongs to: it is more than
+    // the max says the lifter can do at all, and that is the whole sentence.
+    const reads = r.over ? `is more than ${maxWords(check)} says you can do` : `is ${rpeWords(r)} for you`;
+    const kind = r.over ? '' : r.rpe >= 7 ? ' — a strength-day weight' : ' — more than an easy day asks for';
+    body = `${what} ${reads}${kind}. Today is written at RPE ${fmtRPE(target)}; `
+      + (atRx ? agree : `the prescription is ${rx}.`);
+  } else if (!firm) {
+    title = 'Your two maxes disagree.';
+    body = `${what} is ${rpeWords(r)} against the ${fmtMax(check.value)} you recorded, `
+      + `${rpeWords(w, { about: false })} against ${workingWords(c.basis)}. Let the first set decide`
+      + (c.dropTo != null ? `: if it grinds, drop to ${fmtLoadBare(c.dropTo)} ${c.units}.` : '.')
+      + ' If you have got stronger, record the new max in Settings.';
+  } else {
+    // Heavy against both. Name both when they are different numbers, so the
+    // lifter can see the app's own estimate is not what is being overruled.
+    const both = w && Math.abs(check.value - c.basis.value) > c.step + 1e-9;
+    const reads = both
+      ? `${rpeWords(r)} against the ${fmtMax(check.value)} you recorded and ${rpeWords(w, { about: false })} against ${workingWords(c.basis)}`
+      : `${rpeWords(r)} against ${maxWords(check)}`;
+    body = `${what} is ${reads}, and this slot is asking for RPE ${fmtRPE(target)}`
+      + (atRx ? `. ${agree[0].toUpperCase()}${agree.slice(1)}`
+        : ` — the prescription is ${rx}. Take it back down: the RPE is the prescription, and this weight is past it.`);
+  }
+  return `<div class="banner banner--warn" style="margin-bottom:12px"><b>${esc(title)}</b> ${esc(body)}</div>`;
+}
+
+/**
+ * The one moment a call can be checked against something that is not a call.
+ *
+ * A set logged with an RPE on a competition lift, rated against the max the
+ * lifter recorded — tested, entered, or typed in Settings; any source, because
+ * the point is the lifter's own number — and the two compared. When the table
+ * puts the set well above the call, the call is the less likely of the two to
+ * be right: RPE is least accurate far from failure, and the error runs in the
+ * lifter's favour (Zourdos et al. 2016, 2021). The app used to take the call
+ * and build the next easy day from it. It no longer does, and this is where the
+ * lifter is told so, at the moment the evidence is fresh.
+ *
+ * Not on meet or test attempts — a single there is a measurement in its own
+ * right, not a call about one — and not past `RELIABLE_E1RM_REPS`, where the
+ * table stops being the better witness.
+ *
+ * And only on submaximal work (`isSubmaximalSlot`). That is where a call is
+ * furthest from failure and least accurate, and it is the only place the note's
+ * own claim is true — easy days are built from the recorded max, heavy days are
+ * not. On a strength day the call is five reps closer to failure, the day is
+ * autoregulated off it, and a toast after every heavy set disputing it with a
+ * max the card was not built from is the app arguing with the lifter mid-session
+ * about a number it has already said (the weight readout, before the set).
+ * Heavy-day calls still count: the Coach tab's calibration insight
+ * (`rpeCalibration` in coach.js) reads all of them, in aggregate, where a
+ * pattern means something and a single call does not.
+ */
+function calibrationNote(st, ses, slot, set, rpe) {
+  const lift = slot?.slot?.lift;
+  if (!lift || !isCompetitionSlot(slot.slot) || rpe == null) return null;
+  if (!isSubmaximalSlot(st, slot.slotKey)) return null;
+  // The same window the Coach tab's calibration uses: a record is evidence
+  // about a call only near the day it was recorded.
+  const rec = slot.recordedFresh ? slot.recordedMax : null;
+  if (!(rec > 0) || !set || set.failed || !(set.reps >= 1) || set.reps > RELIABLE_E1RM_REPS || !(set.load > 0)) return null;
+  const units = st.profile.units;
+  const from = ses.units || units;
+  const load = convertLoad(set.load, from, units);
+  const r = rateLoad(rec, load, set.reps);
+  // A set heavier than the recorded max allows is not a light call, it is a
+  // stale max: the lifter has just done something that number says they cannot.
+  // Settings and the test day are where that gets fixed, not this note.
+  if (!r || r.over || r.rpe - rpe < CALIBRATION_GAP) return null;
+  const shown = from === units ? fmtLoadBare(set.load) : fmtMax(load);
+  const easy = easyMaxDetail(st, lift);
+  const tail = easy?.basis === 'recorded'
+    ? 'Easy days now go by your recorded max, not the call.'
+    : 'Easy days are built from the lower of that and the app\'s working max, never from the call.';
+  return `${shown} × ${set.reps} is ${rpeWords(r)} against your ${fmtMax(rec)} — you called it ${fmtRPE(rpe)}. ${tail}`;
 }
 
 /** If the lifter's own RPE data disagrees with the wave, say so plainly. */
 function rpeCheckNote(slot, entry, units) {
-  if (!slot || !slot.rpeCheckLoad || !entry.plannedLoad) return '';
-  const diff = slot.rpeCheckLoad - entry.plannedLoad;
+  // Measured against what the program prescribed, not against the stepper: a
+  // lifter who has just stepped down to the weight the heavy-card banner named
+  // must not be told "the program says" their own weight, and pushed back up.
+  const rx = entry.prescribedLoad ?? slot?.plannedLoad;
+  if (!slot || !slot.rpeCheckLoad || !rx) return '';
+  const diff = slot.rpeCheckLoad - rx;
   if (Math.abs(diff) < (slot.increment || 2.5) * 1.5) return '';
   const heavier = diff > 0;
+  // And never suggest a heavier weight that the card's own heavy check calls
+  // too heavy: the app would be giving both halves of an argument with itself.
+  if (heavier && readsHeavy(heavyCheckMax(slot)?.value, slot.rpeCheckLoad, entry.targetReps, targetRPEOf(entry))) return '';
   return `<div class="banner banner--warn" style="margin-bottom:12px">
-    <b>Worth a look.</b> The program says ${fmtLoadBare(entry.plannedLoad)} ${esc(units)}, but your recent
+    <b>Worth a look.</b> The program says ${fmtLoadBare(rx)} ${esc(units)}, but your recent
     sets suggest ${fmtLoadBare(slot.rpeCheckLoad)} ${esc(units)} is what ${entry.targetReps} reps at RPE
     ${fmtRPE(entry.targetRPE ?? 8)} actually looks like for you right now — ${fmtLoadBare(Math.abs(diff))} ${esc(units)}
     ${heavier ? 'heavier' : 'lighter'}. The RPE is the prescription; the number is a guess. Your call.
@@ -511,27 +841,40 @@ function paintTimer() {
 
 /* ---- RPE picker ------------------------------------------------------- */
 
+/**
+ * The RPE picker, asked as the question the number stands for.
+ *
+ * "How many reps did you leave?" invites the answer the lifter hoped for; "how
+ * many more good reps could you have done?" is the definition (RPE = 10 − RIR)
+ * put as something to count. Every button says its reps left in plain words and
+ * the whole ladder is printed under them, not only 10 to 7: the technique day is
+ * written at 5 and the primer at 4, and a picker that only explained the heavy
+ * end left the calls that are hardest to make — and that an easy day is made of
+ * — as bare numbers.
+ */
 function openRPE(ctx, key, { onPick } = {}) {
   const [slotKey, si] = splitKey(key);
   const st = ctx.state;
   const ses = sessionOf(st);
   const entry = entryOf(ses, slotKey);
-  const target = entry.targetRPE ?? (entry.rpeRange ? (entry.rpeRange[0] + entry.rpeRange[1]) / 2 : null);
+  const target = targetRPEOf(entry);
   const cur = entry.sets[si]?.rpe;
   const load = entry.sets[si]?.load ?? entry.plannedLoad;
 
   sheet({
-    title: 'How many reps did you leave?',
+    title: 'How many more good reps could you have done?',
     body: `<div class="stack">
       <div class="rpegrid">
         ${RPE_SCALE.map((r) => `
-          <button class="rpebtn ${target === r.rpe ? 'rpebtn--target' : ''}" data-rpe="${r.rpe}" aria-pressed="${cur === r.rpe}">
-            <b>${fmtRPE(r.rpe)}</b><span>${esc(r.rir === '0' ? 'nothing left' : `${r.rir} left`)}</span>
+          <button class="rpebtn ${target === r.rpe ? 'rpebtn--target' : ''}" data-rpe="${r.rpe}" aria-pressed="${cur === r.rpe}"
+                  aria-label="${esc(`RPE ${fmtRPE(r.rpe)}: ${r.meaning}`)}">
+            <b>${fmtRPE(r.rpe)}</b><span>${esc(r.left)}</span>
           </button>`).join('')}
       </div>
       <div class="stack-sm">
-        ${RPE_SCALE.filter((r) => [10, 9, 8, 7].includes(r.rpe)).map((r) =>
-          `<div class="rpe-scale"><b class="mono">${fmtRPE(r.rpe)}</b> — ${esc(r.meaning)}</div>`).join('')}
+        ${RPE_SCALE.map((r) => target === r.rpe
+          ? `<div class="rpe-scale" style="color:var(--accent)"><b class="mono">${fmtRPE(r.rpe)}</b> — ${esc(r.meaning)} <b>Today's target.</b></div>`
+          : `<div class="rpe-scale"><b class="mono">${fmtRPE(r.rpe)}</b> — ${esc(r.meaning)}</div>`).join('')}
       </div>
       ${target != null ? `<p class="cite">Today's target was RPE ${fmtRPE(target)}. Log what it actually was, not what it was supposed to be — the whole system runs on this number being honest.</p>` : ''}
 
@@ -650,16 +993,17 @@ function logSet(ctx, key) {
     }
   });
 
-  const restFor = restSeconds(ctx, slotKey);
+  const day = resolvedSlot(ctx, slotKey);
+  const restFor = restSeconds(day.slot);
   openRPE(ctx, key, {
     onPick: (rpe) => {
       setRPE(ctx, slotKey, si, rpe);
-      afterSet(ctx, slotKey, si, rpe, restFor);
+      afterSet(ctx, slotKey, si, rpe, restFor, day);
     },
   });
 }
 
-function afterSet(ctx, slotKey, si, rpe, restFor) {
+function afterSet(ctx, slotKey, si, rpe, restFor, { resolved = null, slot = null } = {}) {
   const st = ctx.state;
   const ses = sessionOf(st);
   const entry = entryOf(ses, slotKey);
@@ -671,11 +1015,26 @@ function afterSet(ctx, slotKey, si, rpe, restFor) {
     timer.start(restFor, 'Rest');
   }
 
+  // The call against the lifter's own recorded max, once per lift per session
+  // — three identical toasts for three identical triples is nagging, and the
+  // first one has already made the point. Toasts are set as text, not markup,
+  // so nothing in them needs escaping.
+  const attempts = !resolved || resolved.isTest || resolved.isMeet;
+  const calibration = attempts ? null : calibrationNote(st, ses, slot, entry.sets[si], rpe);
+  const shownKey = `${ses.id}:${slotKey}`;
+  if (calibration && !calibrationShown.has(shownKey)) {
+    calibrationShown.add(shownKey);
+    toast(calibration, '', 6400);
+  }
+
   // The book's own warning: if you blow past the target on the first set you
-  // opened too heavy. Say it once, at the moment it is actionable.
+  // opened too heavy. Say it once, at the moment it is actionable. "Room to add
+  // weight" is not said when the table has just disagreed with the call it
+  // rests on: that would be the app believing the one number it has just
+  // pointed out is light.
   if (si === 0 && target != null && rpe >= target + 1.5 && entry.sets.length > 1) {
     toast(`That was RPE ${fmtRPE(rpe)} against a target of ${fmtRPE(target)} — consider dropping the load for the rest of the sets.`, 'bad', 5200);
-  } else if (si === 0 && target != null && rpe <= target - 1.5) {
+  } else if (si === 0 && target != null && rpe <= target - 1.5 && !calibration) {
     toast(`RPE ${fmtRPE(rpe)} against a target of ${fmtRPE(target)} — you have room to add weight.`, '', 4200);
   }
 
@@ -686,11 +1045,15 @@ function afterSet(ctx, slotKey, si, rpe, restFor) {
   }
 }
 
-function restSeconds(ctx, slotKey) {
+/** The running session's day, resolved once per logged set, and the slot being logged on it. */
+function resolvedSlot(ctx, slotKey) {
   const st = ctx.state;
   const ses = sessionOf(st);
   const resolved = resolveDay(st, { cycle: ses.cycle, week: ses.week, day: ses.day, phase: ses.phase });
-  const slot = resolved.slots.find((s) => s.slotKey === slotKey);
+  return { resolved, slot: resolved.slots.find((s) => s.slotKey === slotKey) || null };
+}
+
+function restSeconds(slot) {
   const role = slot?.role;
   return role === 'isolation' || role === 'accessory' ? REST_GUIDE.isolation : REST_GUIDE.compound;
 }
@@ -1026,16 +1389,35 @@ function mount(root, ctx) {
     haptic(8);
   });
 
-  $$('[data-load-set]', root).forEach((el) => el.onchange = () => {
-    const slotKey = el.dataset.loadSet;
-    const ai = el.dataset.attempt == null ? null : Number(el.dataset.attempt);
-    const v = num(el.value);
-    ctx.store.update((s) => {
-      const e = entryOf(sessionOf(s), slotKey);
-      if (ai != null) { if (e.sets[ai] && !e.sets[ai].done) e.sets[ai].load = v; return; }
-      e.plannedLoad = v;
-      for (const set of e.sets) if (!set.done) set.load = v;
-    });
+  // The weight readout follows the typing, not only the commit. A typed load
+  // reaches the store on change (blur or enter), and the store re-renders the
+  // screen; doing that per keystroke would take the caret away mid-number. So
+  // while typing, only the readout's own box is repainted, from what is in the
+  // inputs — nothing is saved, and nothing else on the card moves under the
+  // lifter's thumb. The stepper's +/- and the commit re-render as they always
+  // did, and the readout is recomputed from the store then.
+  const relive = (slotKey, over = {}) => {
+    const c = liveCards.get(slotKey);
+    const box = root.querySelector(`[data-readout="${CSS.escape(slotKey)}"]`);
+    if (!c || !box) return;
+    box.innerHTML = readoutInner(c, rateInputs(c, { root, ...over }));
+  };
+
+  $$('[data-load-set]', root).forEach((el) => {
+    el.onchange = () => {
+      const slotKey = el.dataset.loadSet;
+      const ai = el.dataset.attempt == null ? null : Number(el.dataset.attempt);
+      const v = num(el.value);
+      ctx.store.update((s) => {
+        const e = entryOf(sessionOf(s), slotKey);
+        if (ai != null) { if (e.sets[ai] && !e.sets[ai].done) e.sets[ai].load = v; return; }
+        e.plannedLoad = v;
+        for (const set of e.sets) if (!set.done) set.load = v;
+      });
+    };
+    // The working load becomes every unlogged set's load on commit, so while it
+    // is being typed it *is* the load the readout rates.
+    if (el.dataset.attempt == null) el.oninput = () => relive(el.dataset.loadSet, { load: num(el.value) });
   });
 
   // the goal total, and the handler's advice about the next attempt
@@ -1069,6 +1451,15 @@ function mount(root, ctx) {
     const v = num(el.value);
     ctx.store.update((s) => { const e = entryOf(sessionOf(s), slotKey); if (e?.sets[si]) e.sets[si].reps = v; }, { silent: true });
   });
+  // ...and the next set's boxes are what the tick will log, so the readout
+  // follows them too. Those saves are silent, so this is also the only thing
+  // that keeps the readout current once they are committed.
+  for (const [sel, attr] of [['[data-set-load]', 'setLoad'], ['[data-set-reps]', 'setReps']]) {
+    $$(sel, root).forEach((el) => el.oninput = () => {
+      const [slotKey, si] = splitKey(el.dataset[attr]);
+      if (liveCards.get(slotKey)?.nextIdx === si) relive(slotKey);
+    });
+  }
 
   // rest timer
   unsubTimer?.();

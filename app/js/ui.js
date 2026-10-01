@@ -63,6 +63,7 @@ const ICONS = {
   upload:   '<path d="M12 17V5M7 9l5-5 5 5M4 21h16"/>',
   bolt:     '<path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z"/>',
   rest:     '<path d="M3 12h4l3-8 4 16 3-8h4"/>',
+  target:   '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/><path d="M12 12h.01"/>',
 };
 
 export function icon(name, cls = '') {

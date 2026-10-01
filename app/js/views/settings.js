@@ -4,7 +4,7 @@
 
 import { html, raw, esc, icon, $, $$, sheet, toast, confirmSheet, fmtDate, restoreSheet } from '../ui.js';
 import { PLATE_PRESETS, fmtLoadBare, plateLabel, minIncrement, isLadder, e1RM, normalizeRPE, parseNum } from '../rpe.js';
-import { templateOf, buildProgram, volumeAudit, convertUnits, workingMaxDetail } from '../program.js';
+import { templateOf, buildProgram, volumeAudit, convertUnits, workingMaxDetail, maxDraftFor, applyMaxUpdate } from '../program.js';
 import { EMPHASIS, TEMPLATES, INTERMEDIATE_PL, INTERMEDIATE_PL_3DAY, ADVANCED_ACCUMULATION, ADVANCED_INTENSIFICATION } from '../templates.js';
 import { optionsForSlot, SLOT_INFO, byId } from '../exercises.js';
 import { todayISO } from '../store.js';
@@ -18,6 +18,21 @@ const LIFTS = [
 ];
 
 /**
+ * A max is an estimate, not something anyone loads, so it is shown to a tenth
+ * rather than put through the plate formatter — which renders a 175.7 kg
+ * deadlift as "175.70".
+ */
+const tenth = (v) => (v == null || !Number.isFinite(Number(v)) ? '—' : String(+Number(v).toFixed(1)));
+
+/**
+ * What kind of number a recorded max is, in the lifter's words. It matters: a
+ * max the lifter has *done* caps what the app works from, and an estimate does
+ * not, so a lifter whose tested 150 has been filed as an estimate needs to be
+ * able to see that here.
+ */
+const SOURCE_LABEL = { tested: 'tested', entered: 'lifted', estimated: 'estimate' };
+
+/**
  * One lift: the max on record, and what the engine is actually prescribing from.
  *
  * Shown side by side on purpose. They are usually the same and occasionally are
@@ -29,16 +44,13 @@ function maxRow(st, key, label, units) {
   const rec = st.maxes[key] || {};
   const wm = workingMaxDetail(st, key);
   const same = wm && Math.abs(wm.value - (rec.value ?? NaN)) < 0.05;
-  // A max is an estimate, not something anyone loads, so it is shown to a tenth
-  // rather than put through the plate formatter — which renders a 175.7 kg
-  // deadlift as "175.70".
-  const tenth = (v) => (v == null || !Number.isFinite(Number(v)) ? '—' : String(+Number(v).toFixed(1)));
   const why = wm?.basis === 'miss' ? `held under the ${tenth(wm.cappedBy.load)} you missed`
     : wm?.basis === 'tested' ? 'held to your tested max'
     : 'from your recent sets';
+  const kind = [rec.date ? fmtDate(rec.date) : null, SOURCE_LABEL[rec.source] || null].filter(Boolean).join(' · ');
   return `<div class="kv">
     <span class="kv__k">${esc(label)}
-      <span class="tiny dim">${rec.date ? esc(fmtDate(rec.date)) : ''}</span></span>
+      <span class="tiny dim">${esc(kind)}</span></span>
     <span class="kv__v mono">${esc(tenth(rec.value))} ${esc(units)}
       ${wm && !same ? `<span class="tiny dim">working ${esc(tenth(wm.value))} — ${esc(why)}</span>` : ''}</span>
   </div>`;
@@ -86,8 +98,10 @@ function view(ctx) {
         <button class="btn btn--ghost btn--block" data-act="maxes">Update maxes</button>
         <p class="cite">Every load in the program is built from these. What the app is <em>working</em> from is on the
           right: it starts from your own recent sets, is held to what a tested max can have grown into since the day
-          you tested it, and is held under anything you have loaded and missed in the last three weeks. If a working
-          number looks wrong, the max above it is the thing to correct.</p>
+          you tested it, and is held under anything you have loaded and missed in the last three weeks. Heavy days
+          run off the working number. Easy days and meet attempts take whichever is lower, yours or the app's, so
+          lowering a max here never makes them heavier. If a working number looks wrong, the max above it is the
+          thing to correct.</p>
       </div>
 
       <div class="stack-sm">
@@ -551,65 +565,148 @@ function openSwitch(ctx) {
   });
 }
 
+/**
+ * Update maxes: the lifter's own numbers, which easy days and meet attempts are
+ * built from.
+ *
+ * This sheet used to rewrite all three lifts on Save — each stamped `estimated`
+ * and dated today, touched or not — and it prefilled a record with no set
+ * behind it as "value × 3 @ RPE 9". Opening it to lower one deadlift therefore
+ * also demoted a squat tested three days earlier to a guess, which lifted the
+ * ceiling off it; and opening it and pressing Save without typing a thing
+ * raised a 150 squat to 168. The rules for both now live in program.js
+ * (`maxDraftFor`, `applyMaxUpdate`), where they are tested. The sheet's one job
+ * is to tell them which lifts the lifter actually changed: any keystroke or
+ * pick in a lift's boxes marks it touched, and only touched lifts are saved.
+ *
+ * Each lift says, before Save, what Save will do with it — including the one
+ * distinction that changes what the app prescribes: a single at RPE 10 is saved
+ * as a weight you have done, which caps the working max, and anything else as
+ * an estimate, which does not. It says so by asking `applyMaxUpdate` itself, on
+ * a copy of the maxes, so the line cannot drift from what the save does.
+ */
 function openMaxes(ctx) {
   const st = ctx.state;
+  const units = st.profile.units;
   const draft = {};
-  for (const { key } of LIFTS) {
-    const m = st.maxes[key] || {};
-    draft[key] = { load: m.fromLoad ?? m.value ?? '', reps: m.reps ?? 3, rpe: m.fromRPE ?? 9 };
-  }
+  for (const { key } of LIFTS) draft[key] = maxDraftFor(st.maxes[key]);
 
+  // The same reading of the boxes `applyMaxUpdate` makes — a missing RPE is a
+  // 10 — except that a rep count has to be a whole number here rather than
+  // being rounded, because this is the lifter's chance to see it is wrong.
   const est = (d) => {
-    const v = e1RM(parseNum(d.load), parseNum(d.reps) || 1, normalizeRPE(d.rpe));
+    const load = parseNum(d.load);
+    const reps = parseNum(d.reps);
+    const rpe = parseNum(d.rpe);
+    if (!(load > 0) || !Number.isInteger(reps) || reps < 1) return null;
+    const v = e1RM(load, reps, rpe == null ? 10 : normalizeRPE(rpe));
     return v ? Math.round(v * 10) / 10 : null;
+  };
+
+  const preview = (key) => {
+    const copy = { maxes: JSON.parse(JSON.stringify(ctx.state.maxes || {})) };
+    return applyMaxUpdate(copy, { [key]: draft[key] }, { today: todayISO() })[0] || null;
+  };
+
+  // An estimate whose prefill is already a single at RPE 10 — a tested 150
+  // filed as a guess by the old sheet — can only become "a weight you have
+  // done" by being saved as one, and retyping a digit so the sheet notices is
+  // not something anyone would guess. So it gets a button that says it.
+  const singleOnFile = (key) => {
+    const rec = ctx.state.maxes[key];
+    const d = draft[key];
+    return !d.touched && rec?.source === 'estimated' && Number(rec.value) > 0
+      && Number(d.reps) === 1 && Number(d.rpe) === 10;
+  };
+
+  const status = (key) => {
+    const d = draft[key];
+    const rec = ctx.state.maxes[key];
+    if (!d.touched) {
+      if (!(Number(rec?.value) > 0)) return 'Nothing on file yet.';
+      const what = { tested: 'tested', entered: 'a weight you have done', estimated: 'an estimate' }[rec.source];
+      const bits = [tenth(rec.value), what, rec.date ? fmtDate(rec.date) : null].filter(Boolean).join(', ');
+      if (singleOnFile(key)) return `On file: ${bits}. That is a single at RPE 10 — if you did lift it, tap "I lifted this" to save it as a weight you have done.`;
+      return `On file: ${bits}. Kept exactly as it is unless you change it.`;
+    }
+    if (est(d) == null) return 'Needs a weight above zero and a whole number of reps.';
+    const p = preview(key);
+    if (!p) return 'The same set as the max on file, which is kept as it is.';
+    return p.source === 'entered'
+      ? `Saves as ${tenth(p.value)}, a weight you have done: it caps what the app works from.`
+      : `Saves as ${tenth(p.value)}, an estimate from this set.`;
   };
 
   sheet({
     title: 'Update maxes',
     body: `<div class="stack">
+      <p class="small muted">Easy days and meet attempts are built from these numbers — for six weeks after
+      you record them, the app will never prescribe them from anything higher.</p>
       <p class="small muted">Enter your best recent set of each. A 3-5 rep max is the book's preferred
-      test — safer than a single and just as good an estimate.</p>
+      test — safer than a single and just as good an estimate. Only the lifts you change are saved; a single
+      at RPE 10 is saved as a weight you have done.</p>
       ${LIFTS.map(({ key, label }) => `
         <div class="card card--flat">
           <div class="row-between" style="margin-bottom:10px">
             <b class="small">${esc(label)}</b>
-            <span class="pill mono" data-est="${key}">${fmtLoadBare(est(draft[key]))} ${esc(st.profile.units)}</span>
+            <span class="pill mono" data-est="${key}">${esc(tenth(est(draft[key])))} ${esc(units)}</span>
           </div>
           <div class="row" style="gap:8px">
-            <input class="input input--num grow" type="text" inputmode="decimal" value="${draft[key].load}" placeholder="weight" data-m="${key}" data-f="load">
-            <input class="input input--num" style="flex:0 0 70px" type="text" inputmode="numeric" value="${draft[key].reps}" data-m="${key}" data-f="reps">
-            <select class="select" style="flex:0 0 88px" data-m="${key}" data-f="rpe">
+            <input class="input input--num grow" type="text" inputmode="decimal" value="${esc(draft[key].load)}" placeholder="weight"
+              aria-label="${esc(label)} weight in ${esc(units)}" data-m="${key}" data-f="load">
+            <input class="input input--num" style="flex:0 0 56px" type="text" inputmode="numeric" value="${esc(draft[key].reps)}"
+              aria-label="${esc(label)} reps" data-m="${key}" data-f="reps">
+            <select class="select" style="flex:0 0 108px;padding-right:26px" aria-label="${esc(label)} RPE" data-m="${key}" data-f="rpe">
               ${[10, 9.5, 9, 8.5, 8, 7.5, 7].map((r) => `<option value="${r}" ${Number(draft[key].rpe) === r ? 'selected' : ''}>RPE ${r}</option>`).join('')}
             </select>
           </div>
+          <div class="tiny dim" style="margin-top:8px" data-status="${key}">${esc(status(key))}</div>
+          ${singleOnFile(key) ? `<button class="btn btn--ghost btn--block" style="margin-top:8px" data-lifted="${key}">I lifted this</button>` : ''}
         </div>`).join('')}
+      <div data-err></div>
       <button class="btn btn--primary btn--block" data-save>Save</button>
     </div>`,
     onMount(root, close) {
-      const repaint = () => {
-        for (const { key } of LIFTS) {
-          const el = $(`[data-est="${key}"]`, root);
-          if (el) el.textContent = `${fmtLoadBare(est(draft[key]))} ${ctx.state.profile.units}`;
-        }
+      const errEl = $('[data-err]', root);
+      const repaint = (key) => {
+        const pill = $(`[data-est="${key}"]`, root);
+        if (pill) pill.textContent = `${tenth(est(draft[key]))} ${units}`;
+        const line = $(`[data-status="${key}"]`, root);
+        if (line) line.textContent = status(key);
       };
       for (const el of $$('[data-m]', root)) {
-        const h = () => { draft[el.dataset.m][el.dataset.f] = el.value; repaint(); };
+        const h = () => {
+          const d = draft[el.dataset.m];
+          d[el.dataset.f] = el.value;
+          d.touched = true;
+          errEl.innerHTML = '';
+          repaint(el.dataset.m);
+        };
         if (el.tagName === 'SELECT') el.onchange = h; else el.oninput = h;
       }
+      for (const b of $$('[data-lifted]', root)) {
+        b.onclick = () => {
+          draft[b.dataset.lifted].touched = true;
+          b.remove();
+          repaint(b.dataset.lifted);
+        };
+      }
       $('[data-save]', root).onclick = () => {
-        ctx.store.update((s) => {
-          for (const { key } of LIFTS) {
-            const v = est(draft[key]);
-            if (!v) continue;
-            s.maxes[key] = {
-              value: v, date: todayISO(), source: 'estimated',
-              reps: parseNum(draft[key].reps) || null,
-              fromLoad: parseNum(draft[key].load) || null,
-              fromRPE: normalizeRPE(draft[key].rpe),
-            };
-          }
-        });
-        close(); toast('Maxes updated.', 'good');
+        const problems = LIFTS
+          .filter(({ key }) => draft[key].touched && est(draft[key]) == null)
+          .map(({ label }) => `${label}: enter a weight above zero and a whole number of reps, or close without saving.`);
+        if (problems.length) {
+          errEl.innerHTML = `<div class="insight insight--bad"><div>${problems.map(esc).join('<br>')}</div></div>`;
+          return;
+        }
+        if (!LIFTS.some(({ key }) => draft[key].touched)) { close(); toast('Nothing changed.'); return; }
+
+        let changed = [];
+        ctx.store.update((s) => { changed = applyMaxUpdate(s, draft, { today: todayISO() }); });
+        close();
+        if (!changed.length) { toast('Nothing changed.'); return; }
+        const said = changed.map((c) => `${LIFTS.find((l) => l.key === c.lift)?.label || c.lift} ${tenth(c.value)}`);
+        toast(`${said.join(', ')} saved.`, 'good');
       };
     },
   });

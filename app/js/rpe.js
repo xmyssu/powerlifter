@@ -45,6 +45,40 @@ export const rirFromRPE = (rpe) => 10 - rpe;
 export const rpeFromRIR = (rir) => 10 - rir;
 
 /**
+ * Reps left, in words — RPE = 10 − RIR said aloud, and the one place it is.
+ *
+ * It used to be written three times: the session card's readout, the Library's
+ * calculator and the RPE picker's buttons each had their own, and they did not
+ * agree — 9.5 was "no reps left, a little more load" on the card and "no more
+ * reps, a little more weight" in the Library, and the Library put "+" after a
+ * range as easily as after the floor. A lifter learns the scale from these
+ * words, so they have to be the same words wherever the number is.
+ *
+ * The two ends are named rather than computed, because neither is arithmetic:
+ * RPE 10 is no rep left, 9.5 is the book's "could not do more reps, could do
+ * slightly more load" (Helms, Pyramid Training v2, p. 65), not "half a rep",
+ * and the floor (`RPE_MIN`, 4) is "this many or more" — the table cannot tell
+ * six reps left from ten. A half point in between is the book's "definitely N,
+ * chance at N + 1", written as a range.
+ *
+ * `short` is the picker's button label — "5 left", "0, more load" — where the
+ * word "reps" is already in the question above the buttons. Anything off the
+ * table's half-point grid is snapped onto it first, the way every other reading
+ * of an RPE in the app is. Null for something that is not a number.
+ */
+export function repsLeftWords(rpe, { short = false } = {}) {
+  if (rpe == null || rpe === '' || !Number.isFinite(Number(rpe))) return null;
+  const r = normalizeRPE(rpe);
+  if (r >= RPE_MAX) return short ? '0 left' : 'no reps left';
+  if (r >= RPE_MAX - 0.5) return short ? '0, more load' : 'no reps left, a little more load';
+  if (r <= RPE_MIN) return `${rirFromRPE(RPE_MIN)}+ ${short ? '' : 'reps '}left`;
+  const rir = rirFromRPE(r);
+  const lo = Math.floor(rir), hi = Math.ceil(rir);
+  const n = lo === hi ? String(lo) : `${lo}-${hi}`;
+  return short ? `${n} left` : `${n} ${hi === 1 ? 'rep' : 'reps'} left`;
+}
+
+/**
  * Percentage of 1RM that a set of `reps` taken to `rpe` represents.
  * Returns a number 0-100, or null if out of table range.
  */

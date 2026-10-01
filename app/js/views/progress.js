@@ -10,7 +10,8 @@
 import { html, raw, esc, icon, $, $$, sheet, fmtDate, sparkline, toast, confirmSheet } from '../ui.js';
 import { fmtLoadBare, fmtRPE, e1RM, pctOf1RM, convertLoad, parseNum, normalizeRPE, RPE_MIN, RPE_MAX } from '../rpe.js';
 import { strengthTrend, trendSummary } from '../coach.js';
-import { volumeAudit, templateOf, slotHistory, loadingWeeks } from '../program.js';
+import { volumeAudit, templateOf, slotHistory, loadingWeeks, markSetMissed } from '../program.js';
+import { TEST_DAY } from '../templates.js';
 import { byId } from '../exercises.js';
 import * as sync from '../sync.js';
 
@@ -224,7 +225,7 @@ function openSession(ctx, id) {
             <tbody>${e.sets.filter((s) => s.done).map((s, i) => `<tr>
               <td class="dim" style="width:24px">${i + 1}</td>
               <td class="mono">${fmtLoadBare(s.load)} ${esc(units)}</td>
-              <td class="mono">${s.reps} reps</td>
+              <td class="mono">${s.failed ? '<span style="color:var(--bad)">missed</span>' : `${s.reps} reps`}</td>
               <td class="r mono">${s.rpe != null ? `RPE ${fmtRPE(s.rpe)}` : '—'}</td>
             </tr>`).join('')}</tbody>
           </table></div>
@@ -236,9 +237,9 @@ function openSession(ctx, id) {
         <div><div class="insight__t">${ses.corrections.length} ${ses.corrections.length === 1 ? 'entry has' : 'entries have'} been corrected</div>
         <div class="insight__b">${ses.corrections.slice(-6).map((c) =>
           `${esc(byId(ses.entries.find((e) => e.slotKey === c.slotKey)?.exerciseId)?.short || c.slotKey)} set ${c.setIndex + 1}: `
-          + `${esc(c.field === 'load' ? 'weight' : c.field)} ${esc(String(c.from ?? '—'))} → ${esc(String(c.to ?? '—'))}`).join('<br>')}</div></div>
+          + esc(correctionWords(c))).join('<br>')}</div></div>
       </div>` : ''}
-      <button class="btn btn--ghost btn--block" data-correct="${esc(ses.id)}">Correct a mis-typed entry</button>
+      <button class="btn btn--ghost btn--block" data-correct="${esc(ses.id)}">Correct an entry, or mark a set missed</button>
     </div>`,
     onMount(root, close) {
       const btn = $('[data-correct]', root);
@@ -248,6 +249,23 @@ function openSession(ctx, id) {
 }
 
 /* ---- correcting a logged entry ---------------------------------------- */
+
+/**
+ * One correction, as a line a person reads. A load, rep or RPE edit is
+ * "from → to"; a set marked missed says what it had been logged as, because
+ * that is the part of the record the correction replaced.
+ */
+function correctionWords(c) {
+  if (c.field === 'missed') {
+    if (!c.to) return 'no longer marked missed';
+    const w = c.was;
+    const was = w && w.reps > 0
+      ? ` (logged as ${w.reps} ${w.reps === 1 ? 'rep' : 'reps'}${w.rpe != null ? ` @ RPE ${fmtRPE(w.rpe)}` : ''})`
+      : '';
+    return `marked missed${was}`;
+  }
+  return `${c.field === 'load' ? 'weight' : c.field} ${String(c.from ?? '—')} → ${String(c.to ?? '—')}`;
+}
 
 /**
  * Editing history is deliberately awkward.
@@ -261,6 +279,19 @@ function openSession(ctx, id) {
  * So: reachable only from inside a session's own detail sheet, behind a
  * confirmation that says what it does not fix, and every change is recorded on
  * the session and shown afterwards. Nothing is edited invisibly.
+ *
+ * One kind of mistake is not a typo, and this sheet could not fix it: a lift
+ * that did not go up, logged as one that did. The session screen has had a
+ * "missed" button only since mid-September, so a 180 kg deadlift missed on a
+ * test day before then sits in the log as a completed 180 × 1 @ RPE 10 — and
+ * reps could only be edited to numbers above zero. That one set was holding up
+ * a working max, an opener at the lifter's best-ever pull, and a goal line
+ * calling 180 "already yours". So every set can be marked missed here. The
+ * mutation is `markSetMissed` (program.js), which writes exactly the set the
+ * session's own button writes and appends a correction in the same shape as
+ * the edits below, so it shows on the session and syncs like them. Un-marking
+ * asks for the reps that were actually done; a set is never turned back into a
+ * made lift on a guess.
  */
 async function openCorrect(ctx, id) {
   const st = ctx.state;
@@ -270,7 +301,7 @@ async function openCorrect(ctx, id) {
   const yes = await confirmSheet({
     title: 'Correct a mistake?',
     message: 'This is for fixing a genuine slip — a rep count typed into the weight box, '
-      + 'a load off by a decimal place. It is not for improving what happened.\n\n'
+      + 'a load off by a decimal place, a missed lift logged as made. It is not for improving what happened.\n\n'
       + 'Two things it will not do: it will not undo progression the app has already '
       + 'worked out from these numbers, and it will not un-send anything already posted. '
       + 'Every change is recorded on the session.',
@@ -279,15 +310,17 @@ async function openCorrect(ctx, id) {
   if (!yes) return;
 
   const units = ses.units || st.profile.units;
-  const rows = [];
-  for (const e of ses.entries) {
-    e.sets.forEach((s, i) => { if (s.done) rows.push({ slotKey: e.slotKey, i, set: s, entry: e }); });
-  }
+  const labelOf = (entry, i) => `${byId(entry.exerciseId)?.short || entry.slotKey} set ${i + 1}`;
+
+  // What a set logged as missed had been before it was marked, if this sheet
+  // marked it: un-marking offers those numbers back rather than a blank box.
+  const wasFor = (slotKey, i) => [...(ses.corrections || [])].reverse()
+    .find((c) => c.slotKey === slotKey && c.setIndex === i && c.field === 'missed' && c.to === true)?.was || null;
 
   sheet({
     title: `Correct — ${fmtDate(ses.date)}`,
     body: `<div class="stack">
-      <div class="banner">Change only what was mis-typed. Leave everything else alone.</div>
+      <div class="banner">Change only what was mis-typed, or mark a set the bar did not go up on. Leave everything else alone.</div>
       ${ses.entries.map((e) => {
         const done = e.sets.map((s, i) => ({ s, i })).filter((x) => x.s.done);
         if (!done.length) return '';
@@ -305,19 +338,27 @@ async function openCorrect(ctx, id) {
             </div>
             ${done.map(({ s, i }) => `<div class="row" style="gap:8px;align-items:center">
               <span class="dim mono tiny" style="width:18px;flex:0 0 auto">${i + 1}</span>
-              <input class="input input--num" style="flex:1 1 0" inputmode="decimal" value="${s.load ?? ''}"
+              <input class="input input--num" style="flex:1 1 0" inputmode="decimal" value="${esc(s.load ?? '')}"
                 aria-label="Set ${i + 1} weight in ${esc(units)}"
                 data-edit="load" data-slot="${esc(e.slotKey)}" data-i="${i}"
                 data-focus-key="l${esc(e.slotKey)}${i}">
-              <input class="input input--num" style="flex:1 1 0" inputmode="numeric" value="${s.reps ?? ''}"
+              <input class="input input--num" style="flex:1 1 0" inputmode="numeric" value="${s.failed ? '' : esc(s.reps ?? '')}"
+                ${s.failed ? 'disabled placeholder="missed"' : ''}
                 aria-label="Set ${i + 1} reps"
                 data-edit="reps" data-slot="${esc(e.slotKey)}" data-i="${i}"
                 data-focus-key="r${esc(e.slotKey)}${i}">
-              <input class="input input--num" style="flex:1 1 0" inputmode="decimal" value="${s.rpe ?? ''}"
+              <input class="input input--num" style="flex:1 1 0" inputmode="decimal" value="${s.failed ? '' : esc(s.rpe ?? '')}"
+                ${s.failed ? 'disabled placeholder="—"' : ''}
                 aria-label="Set ${i + 1} RPE"
                 data-edit="rpe" data-slot="${esc(e.slotKey)}" data-i="${i}"
                 data-focus-key="p${esc(e.slotKey)}${i}">
             </div>`).join('')}
+            <div class="row wrap" style="gap:6px">
+              <span class="tiny dim">Missed — the bar did not go up:</span>
+              ${done.map(({ s, i }) => `<button type="button" class="pill pill--lg${s.failed ? ' pill--bad' : ''}"
+                style="min-height:40px;padding:0 14px" aria-pressed="${!!s.failed}" aria-label="Set ${i + 1} missed"
+                data-miss data-slot="${esc(e.slotKey)}" data-i="${i}">${i + 1}</button>`).join('')}
+            </div>
           </div>
         </div>`;
       }).join('')}
@@ -327,15 +368,69 @@ async function openCorrect(ctx, id) {
     onMount(root, close) {
       const errEl = $('[data-err]', root);
 
+      // One record per set on the sheet: whether it was logged missed, whether
+      // it is marked missed now, and its three boxes.
+      const rows = new Map();
+      const rowOf = (slot, i) => {
+        const key = `${slot}:${i}`;
+        if (!rows.has(key)) {
+          const entry = ses.entries.find((e) => e.slotKey === slot);
+          const set = entry?.sets[+i];
+          rows.set(key, { slot, i: +i, entry, set, orig: !!set?.failed, missed: !!set?.failed, els: {} });
+        }
+        return rows.get(key);
+      };
+      for (const el of $$('[data-edit]', root)) rowOf(el.dataset.slot, el.dataset.i).els[el.dataset.edit] = el;
+
+      // Reps and RPE mean nothing on a set marked missed — `markSetMissed`
+      // writes 0 and none — so their boxes are shut while it is. Un-marking a
+      // set that was logged missed opens them empty (or with what the set held
+      // before this sheet marked it) for the lifter to say what they did.
+      const paintRow = (row) => {
+        const { reps, rpe } = row.els;
+        if (!reps || !rpe) return;
+        if (row.missed) {
+          for (const el of [reps, rpe]) { el.disabled = true; el.value = ''; }
+          reps.placeholder = 'missed'; rpe.placeholder = '—';
+          return;
+        }
+        reps.disabled = false; rpe.disabled = false;
+        if (row.orig) {
+          const was = wasFor(row.slot, row.i);
+          reps.value = was?.reps > 0 ? String(was.reps) : '';
+          rpe.value = was?.rpe != null ? String(was.rpe) : '';
+          reps.placeholder = 'reps'; rpe.placeholder = 'RPE';
+          reps.focus();
+        } else {
+          reps.value = String(row.set?.reps ?? ''); rpe.value = String(row.set?.rpe ?? '');
+          reps.placeholder = ''; rpe.placeholder = '';
+        }
+      };
+
+      for (const b of $$('[data-miss]', root)) {
+        b.onclick = () => {
+          const row = rowOf(b.dataset.slot, b.dataset.i);
+          row.missed = !row.missed;
+          b.setAttribute('aria-pressed', String(row.missed));
+          b.classList.toggle('pill--bad', row.missed);
+          errEl.innerHTML = '';
+          paintRow(row);
+        };
+      }
+
       $('[data-save]', root).onclick = () => {
         const changes = [];
+        const misses = [];
         const problems = [];
 
         for (const el of $$('[data-edit]', root)) {
           const { edit, slot, i } = el.dataset;
-          const entry = ses.entries.find((e) => e.slotKey === slot);
-          const set = entry?.sets[+i];
+          const row = rowOf(slot, i);
+          const { entry, set } = row;
           if (!set) continue;
+          // A set being marked or un-marked missed has its reps and RPE written
+          // by `markSetMissed`, below; a set staying missed has none to edit.
+          if (edit !== 'load' && (row.missed || row.missed !== row.orig)) continue;
 
           const raw = el.value.trim();
           const stored = set[edit] ?? null;
@@ -348,7 +443,7 @@ async function openCorrect(ctx, id) {
           if (raw === (stored == null ? '' : String(stored))) continue;
 
           let next = raw === '' ? null : parseNum(raw);
-          const label = `${byId(entry.exerciseId)?.short || slot} set ${+i + 1}`;
+          const label = labelOf(entry, +i);
 
           if (edit === 'rpe') {
             // Range-check before normalising, not after: normalizeRPE clamps, so
@@ -373,12 +468,32 @@ async function openCorrect(ctx, id) {
           if (stored !== next) changes.push({ slotKey: slot, i: +i, field: edit, from: stored, to: next, label });
         }
 
+        for (const row of rows.values()) {
+          if (!row.set || row.missed === row.orig) continue;
+          const label = labelOf(row.entry, row.i);
+          if (row.missed) { misses.push({ slotKey: row.slot, i: row.i, missed: true, label }); continue; }
+          const reps = parseNum(row.els.reps?.value);
+          const rpeRaw = (row.els.rpe?.value || '').trim();
+          const rpe = rpeRaw === '' ? null : parseNum(rpeRaw);
+          if (!(reps > 0) || !Number.isInteger(reps)) {
+            problems.push(`${label}: no longer missed, so it needs the reps you did — a whole number above zero.`);
+            continue;
+          }
+          if (rpeRaw !== '' && (rpe == null || rpe < RPE_MIN || rpe > RPE_MAX)) {
+            problems.push(`${label}: RPE must be between ${RPE_MIN} and ${RPE_MAX}.`);
+            continue;
+          }
+          misses.push({ slotKey: row.slot, i: row.i, missed: false, reps, rpe, label });
+        }
+
         if (problems.length) {
           errEl.innerHTML = `<div class="insight insight--bad"><div>${problems.map(esc).join('<br>')}</div></div>`;
           return;
         }
-        if (!changes.length) { close(); toast('Nothing changed.'); return; }
+        if (!changes.length && !misses.length) { close(); toast('Nothing changed.'); return; }
 
+        const at = new Date().toISOString();
+        let applied = 0;
         ctx.store.update((s) => {
           const target = s.sessions.find((x) => x.id === id);
           if (!target) return;
@@ -390,8 +505,17 @@ async function openCorrect(ctx, id) {
           // every snapshot — a correction can always be traced back.
           target.corrections = [
             ...(target.corrections || []),
-            ...changes.map((c) => ({ at: new Date().toISOString(), slotKey: c.slotKey, setIndex: c.i, field: c.field, from: c.from, to: c.to })),
+            ...changes.map((c) => ({ at, slotKey: c.slotKey, setIndex: c.i, field: c.field, from: c.from, to: c.to })),
           ];
+          applied = changes.length;
+          // After the edits, so a weight corrected in the same save is the
+          // weight the miss is recorded at.
+          for (const m of misses) {
+            const rec = m.missed
+              ? markSetMissed(target, m.slotKey, m.i, { at })
+              : markSetMissed(target, m.slotKey, m.i, { at, missed: false, reps: m.reps, rpe: m.rpe });
+            if (rec) applied += 1;
+          }
         });
 
         // The sheet, the dashboard and the estimates all key off this session, so
@@ -400,7 +524,29 @@ async function openCorrect(ctx, id) {
         sync.flush({ reason: 'correction' });
 
         close();
-        toast(`${changes.length} ${changes.length === 1 ? 'entry' : 'entries'} corrected.`, 'good');
+        const said = `${applied} ${applied === 1 ? 'entry' : 'entries'} corrected.`;
+        // A test day writes its best single into the lifter's maxes when it is
+        // finished, and — as the confirmation says — a correction does not
+        // re-run that. If the set just marked missed is the one the max on file
+        // came from, the max is now a lift that did not happen; say where to
+        // fix it rather than leave the lifter to find out from their attempts.
+        const after = ctx.state;
+        const stale = misses.filter((m) => m.missed).map((m) => {
+          const lift = TEST_DAY.slots.find((t) => t.key === m.slotKey)?.lift;
+          const set = after.sessions.find((x) => x.id === id)?.entries.find((e) => e.slotKey === m.slotKey)?.sets[m.i];
+          const rec = lift ? after.maxes?.[lift] : null;
+          return rec && set && rec.source === 'tested' && rec.date === ses.date && Math.abs(Number(rec.fromLoad) - Number(set.load)) < 1e-9
+            ? { lift, value: rec.value } : null;
+        }).filter(Boolean);
+        if (stale.length) {
+          // A max is an estimate, shown to a tenth — not put through the plate formatter.
+          const which = stale.length === 1
+            ? `Your ${stale[0].lift} max on file, ${String(+Number(stale[0].value).toFixed(1))}, still comes from that set`
+            : `Your ${stale.map((x) => x.lift).join(' and ')} maxes on file still come from those sets`;
+          toast(`${said} ${which} — change it in Settings › Update maxes.`, 'bad', 7000);
+        } else {
+          toast(said, 'good');
+        }
       };
     },
   });

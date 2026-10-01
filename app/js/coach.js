@@ -5,12 +5,31 @@
    ========================================================================== */
 
 import { templateOf, graduationCheck, slotHistory, slotE1RM, volumeAudit, loadingWeeks, bestMaxFor,
-         MISS_MEMORY_DAYS, workingMaxDetail, isSubmaximalSlot, gradeSets, RELIABLE_E1RM_REPS,
-         missedAttempts, peakStatus, PEAK_MIN_DAYS } from './program.js';
+         MISS_MEMORY_DAYS, isSubmaximalSlot, gradeSets, RELIABLE_E1RM_REPS,
+         missedAttempts, peakStatus, PEAK_MIN_DAYS, goalFor, goalTargetFor,
+         isCompetitionSlot, peakKeepsFullSets, maxBasisLabel, RECORD_BINDS_DAYS, easyMaxDetail,
+         attemptsFor } from './program.js';
 import { e1RM, fmtLoad, fmtLoadBare, fmtRPE, rpeFor, convertLoad } from './rpe.js';
 import { byId } from './exercises.js';
-import { relDays } from './ui.js';
+import { relDays, fmtDate } from './ui.js';
 import { todayISO } from './store.js';
+
+/**
+ * A max, a rate or a gap between two maxes, as text: to a tenth, never snapped.
+ *
+ * These are measurements, not loads. `fmtLoadBare` is for weights somebody puts
+ * on a bar and prints them to the plate — it showed a schedule's 173.45 as
+ * "173.45 kg", a figure that is neither a load nor a sensible way to state an
+ * estimate. A load goes through `fmtLoadBare`; everything the lifter cannot
+ * load goes through here. Exported so the meet sheet phrases the same numbers
+ * the same way as the card in the gym.
+ */
+export function fmtMax(v) {
+  if (v == null || !Number.isFinite(Number(v))) return '—';
+  // Half up, with the same epsilon the load notes use: 173.45 is 173.5 on the
+  // card in the gym, so it is 173.5 on the meet sheet too.
+  return String(Math.round((Number(v) + 1e-9) * 10) / 10);
+}
 
 /* ======================================================================
    Readiness — "if you feel terrible, do the easiest workout you had
@@ -493,6 +512,271 @@ function peakBriefing(resolved) {
 }
 
 /* ======================================================================
+   A number on one lift, and what it asks of the bar in front of you
+   ====================================================================== */
+
+/**
+ * Where the goal line is allowed to be drawn.
+ *
+ * Only inside the peaking block, and only on its loading days — the block is
+ * the four weeks where the meet is close enough for the arithmetic to mean
+ * anything, and its other days are the taper. Telling a lifter what they
+ * "should be hitting" on the primer, on meet week, or on the opener rehearsal
+ * would be the worst-placed sentence in the app: those days exist to *not*
+ * push, and every one of them is a day where pushing costs the meet.
+ */
+const GOAL_NOTE_KINDS = new Set(['load', 'week3']);
+
+/**
+ * What the bar in front of you has to look like for a stated goal to happen.
+ *
+ * A lifter mid-block knows the date and knows the number and has no way to tell
+ * whether today's triple is on the way to it or quietly off it. The arithmetic
+ * that answers that — see `goalPace` — takes five seconds and nobody does it
+ * between sets, so the app does it and puts the answer on the card being
+ * logged.
+ *
+ * Three rules constrain what it is allowed to say, and they are the whole
+ * design:
+ *
+ *  1. **Only on the work the block is made of.** `peakKeepsFullSets` is the
+ *     same test the volume cut uses, so the note appears exactly where the peak
+ *     still wants effort and nowhere else. Technique singles are RPE 5 by
+ *     design and a deloaded slot is deloaded on purpose; a goal does not get to
+ *     overrule either.
+ *  2. **It prices a target, it does not raise the prescription.** The load on
+ *     the card is chosen by autoregulation off the lifter's own anchor. This
+ *     says what being on schedule would look like next to it, and where the two
+ *     disagree it reports the disagreement rather than resolving it.
+ *  3. **It says no.** Every note carries the rate the rest of the gap would
+ *     have to close at, next to the rate the block actually adds, and when the
+ *     first is more than twice the second it says plainly that training does
+ *     not get there. A target that is only ever encouraging is not a target, it
+ *     is a slogan — and in a taper, chasing one is how the opener goes wrong
+ *     too.
+ *
+ * Returns one note per qualifying slot, keyed by `slotKey` for the session view.
+ */
+export function goalNotes(resolved, state, { today = todayISO(), loads = null } = {}) {
+  const program = state?.program;
+  if (!program?.peak || !resolved?.isPeak) return [];
+  if (!GOAL_NOTE_KINDS.has(resolved.peakKind)) return [];
+
+  const units = state.profile.units;
+  const out = [];
+
+  for (const slot of resolved.slots) {
+    const def = slot.slot;
+    if (!isCompetitionSlot(def) || def.technique || slot.slotDeload) continue;
+    if (!peakKeepsFullSets(def, program)) continue;
+    if (!goalFor(state, def.lift)) continue;
+
+    // `loads` is the weight actually on the card now, by slot — the session
+    // screen passes it so a lifter who has stepped the top set down to the
+    // weight this line asked for is not still told the card is too heavy.
+    const card = loads?.[slot.slotKey] > 0 ? { ...slot, plannedLoad: loads[slot.slotKey] } : slot;
+    const t = goalTargetFor(state, card, { today });
+    if (!t) continue;
+    t.cardThird = attemptsFor(state, def.lift)?.third ?? null;
+    out.push({ ...t, slotKey: slot.slotKey, ...goalPhrasing(t, units) });
+  }
+  return out;
+}
+
+const TAPER_CITE = 'Level 3, p. 140 — a taper holds intensity and removes volume. Aim at the number on your top set; do not buy it with extra sets.';
+
+/**
+ * The finding, in words, for the card it is printed on.
+ *
+ * Deliberately phrased as the lifter asked the question — "X for this many, if
+ * you want Y on this date" — because that is the sentence they would have said
+ * to themselves, and a number arrives faster when it is already in the shape
+ * you were going to put it in.
+ *
+ * Four rules about what it may print, each from a note that printed the wrong
+ * thing on a real log:
+ *
+ *  - **Loads to the plate, maxes to a tenth.** The target, the card's weight
+ *    and the goal are loads, and go through `fmtLoadBare`. The max behind them,
+ *    the line it is measured against, the gap between the two and the weekly
+ *    rates are measurements, and go through `fmtMax` — the schedule's 173.45
+ *    was being printed as though it were a weight somebody could load.
+ *  - **A heavy card outranks the pace.** When the card's own load reads heavy
+ *    by the session banner's test (`cardHeavy` — `readsHeavy` against
+ *    `heavyCheckMax`, in program.js), that is said first, in the warning tone,
+ *    with the weight to take the top set down to. It used to fall through to
+ *    the "behind" wording and tell a lifter whose card was the problem that
+ *    "your card is already 10 kg past it" and "-2.25 kg over the max behind
+ *    it". A goal that is in hand does not change it either: a reached goal over
+ *    a heavy card is still a warning, because the extra weight buys nothing the
+ *    goal needs and costs fatigue in a taper. What it does *not* do is repeat
+ *    the banner. The banner sits directly above this strip and already says
+ *    what the weight reads against which max and what to do about it; the
+ *    strip's half is the goal's — that the heavier set is not what the goal
+ *    needs — and it points at the same weight (`rpeLoad`, which is the banner's
+ *    `cardDropLoad`), so the two blocks read as one piece of advice, not two.
+ *  - **No rate that is not a rate.** With nothing left to find, "0 kg a week"
+ *    is noise; inside the final week the gap is due by meet day, not "a week"
+ *    (`goalPace` stops dividing it by a fraction); and a block that claims no
+ *    weekly gain is not quoted as adding "0 kg".
+ *  - **A standing miss is named.** `goalPace` will not call a goal reached
+ *    while a recent miss at or above it stands (`goalMiss`). When that miss is
+ *    the only thing between the arithmetic and "reached", the note says so —
+ *    otherwise the card reads "ahead of the line" and "not yet" side by side,
+ *    and the lifter is left to guess which half is wrong.
+ *
+ * "Already" is kept for the one note that means it: a goal the max carries,
+ * with no miss against it.
+ */
+function goalPhrasing(t, units) {
+  const p = t.pace;
+  const lift = t.lift;
+  const when = fmtDate(p.meetDate);
+  const shape = `${fmtLoadBare(t.load)} ${units} × ${t.sets}×${t.reps}`;
+  const basis = maxBasisLabel(p.detail, lift) || `your ${lift} max`;
+  /** A load, which has to be loadable. */
+  const L = (v) => `${fmtLoadBare(v)} ${units}`;
+  /** A max, a rate or a gap between maxes: a measurement, and shown as one. */
+  const M = (v) => `${fmtMax(v)} ${units}`;
+  const forReps = t.reps === 1 ? 'as a single' : `for ${t.reps}`;
+  const hasCard = t.planned > 0;
+  const heavy = t.verdict === 'cardHeavy';
+
+  /** The weight the card comes down to, and what it is — the banner's number, in the goal's terms. */
+  const dropTo = `${L(t.rpeLoad)} — ${t.reps === 1 ? 'a single' : `${t.reps}`} at RPE ${fmtRPE(t.rpe)} against ${basis}`;
+
+  // A recent miss at or above the goal, which `goalPace` holds against it.
+  const miss = p.goalMiss;
+  const missed = miss ? `the ${L(miss.load)} you loaded on ${fmtDate(miss.date)} did not move` : null;
+
+  if (p.reached) {
+    // "Reached" means the max behind the attempt card carries the goal as a
+    // third — not that the lifter has lifted it. A 152.5 goal on a recorded 150
+    // is a PR attempt, and calling it "a weight you own" was simply untrue.
+    const card = heavy
+      ? `, and your card asks ${L(t.planned)}. Nothing about ${L(p.goal)} needs the heavier set: ${L(t.rpeLoad)} `
+        + `holds it with room to spare, and in a taper the extra is fatigue you carry onto the platform. `
+      : hasCard ? `, and your card says ${L(t.planned)}. ` : '. ';
+    return {
+      tone: heavy ? 'warn' : 'good',
+      title: `${L(p.goal)} is your third attempt on ${when}`,
+      text: `On ${basis}, ${L(p.goal)} is your third attempt on ${when}: the max behind it carries it. Today's `
+          + `${t.sets}×${t.reps} only has to be ${L(t.load)} to hold it${card}`
+          + `The job from here is arriving fresh enough to show it.`,
+      cite: TAPER_CITE,
+    };
+  }
+
+  // The headline is always the number the lifter came for. Whether the goal
+  // behind it is realistic is the more important fact, but it does not change
+  // between sessions, and a heading that says the same worrying thing twelve
+  // times in four weeks stops being read by about the third. So it goes in the
+  // body, where it is still said plainly and still said every time.
+  // Except on a card that reads heavy: there the banner and this strip both
+  // name the weight to come down to, and a headline naming a third weight
+  // (the line's) is the one instruction nobody on the screen is giving.
+  const title = !heavy ? `${shape} today, for ${L(p.goal)} on ${when}`
+    : t.load <= t.rpeLoad ? `${L(t.rpeLoad)} × ${t.sets}×${t.reps} covers ${L(p.goal)} today`
+    : `The line asks ${L(t.load)} ${forReps} today, for ${L(p.goal)} on ${when}`;
+
+  const vsCard = !hasCard ? `There is no weight on your card to set it beside`
+    : t.delta === 0 ? `That is exactly what is on your card — today the prescription and the pace agree`
+    : t.delta < 0 ? `Your card is ${L(-t.delta)} heavier than that`
+    : `That is ${L(t.delta)} over the ${L(t.planned)} on your card`;
+
+  let todayLine;
+  if (heavy) {
+    // The banner above has already said what the card's weight reads and what
+    // to do about it. This says what it means for the goal, and names the same
+    // weight: where the line sits under it, coming down costs the goal nothing,
+    // and saying so is what makes the advice easy to take.
+    todayLine = Math.abs(t.load - t.rpeLoad) < 1e-9
+      ? `The heavier set on your card is not what ${L(p.goal)} needs: the line asks ${L(t.load)} ${forReps} today, `
+        + `which is ${t.reps === 1 ? 'a single' : `${t.reps}`} at RPE ${fmtRPE(t.rpe)} against ${basis}. Taking the top set `
+        + `to ${L(t.rpeLoad)} costs the goal nothing.`
+      : t.load < t.rpeLoad
+      ? `The heavier set on your card is not what ${L(p.goal)} needs: the line only asks ${L(t.load)} ${forReps} `
+        + `today, and ${dropTo} — covers that. Taking the top set to ${L(t.rpeLoad)} costs the goal nothing.`
+      : `The heavier set on your card does not buy ${L(p.goal)} anything today. The line's ${L(t.load)} ${forReps} `
+        + `is about RPE ${fmtRPE(t.impliedRPE)} against ${basis}, and closing that gap is the rest of the block's `
+        + `job, not today's top set — ${L(t.rpeLoad)} is the weight that keeps it at RPE ${fmtRPE(t.rpe)}.`;
+  } else if (t.verdict === 'ahead') {
+    todayLine = `${vsCard}. You are ahead of the line this week needs — ${M(p.have)} against the ${M(p.needNow)} `
+      + `the schedule asks for — so take the prescription as written and let the first set decide the rest.`;
+  } else if (t.verdict === 'close') {
+    // Landing exactly on the card is the good case and reads badly if it is
+    // phrased as a target to reach for — there is nothing to reach for.
+    todayLine = hasCard && t.delta <= 0
+      ? `${vsCard}. Against ${basis}, that is about RPE ${fmtRPE(t.impliedRPE)}. Take it as written and log what `
+        + `the first set actually felt like: the line holds for as long as that number is honest.`
+      : `${vsCard}, and against ${basis}, it is about RPE ${fmtRPE(t.impliedRPE)} — inside the tolerance this set `
+        + `is written with. So it is there: aim at it on your top set, and if the first one lands under `
+        + `RPE ${fmtRPE(t.rpe)} you have it.`;
+  } else {
+    // Behind: `onTrack` is false, so `gap` is the positive distance from the
+    // max on file to the one this week's line assumes.
+    todayLine = `${vsCard}, and it assumes a max ${M(p.gap)} above the one behind it: against ${basis}, `
+      + `${L(t.load)} ${forReps} is about RPE ${fmtRPE(t.impliedRPE)} rather than the ${fmtRPE(t.rpe)} this day is `
+      + `written at. Take your top set to the heavy end of the range and log what you actually felt. Putting `
+      + `${L(t.load)} on every set instead is how you arrive on ${when} strong and cooked.`;
+  }
+
+  // And the part today's bar cannot say on its own: the rate the rest of the
+  // gap would have to close at. Always stated, because it is the size of the
+  // ask and the lifter is the one deciding whether to accept it — except when
+  // there is no gap left, where a rate of nothing is not a size of anything.
+  // Gated on the figure as printed: 0.04 kg a week is not a rate, it is "0".
+  const rate = +Number(p.requiredPerWeek).toFixed(1) > 0
+    ? `${L(p.goal)} needs ${M(p.requiredPerWeek)} ${p.inFinalWeek ? 'more by meet day' : 'a week from here'}`
+      + (!(p.perWeek > 0) ? ''
+        : p.inFinalWeek ? `, where the block adds about ${M(p.perWeek)} in a whole week`
+        : `, against the ${M(p.perWeek)} the block adds`)
+    : null;
+
+  let paceLine;
+  if (!rate) {
+    // Level on paper and still not reached: the only way here is a miss. It
+    // lands exactly level more often than not, because the miss itself holds
+    // the working max one platform step under it — which is `maxNeeded`.
+    const level = Math.abs(p.have - p.maxNeeded) < 0.05
+      ? `${M(p.have)} is exactly what a ${L(p.goal)} third needs`
+      : `${M(p.have)} is past the ${M(p.maxNeeded)} a ${L(p.goal)} third needs`;
+    paceLine = ` On paper the max behind it is enough: ${level}.`
+      + (missed ? ` But ${missed}, and until a rep at that weight answers it, ${L(p.goal)} is your third attempt `
+        + `on ${when}, not a weight you have.` : '');
+  } else if (p.frozen) {
+    // The max behind the card is the one the lifter recorded, which a taper
+    // does not move — so a weekly rate is the wrong way to state the gap.
+    paceLine = ` About the number itself: a ${L(p.goal)} third needs a ${M(p.maxNeeded)} max, and the one you `
+      + `recorded is ${M(p.have)} — ${M(p.toGo)} short. Training in a taper does not move a recorded number; a test `
+      + `day does, or a new max you record in Settings.`
+      + (t.cardThird ? ` The card's third is ${L(t.cardThird)}; ${L(p.goal)} comes into it only if the second moves well on the day.` : '');
+    if (missed) paceLine += ` And ${missed}: until a rep at that weight answers it, it counts against the goal.`;
+  } else {
+    // Chosen from the pace, not the verdict: a card that reads heavy says
+    // nothing about whether the number fits, and a 0.7 kg a week gap against a
+    // block that adds 1.7 is not "a stretch" because today's set is too heavy.
+    paceLine = p.onTrack
+      ? ` And the number itself fits: ${rate}.`
+      : p.outsized
+        ? ` About the number itself: ${rate} — training alone does not get there.`
+          + (t.cardThird ? ` The card's third is ${L(t.cardThird)}; ${L(p.goal)} is not this meet's number unless the `
+            + `second moves well on ${when} and the board says so.`
+            : ` It is not this meet's number unless the second moves well on ${when}.`)
+        : ` About the number itself: ${rate}. That is a stretch rather than a wall, and it is the stretch a peak `
+          + `exists to cover — the bar on ${when} is lifted by someone who has not trained through fatigue for a week.`;
+    if (missed) paceLine += ` And ${missed}: until a rep at that weight answers it, it counts against the goal.`;
+  }
+
+  return {
+    tone: heavy || p.outsized ? 'warn' : t.verdict === 'ahead' && !miss ? 'good' : 'info',
+    title,
+    text: todayLine + paceLine,
+    cite: TAPER_CITE,
+  };
+}
+
+/* ======================================================================
    Test readiness — is today the day to find out?
    ====================================================================== */
 
@@ -591,8 +875,16 @@ export function testReadiness(state, { today = todayISO() } = {}) {
   if (recent.length) {
     const drift = recent.reduce((a, e) => a + (e.rpe - e.target), 0) / recent.length;
     if (drift >= 0.5) bad('Recent sessions running hot', `Your last ${recent.length} sessions came in about ${drift.toFixed(1)} RPE above target. Prescribed loads feeling heavier than they should is the clearest fatigue signal you have.`, 20);
-    else if (drift <= -0.5) ok('Recent sessions running easy', 'Prescribed loads have been feeling lighter than the target. That is what recovered looks like.');
-    else ok('Recent effort on target', 'Logged RPE is tracking what was prescribed.');
+    // This compares the calls with the *targets*, and a lifter whose calls run
+    // light matches the targets perfectly while lifting harder than them — so
+    // when the calibration says so, this says so too, rather than two cards on
+    // one screen telling him opposite things about the same numbers.
+    else {
+      const light = rpeCalibration(state).some((c) => c.light && (c.gap >= CALIBRATION_MIN_GAP || c.badCalls >= CALIBRATION_BAD_CALLS));
+      if (drift <= -0.5 && !light) ok('Recent sessions running easy', 'Prescribed loads have been feeling lighter than the target. That is what recovered looks like.');
+      else if (light) ok('Logged RPE matches the targets', 'Though your calls have been running light against the maxes you recorded (see the Coach card), so this reads the ratings, not the bar.');
+      else ok('Recent effort on target', 'Logged RPE is tracking what was prescribed.');
+    }
   }
 
   /* --- 4. did the last deload actually deload? ---------------------- */
@@ -1217,14 +1509,31 @@ const CALIBRATION_DAYS = 35;
  * because it also holds a weight that lifter demonstrably could and could not
  * do on a given day.
  *
- * So: for every rated set on a competition lift, what RPE does the working max
- * say that weight and that rep count *was*, and what did the lifter call it? The
- * gap is `calls light` when they rate sets easier than the bar says they were.
+ * So: for every rated set on a competition lift, what RPE does the lifter's
+ * recorded max say that weight and that rep count *was*, and what did they call
+ * it? The gap is `calls light` when they rate sets easier than the bar says
+ * they were.
  *
- * Deliberately only computed where there is a tested max. Measured against a
- * number that was itself inferred from these same RPE calls, this would be
- * circular and would report a gap of zero no matter how far off the calls were.
- * Against a weight that went up under an attempt, it means what it says.
+ * The max it reads against is the one in `state.maxes` — the lifter's own
+ * number, from a test day, onboarding or Settings, whatever its `source` and
+ * whether or not it carries a date — and never the working max. The working
+ * max is inferred from these same RPE calls, so measuring the calls against it
+ * is circular: a lifter who calls every set two points light raises the
+ * estimate until the sets read as called, and the gap comes out zero however
+ * far off the calls are. The recorded max does not absorb the calls it is
+ * judging — it moves only when somebody records a new one — which is the only
+ * property the comparison needs.
+ *
+ * This used to require `source === 'tested'`, on the theory that anything else
+ * was the same kind of guess. In practice it meant the finding never reached
+ * the lifter it was built for: the Update maxes sheet saved every lift as
+ * `estimated` (a 150 squat tested the same week included), so the gate was
+ * shut on a log whose technique triples were called RPE 5 and were RPE 8. And
+ * it computed against the working max while printing the tested one, so the
+ * sentence named one number and the arithmetic used another. It is now one
+ * number throughout, and it is the same one easy days and meet attempts are
+ * built from (`easyMaxDetail`) whenever it is the lower of the two — so "RPE 8
+ * against your 150" here is the same 150 the technique day is a percentage of.
  *
  * Only sets inside `RELIABLE_E1RM_REPS` are read this way, for the reason that
  * constant exists: the table stops describing individuals past about six reps,
@@ -1234,15 +1543,17 @@ const CALIBRATION_DAYS = 35;
  * looking for.
  *
  * Returns, per lift and biggest gap first:
- *   { lift, sets, gap, worst, badCalls, contradictions, light, max, tested }
+ *   { lift, sets, gap, worst, badCalls, contradictions, light, max, recordedDate, source }
+ * where `max` is the recorded figure every `was` in it was computed against.
  */
 export function rpeCalibration(state, { today = todayISO(), lifts = ['squat', 'bench', 'deadlift'] } = {}) {
   const tpl = templateOf(state.program);
   const out = [];
 
   for (const lift of lifts) {
-    const max = workingMaxDetail(state, lift, { today });
-    if (!max?.tested || max.tested.source !== 'tested' || !max.value) continue;
+    const rec = state.maxes?.[lift];
+    const max = Number(rec?.value) > 0 ? Number(rec.value) : null;
+    if (!max) continue;
 
     const keys = tpl.days.flatMap((d) => d.slots).filter((x) => x.lift === lift).map((x) => x.key);
     const gaps = [];
@@ -1258,10 +1569,16 @@ export function rpeCalibration(state, { today = todayISO(), lifts = ['squat', 'b
       for (const h of slotHistory(state, key)) {
         if (h.phase === 'deload' || h.phase === 'meetWeek') continue;
         if (daysBetween(h.date, today) > CALIBRATION_DAYS) continue;
-        for (const set of h.sets) {
+        // A record is evidence about a call only near the day it was recorded
+        // — the same `RECORD_BINDS_DAYS` window in which it holds the easy max
+        // down. Rated against a max months old, an honest lifter who has simply
+        // got stronger reads as calling everything light; an undated record
+        // has no "near" at all, so it rates nothing.
+        const rated = !!rec.date && Math.abs(daysBetween(h.date, rec.date)) <= RECORD_BINDS_DAYS;
+        for (const set of rated ? h.sets : []) {
           if (set.rpe == null) continue;               // never guess at an unrated set
           if (set.reps > RELIABLE_E1RM_REPS) continue; // and never argue off a set of nine
-          const was = rpeFor(max.value, set.load, set.reps);
+          const was = rpeFor(max, set.load, set.reps);
           if (was == null) continue;
           const gap = was - set.rpe;
           gaps.push(gap);
@@ -1291,7 +1608,7 @@ export function rpeCalibration(state, { today = todayISO(), lifts = ['squat', 'b
     if (gaps.length < CALIBRATION_MIN_SETS) continue;
     const gap = gaps.reduce((a, b) => a + b, 0) / gaps.length;
     out.push({ lift, sets: gaps.length, gap: +gap.toFixed(2), worst, badCalls, contradictions,
-               light: gap > 0, max: max.value, tested: max.tested.value, testedDate: max.tested.date });
+               light: gap > 0, max, recordedDate: rec.date || null, source: rec.source || null });
   }
 
   return out.sort((a, b) => Math.abs(b.gap) - Math.abs(a.gap));
@@ -1306,9 +1623,6 @@ function whenAgo(iso) {
   return d <= 60 ? `${d} days ago` : `on ${iso}`;
 }
 
-/** A max is an estimate, so it is shown to a tenth rather than to a plate. */
-const fmtMax = (v) => String(+Number(v).toFixed(1));
-
 /** The calibration finding, phrased for the home screen — or null if there is nothing to say. */
 function calibrationInsight(state) {
   // Either a standing habit, or a handful of calls that were simply wrong. The
@@ -1317,33 +1631,62 @@ function calibrationInsight(state) {
   const worthSaying = rpeCalibration(state)
     .filter((c) => c.gap >= CALIBRATION_MIN_GAP || c.badCalls >= CALIBRATION_BAD_CALLS || c.contradictions.length);
   if (!worthSaying.length) return null;
-  const c = worthSaying[0];
-  const w = c.worst;
   const units = state.profile.units;
+  // A load read back out of the log may have been logged in the other unit and
+  // converted; printed as a load it would come out as "330.69 lb". On the grid
+  // it is a load, and off it it is a measurement, and each is printed as one.
+  const asLoad = (v) => (Math.abs(v * 2 - Math.round(v * 2)) < 1e-6 ? fmtLoadBare(v) : fmtMax(v));
 
   const habit = worthSaying.filter((x) => x.gap >= CALIBRATION_MIN_GAP);
   const clash = worthSaying.flatMap((x) => x.contradictions);
+  // The clearest call is the worst one on any lift, not the worst on whichever
+  // lift has the largest average — a squat triple called 5 that was an 8 is
+  // clearer than a deadlift one that was a 7.5.
+  const worstOf = worthSaying.filter((x) => x.worst).sort((a, b) => b.worst.gap - a.worst.gap)[0] || null;
+  const w = worstOf?.worst || null;
 
   const parts = [];
   if (habit.length) {
-    parts.push(`Against your tested maxes the sets you have rated lately were harder than you called them — `
+    parts.push(`Against the maxes you recorded, the sets you have rated lately were harder than you called them — `
              + `${habit.map((x) => `${x.lift} by ${x.gap.toFixed(1)}`).join(', ')} on average.`);
   }
-  if (w && w.gap >= CALIBRATION_BAD_CALL) {
-    parts.push(`The clearest single call: ${fmtLoadBare(w.load)} ${units} × ${w.reps} ${whenAgo(w.date)}, logged RPE `
-             + `${fmtRPE(w.called)}, which is RPE ${fmtRPE(w.was)} against a ${c.lift} max of ${fmtMax(c.tested)}.`);
+  const badCall = w && w.gap >= CALIBRATION_BAD_CALL;
+  if (badCall) {
+    // The number printed is the number `was` was computed from — see
+    // `rpeCalibration` for what happened when those were two different maxes.
+    parts.push(`The clearest call: ${asLoad(w.load)} ${units} × ${w.reps} on your ${worstOf.lift} ${whenAgo(w.date)}, `
+             + `logged RPE ${fmtRPE(w.called)}, which is RPE ${fmtRPE(w.was)} against the ${worstOf.lift} max you `
+             + `recorded, ${fmtMax(worstOf.max)} ${units}.`);
   }
   if (clash.length) {
     const k = clash[0];
-    parts.push(`And ${clash.length === 1 ? 'once' : `${clash.length} times`} you rated the same bar twice in one session and `
-             + `called the second one easier — ${fmtLoadBare(k.load)} ${units} × ${k.reps} ${whenAgo(k.date)}, RPE `
-             + `${fmtRPE(k.first)} and then RPE ${fmtRPE(k.then)}. Fatigue only runs one way, so the app reads the harder of the two.`);
+    parts.push(`${parts.length ? 'And ' : ''}${clash.length === 1 ? 'Once' : `${clash.length} times`} you rated the same `
+             + `bar twice in one session and called the second one easier — ${asLoad(k.load)} ${units} × ${k.reps} `
+             + `${whenAgo(k.date)}, RPE ${fmtRPE(k.first)} and then RPE ${fmtRPE(k.then)}. Fatigue only runs one way, so `
+             + `the app reads the harder of the two.`);
+    if (parts.length > 1) parts[parts.length - 1] = parts[parts.length - 1].replace(/^And Once/, 'And once');
   }
-  parts.push(`Nothing is broken and nothing needs undoing: every load you are given comes off your tested max, not off these ratings, `
-           + `so a light call costs you no weight on the bar. They are still worth getting right, because they are what the app reads `
-           + `when it decides you are ready for more. RPE 5 means four to six reps left — if the fourth one was not there, it was not a 5.`);
+  // What a light call costs, stated as narrowly as it is true. Easy days and
+  // attempts come off `easyMaxDetail`. Where that is the recorded max, a light
+  // call costs nothing there; where the app's working max is the lower figure
+  // (a record above it, or one older than RECORD_BINDS_DAYS), the calls do
+  // reach them — but never past the lifter's own recent number. Heavy days and
+  // the progression read the calls either way.
+  const recordedEverywhere = worthSaying.every((x) => easyMaxDetail(state, x.lift)?.basis === 'recorded');
+  const cost = recordedEverywhere
+    ? `your easy days and meet attempts are built from the max you recorded, not from these ratings, so a light call `
+      + `costs you no weight on the bar there.`
+    : `your easy days and meet attempts are built from the lower of the max you recorded and the app's working max, `
+      + `so a light call can never push them past your own recent number.`;
+  // And RPE 5 is defined here the way the picker defines it — exactly five
+  // reps left, RPE = 10 − RIR — with the book's technique band beside it.
+  parts.push(`Nothing is broken and nothing needs undoing: ${cost} They are still worth getting right, because heavy `
+           + `days read them, and so does the app when it decides you are ready for more. RPE 5 means five more good `
+           + `reps were there — technique work sits four to six shy of failure (p. 242) — so if five more were not `
+           + `there, it was not a 5.`);
 
-  return { kind: 'rpeCalibration', priority: 2, title: 'Your RPE calls are running light', text: parts.join(' ') };
+  const title = habit.length || badCall ? 'Your RPE calls are running light' : 'Some of your calls contradict each other';
+  return { kind: 'rpeCalibration', priority: 2, title, text: parts.join(' ') };
 }
 
 /** Anything the coach wants to raise, unprompted, on the home screen. */

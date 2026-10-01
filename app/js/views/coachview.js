@@ -4,9 +4,10 @@
 
 import { html, raw, esc, icon, $, $$, sheet, toast, confirmSheet, fmtDate, relDays } from '../ui.js';
 import { fmtLoadBare, parseNum } from '../rpe.js';
-import { activeInsights, PLATEAU_TREE, PAIN_PROTOCOL, FAULTS, STICKING_POINT_PREAMBLE, trainingAgeReport } from '../coach.js';
+import { activeInsights, PLATEAU_TREE, PAIN_PROTOCOL, FAULTS, STICKING_POINT_PREAMBLE, trainingAgeReport,
+         fmtMax } from '../coach.js';
 import { graduationCheck, templateOf, slotHistory, slotE1RM, loadingWeeks, attemptsFor,
-         peakStatus, PEAK_MIN_DAYS } from '../program.js';
+         peakStatus, PEAK_MIN_DAYS, goalFor, goalPace, setGoalFor } from '../program.js';
 import { DELOAD_CHECKLIST } from '../templates.js';
 import { byId, optionsForSlot } from '../exercises.js';
 import { todayISO } from '../store.js';
@@ -365,6 +366,63 @@ function openPain() {
 
 /* ---- meet planner ---------------------------------------------------- */
 
+/**
+ * The line under one lift's goal box on the meet sheet: what the goal asks of
+ * the max, in words, or what it already has.
+ *
+ * Two things it has to agree with, because the lifter reads all three on one
+ * sheet. The attempt table above it — so "reached" names the card's actual
+ * third rather than assuming it is the goal: a max well past the goal prints a
+ * third past it too, and "180 goes on the card as a third attempt" beside a
+ * table reading 187.5 is two numbers for one decision. And the goal line in the
+ * gym (`goalNotes`), so the figures are formatted the same way: the goal and
+ * the third are loads, to the plate; the max, the line and the rates are
+ * measurements, to a tenth (`fmtMax`), where this used to print the schedule's
+ * 173.45. Inside the final week the gap is due by meet day, not "a week", and
+ * a goal the arithmetic calls level but a recent miss still stands against
+ * says so rather than calling it reached.
+ */
+function goalHint(pace, lift, third, units) {
+  const goal = fmtLoadBare(pace.goal);
+  const miss = pace.goalMiss;
+  const missed = miss ? `you loaded ${fmtLoadBare(miss.load)} on ${fmtDate(miss.date)} and it did not move` : null;
+
+  if (pace.reached) {
+    if (!(third > 0)) return `Your ${lift} max carries it.`;
+    return Math.abs(third - pace.goal) < 1e-9
+      ? `Your ${lift} max carries it: ${goal} is the third attempt on the card above.`
+      : `Your ${lift} max carries it and more: the card's third is ${fmtLoadBare(third)}, past the ${goal} you set.`;
+  }
+  if (!(+Number(pace.requiredPerWeek).toFixed(1) > 0)) {
+    // Level on paper and still not reached, which only a standing miss does.
+    const level = Math.abs(pace.have - pace.maxNeeded) < 0.05
+      ? `${fmtMax(pace.have)} is exactly what a ${goal} third needs`
+      : `${fmtMax(pace.have)} is past the ${fmtMax(pace.maxNeeded)} a ${goal} third needs`;
+    return `On paper your ${lift} max is enough: ${level}.`
+      + (missed ? ` But ${missed}, so it stays a third attempt until a rep at that weight answers it.` : '');
+  }
+  // Against a recorded max, which a taper does not move, the gap is a gap —
+  // not a weekly rate the number cannot follow (see `goalPace`'s `frozen`).
+  if (pace.frozen) {
+    return `A ${goal} third needs a ${fmtMax(pace.maxNeeded)} ${units} max; the one you recorded is `
+      + `${fmtMax(pace.have)} — ${fmtMax(pace.toGo)} ${units} short. Training in a taper does not move a recorded number; `
+      + `a test day does, or a new max recorded in Settings.`
+      + (third > 0 ? ` The card's third is ${fmtLoadBare(third)}.` : '')
+      + (miss ? ` You loaded ${fmtLoadBare(miss.load)} on ${fmtDate(miss.date)} and it did not move, which counts against it `
+        + `until a rep at that weight answers it.` : '');
+  }
+  const rate = `${fmtMax(pace.requiredPerWeek)} ${units} ${pace.inFinalWeek ? 'more by meet day' : 'a week'}`;
+  const against = !(pace.perWeek > 0) ? ''
+    : `, against the ${fmtMax(pace.perWeek)} ${units} the block adds${pace.inFinalWeek ? ' in a whole week' : ''}`;
+  return `Wants your ${lift} max at ${fmtMax(pace.needNow)} this week and ${fmtMax(pace.maxNeeded)} by the meet — `
+    + `${rate} from the ${fmtMax(pace.have)} you are at${against}.`
+    + (pace.onTrack ? ' You are on the line.'
+      : pace.outsized ? ` Training alone does not get there${third > 0 ? ` — the card's third is ${fmtLoadBare(third)}, and ${goal} is not this meet's number unless the second moves well on the day` : ''}.`
+      : ' A stretch, and the kind a peak exists to cover.')
+    + (miss ? ` You loaded ${fmtLoadBare(miss.load)} on ${fmtDate(miss.date)} and it did not move, which counts against it `
+      + `until a rep at that weight answers it.` : '');
+}
+
 function openMeet(ctx) {
   const st = ctx.state;
   const p = st.program;
@@ -427,7 +485,7 @@ function openMeet(ctx) {
                     : `<td class="r dim" colspan="3">no data</td>`}
           </tr>`).join('')}</tbody>
         </table></div>
-        <p class="cite">Open with your current 3RM, second attempt at your current 2RM, third at the next incremental PR if it is there. Computed from your logged estimated maxes, in ${esc(units)}, and rounded onto the platform's ${esc(units === 'kg' ? '2.5 kg' : '5 lb')} rather than onto your own plates — these are weights you declare, not weights you load. Week 3's opener rehearsal and meet day itself run exactly these numbers, recomputed on the day.</p>
+        <p class="cite">Open with your current 3RM, second attempt at your current 2RM, third at the next incremental PR if it is there. Computed from the lower of the app's working max and a max you recorded in the last six weeks, so an RPE call can never raise them: the opener and second sit under that number, and the third is the next increment past it. In ${esc(units)}, and rounded onto the platform's ${esc(units === 'kg' ? '2.5 kg' : '5 lb')} rather than onto your own plates — these are weights you declare, not weights you load. Week 3's opener rehearsal and meet day itself run exactly these numbers, recomputed on the day.</p>
 
         <div class="field">
           <label class="field__label" for="goaltotal">Total you are chasing</label>
@@ -440,15 +498,37 @@ function openMeet(ctx) {
         </div>
       </div>
 
+      <div class="stack-sm">
+        <div class="eyebrow">The number you are actually training for</div>
+        ${['squat', 'bench', 'deadlift'].map((lift) => {
+          // A meet that has been and gone has nothing left to pace against.
+          const pace = (() => { const x = goalPace(st, lift); return x && !x.past && x.have != null ? x : null; })();
+          const third = attempts.find((a) => a.lift === lift)?.third;
+          return `<div class="field">
+            <label class="field__label" for="goal_${lift}">${esc(lift.charAt(0).toUpperCase() + lift.slice(1))}</label>
+            <div class="row" style="gap:8px">
+              <input class="input input--num grow" id="goal_${lift}" type="text" inputmode="decimal"
+                     value="${goalFor(st, lift) ?? ''}" placeholder="${third ? fmtLoadBare(third) : '—'}"
+                     data-goallift="${lift}">
+              <span class="pill mono" style="flex:0 0 auto">${esc(units)}</span>
+            </div>
+            ${pace ? `<div class="field__hint">${esc(goalHint(pace, lift, third, units))}</div>` : ''}
+          </div>`;
+        }).join('')}
+        <p class="cite">During the peaking block, each of these prints on its own card in the gym: what today's sets would have to be for that number to land on ${esc(p.meetDate ? fmtDate(p.meetDate) : 'meet day')}, measured against the same max as the attempts above — the lower of the app's working max and the one you recorded — rather than the one you would like. It never raises the prescription — the load on the card is still chosen by how the first set moves.</p>
+      </div>
+
       <button class="btn btn--primary btn--block" data-savemeet>Save</button>
     </div>`,
     onMount(root, close) {
       $('[data-savemeet]', root).onclick = () => {
         const v = $('[data-md]', root).value;
         const g = parseNum($('[data-goal]', root)?.value);
+        const perLift = $$('[data-goallift]', root).map((el) => [el.dataset.goallift, parseNum(el.value)]);
         ctx.store.update((s) => {
           s.program.meetDate = v || null;
           s.program.goalTotal = g && g > 0 ? g : null;
+          for (const [lift, value] of perLift) setGoalFor(s, lift, value);
         });
         close();
         toast(v ? 'Meet date saved.' : 'Meet date cleared.');
