@@ -1,6 +1,6 @@
 {
  "v": 1,
- "generatedAt": "2026-10-06T14:27:05.710Z",
+ "generatedAt": "2026-10-07T11:20:25.830Z",
  "athlete": {
   "firstName": null
  },
@@ -327,7 +327,7 @@
    "tested": 175.7,
    "testedDate": "2026-09-13",
    "maxSource": "estimated",
-   "change28": 5.4,
+   "change28": 4,
    "trend": [
     {
      "date": "2026-08-07",
