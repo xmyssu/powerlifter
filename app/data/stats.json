@@ -1,25 +1,25 @@
 {
  "v": 1,
- "generatedAt": "2026-10-07T16:20:43.892Z",
+ "generatedAt": "2026-10-09T10:09:19.432Z",
  "athlete": {
   "firstName": null
  },
  "unit": "kg",
  "displayUnit": "kg",
  "totals": {
-  "sessions": 34,
-  "sets": 303,
-  "reps": 1591,
-  "tonnage": 124427,
+  "sessions": 35,
+  "sets": 306,
+  "reps": 1594,
+  "tonnage": 124825,
   "firstDate": "2026-08-05",
-  "lastDate": "2026-10-07"
+  "lastDate": "2026-10-09"
  },
  "lifts": [
   {
    "lift": "squat",
    "label": "Squat",
-   "e1rm": 150.9,
-   "e1rmDate": "2026-10-01",
+   "e1rm": 156.4,
+   "e1rmDate": "2026-08-22",
    "tested": 150,
    "testedDate": "2026-09-13",
    "maxSource": "estimated",
@@ -494,11 +494,11 @@
   },
   {
    "exercise": "Bench Press",
-   "e1rm": 100.3,
-   "date": "2026-10-07",
-   "load": 92.5,
+   "e1rm": 101.2,
+   "date": "2026-10-09",
+   "load": 95,
    "reps": 1,
-   "rpe": 8
+   "rpe": 8.5
   },
   {
    "exercise": "Close-Grip Bench Press",
@@ -518,48 +518,37 @@
   }
  ],
  "lastSession": {
-  "date": "2026-10-07",
-  "label": "C3 W3 · Day 3 · Strength",
+  "date": "2026-10-09",
+  "label": "C3 W3 · Day 4 · Strength",
   "cycle": 3,
   "week": 3,
-  "day": 3,
+  "day": 4,
   "phase": "load",
-  "sets": 10,
-  "reps": 30,
-  "tonnage": 1858,
-  "avgRPE": 7.1,
-  "avgTargetRPE": 7,
-  "minutes": 298,
+  "sets": 3,
+  "reps": 3,
+  "tonnage": 398,
+  "avgRPE": 8,
+  "avgTargetRPE": null,
+  "minutes": 81,
   "unit": "kg",
   "lifts": [
    {
     "exercise": "Low-Bar Back Squat",
-    "detail": "140×1@8.5, 140×1@8, 140×1@8",
+    "detail": "140×1@8.5",
     "topKg": 140
    },
    {
     "exercise": "Bench Press",
-    "detail": "92.5×1@8, 92.5×1@8, 92.5×1@8.5",
-    "topKg": 92.5
+    "detail": "95×1@8.5",
+    "topKg": 95
    },
    {
-    "exercise": "Barbell Row",
-    "detail": "85×4@6, 85×4@6",
-    "topKg": 85
-   },
-   {
-    "exercise": "Leg Curl",
-    "detail": "30×8@5, 30×8@5",
-    "topKg": 30
+    "exercise": "Deadlift",
+    "detail": "162.5×1@7",
+    "topKg": 162.5
    }
   ],
-  "prs": [
-   {
-    "exercise": "Bench Press",
-    "gain": 1.682,
-    "e1rm": 100.325
-   }
-  ]
+  "prs": []
  },
  "sessions": [
   {
@@ -1037,6 +1026,20 @@
    "avgRPE": 7.1,
    "avgTargetRPE": 7,
    "minutes": 298
+  },
+  {
+   "date": "2026-10-09",
+   "label": "C3 W3 · Day 4 · Strength",
+   "cycle": 3,
+   "week": 3,
+   "day": 4,
+   "phase": "load",
+   "sets": 3,
+   "reps": 3,
+   "tonnage": 398,
+   "avgRPE": 8,
+   "avgTargetRPE": null,
+   "minutes": 81
   }
  ],
  "bodyweight": [
