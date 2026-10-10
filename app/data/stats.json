@@ -1,18 +1,18 @@
 {
  "v": 1,
- "generatedAt": "2026-10-09T10:09:19.432Z",
+ "generatedAt": "2026-10-10T14:55:54.243Z",
  "athlete": {
   "firstName": null
  },
  "unit": "kg",
  "displayUnit": "kg",
  "totals": {
-  "sessions": 35,
-  "sets": 306,
-  "reps": 1594,
-  "tonnage": 124825,
+  "sessions": 36,
+  "sets": 312,
+  "reps": 1636,
+  "tonnage": 127905,
   "firstDate": "2026-08-05",
-  "lastDate": "2026-10-09"
+  "lastDate": "2026-10-10"
  },
  "lifts": [
   {
@@ -330,6 +330,13 @@
      "deload": false,
      "soft": false,
      "submax": false
+    },
+    {
+     "date": "2026-10-10",
+     "value": 95.6,
+     "deload": false,
+     "soft": true,
+     "submax": false
     }
    ]
   },
@@ -518,34 +525,34 @@
   }
  ],
  "lastSession": {
-  "date": "2026-10-09",
-  "label": "C3 W3 · Day 4 · Strength",
+  "date": "2026-10-10",
+  "label": "Meet week · Day 1 · Volume",
   "cycle": 3,
-  "week": 3,
-  "day": 4,
-  "phase": "load",
-  "sets": 3,
-  "reps": 3,
-  "tonnage": 398,
-  "avgRPE": 8,
-  "avgTargetRPE": null,
-  "minutes": 81,
+  "week": 4,
+  "day": 1,
+  "phase": "meetWeek",
+  "sets": 6,
+  "reps": 42,
+  "tonnage": 3080,
+  "avgRPE": 5.2,
+  "avgTargetRPE": 5.3,
+  "minutes": 28,
   "unit": "kg",
   "lifts": [
    {
-    "exercise": "Low-Bar Back Squat",
-    "detail": "140×1@8.5",
-    "topKg": 140
+    "exercise": "Explosive / Speed Squat",
+    "detail": "80×7@5, 80×7@5",
+    "topKg": 80
    },
    {
     "exercise": "Bench Press",
-    "detail": "95×1@8.5",
-    "topKg": 95
+    "detail": "65×7@5, 65×7@5",
+    "topKg": 65
    },
    {
-    "exercise": "Deadlift",
-    "detail": "162.5×1@7",
-    "topKg": 162.5
+    "exercise": "Lat Pulldown",
+    "detail": "70×7@5, 80×7@6",
+    "topKg": 80
    }
   ],
   "prs": []
@@ -1040,6 +1047,20 @@
    "avgRPE": 8,
    "avgTargetRPE": null,
    "minutes": 81
+  },
+  {
+   "date": "2026-10-10",
+   "label": "Meet week · Day 1 · Volume",
+   "cycle": 3,
+   "week": 4,
+   "day": 1,
+   "phase": "meetWeek",
+   "sets": 6,
+   "reps": 42,
+   "tonnage": 3080,
+   "avgRPE": 5.2,
+   "avgTargetRPE": 5.3,
+   "minutes": 28
   }
  ],
  "bodyweight": [
