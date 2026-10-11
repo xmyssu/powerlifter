@@ -1,18 +1,18 @@
 {
  "v": 1,
- "generatedAt": "2026-10-10T14:55:54.243Z",
+ "generatedAt": "2026-10-11T15:43:05.417Z",
  "athlete": {
   "firstName": null
  },
  "unit": "kg",
  "displayUnit": "kg",
  "totals": {
-  "sessions": 36,
-  "sets": 312,
-  "reps": 1636,
-  "tonnage": 127905,
+  "sessions": 37,
+  "sets": 320,
+  "reps": 1650,
+  "tonnage": 128745,
   "firstDate": "2026-08-05",
-  "lastDate": "2026-10-10"
+  "lastDate": "2026-10-11"
  },
  "lifts": [
   {
@@ -143,6 +143,13 @@
      "deload": false,
      "soft": false,
      "submax": false
+    },
+    {
+     "date": "2026-10-11",
+     "value": 143.4,
+     "deload": false,
+     "soft": false,
+     "submax": true
     }
    ]
   },
@@ -337,6 +344,13 @@
      "deload": false,
      "soft": true,
      "submax": false
+    },
+    {
+     "date": "2026-10-11",
+     "value": 95.6,
+     "deload": false,
+     "soft": false,
+     "submax": true
     }
    ]
   },
@@ -461,6 +475,13 @@
      "deload": false,
      "soft": false,
      "submax": true
+    },
+    {
+     "date": "2026-10-11",
+     "value": 167.3,
+     "deload": false,
+     "soft": false,
+     "submax": true
     }
    ]
   }
@@ -517,45 +538,56 @@
   },
   {
    "exercise": "Dips",
-   "e1rm": 24.7,
-   "date": "2026-08-14",
+   "e1rm": 25.4,
+   "date": "2026-10-11",
    "load": 20,
-   "reps": 5,
-   "rpe": 8
+   "reps": 4,
+   "rpe": 6
   }
  ],
  "lastSession": {
-  "date": "2026-10-10",
-  "label": "Meet week · Day 1 · Volume",
+  "date": "2026-10-11",
+  "label": "Meet week · Day 2 · Technique",
   "cycle": 3,
   "week": 4,
-  "day": 1,
+  "day": 2,
   "phase": "meetWeek",
-  "sets": 6,
-  "reps": 42,
-  "tonnage": 3080,
-  "avgRPE": 5.2,
+  "sets": 8,
+  "reps": 14,
+  "tonnage": 840,
+  "avgRPE": 5.4,
   "avgTargetRPE": 5.3,
-  "minutes": 28,
+  "minutes": 295,
   "unit": "kg",
   "lifts": [
    {
-    "exercise": "Explosive / Speed Squat",
-    "detail": "80×7@5, 80×7@5",
-    "topKg": 80
+    "exercise": "Low-Bar Back Squat",
+    "detail": "120×1@5, 120×1@5",
+    "topKg": 120
    },
    {
     "exercise": "Bench Press",
-    "detail": "65×7@5, 65×7@5",
-    "topKg": 65
+    "detail": "80×1@5, 80×1@5",
+    "topKg": 80
    },
    {
-    "exercise": "Lat Pulldown",
-    "detail": "70×7@5, 80×7@6",
-    "topKg": 80
+    "exercise": "Deadlift",
+    "detail": "140×1@5, 140×1@5",
+    "topKg": 140
+   },
+   {
+    "exercise": "Dips",
+    "detail": "20×4@6, 20×4@7",
+    "topKg": 20
    }
   ],
-  "prs": []
+  "prs": [
+   {
+    "exercise": "Dips",
+    "gain": 0.784,
+    "e1rm": 25.445
+   }
+  ]
  },
  "sessions": [
   {
@@ -1061,6 +1093,20 @@
    "avgRPE": 5.2,
    "avgTargetRPE": 5.3,
    "minutes": 28
+  },
+  {
+   "date": "2026-10-11",
+   "label": "Meet week · Day 2 · Technique",
+   "cycle": 3,
+   "week": 4,
+   "day": 2,
+   "phase": "meetWeek",
+   "sets": 8,
+   "reps": 14,
+   "tonnage": 840,
+   "avgRPE": 5.4,
+   "avgTargetRPE": 5.3,
+   "minutes": 295
   }
  ],
  "bodyweight": [
