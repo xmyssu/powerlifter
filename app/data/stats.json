@@ -1,6 +1,6 @@
 {
  "v": 1,
- "generatedAt": "2026-10-12T10:54:59.641Z",
+ "generatedAt": "2026-10-12T11:44:34.642Z",
  "athlete": {
   "firstName": null
  },
@@ -359,8 +359,8 @@
    "label": "Deadlift",
    "e1rm": 185,
    "e1rmDate": "2026-09-19",
-   "tested": 175.7,
-   "testedDate": "2026-09-13",
+   "tested": 173.8,
+   "testedDate": "2026-10-12",
    "maxSource": "estimated",
    "change28": 4,
    "trend": [
