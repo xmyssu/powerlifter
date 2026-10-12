@@ -34,11 +34,17 @@ export const PROTOCOL = 1;
  * nothing rather than an error. The connection test compares this against what
  * the script reports so a stale paste is diagnosable instead of mysterious.
  */
-export const EXPECTED_SCRIPT_VERSION = 5;
+export const EXPECTED_SCRIPT_VERSION = 6;
 
 const TIMEOUT_MS = 25000;
 /** One coach round trip: the script waits on the model, which can think for a while. */
 const ASK_TIMEOUT_MS = 150000;
+/**
+ * A push can be the whole log ("Re-sync everything"), plus Discord and the
+ * public file. The script has six minutes; the app waiting 25 s and calling a
+ * finished push a failure left the queue resending it forever.
+ */
+const PUSH_TIMEOUT_MS = 120000;
 const MAX_BACKOFF_MS = 30 * 60 * 1000;
 
 /* ---- config ----------------------------------------------------------- */
@@ -137,7 +143,7 @@ async function run(reason) {
   patch({ syncing: true });
 
   try {
-    const res = await post(buildPayload(st, ids, reason));
+    const res = await post(buildPayload(st, ids, reason), { timeoutMs: PUSH_TIMEOUT_MS });
     dequeue(ids);
     patch({
       syncing: false,

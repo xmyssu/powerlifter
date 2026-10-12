@@ -788,6 +788,81 @@ hr('17. Service worker assets');
 /* ======================================================================
    done
    ====================================================================== */
+/* ======================================================================
+   18. The script writes the sheet in one go
+   ====================================================================== */
+hr('18. Upsert against a fake sheet');
+{
+  const { readFileSync } = await import('node:fs');
+  const vm = await import('node:vm');
+  const gs = readFileSync(new URL('../../server/appsscript/Code.gs', import.meta.url), 'utf8');
+
+  // Just enough of SpreadsheetApp: a grid of values, a grid of formulas, and a call count.
+  function fakeSheet(rows) {
+    const vals = rows.map((r) => [...r]);
+    const fx = rows.map((r) => r.map(() => ''));
+    const calls = { get: 0, set: 0 };
+    const width = () => Math.max(0, ...vals.map((r) => r.length));
+    const sh = {
+      calls, vals, fx,
+      getLastRow: () => vals.length,
+      getLastColumn: () => width(),
+      setFrozenRows() {},
+      appendRow(r) { vals.push([...r]); fx.push(r.map(() => '')); },
+      getRange(row, col, nr = 1, nc = 1) {
+        const cell = (i, j) => { while (vals.length < row + i) { vals.push([]); fx.push([]); } return [row - 1 + i, col - 1 + j]; };
+        return {
+          getValues() { calls.get++; return Array.from({ length: nr }, (_, i) => Array.from({ length: nc }, (_, j) => { const [a, b] = cell(i, j); return vals[a][b] ?? ''; })); },
+          getFormulas() { return Array.from({ length: nr }, (_, i) => Array.from({ length: nc }, (_, j) => { const [a, b] = cell(i, j); return fx[a][b] || ''; })); },
+          getValue() { calls.get++; const [a, b] = cell(0, 0); return vals[a][b] ?? ''; },
+          setValues(v) {
+            calls.set++;
+            v.forEach((r, i) => r.forEach((x, j) => { const [a, b] = cell(i, j); vals[a][b] = x; fx[a][b] = typeof x === 'string' && x.startsWith('=') ? x : ''; }));
+          },
+        };
+      },
+    };
+    return sh;
+  }
+  const sheets = {};
+  const ctx = vm.createContext({
+    SpreadsheetApp: { getActiveSpreadsheet: () => ({ getSheetByName: (n) => sheets[n] || null, insertSheet: (n) => (sheets[n] = fakeSheet([])) }) },
+  });
+  vm.runInContext(gs, ctx);
+  const cols = vm.runInContext('SCHEMA.sessions.cols', ctx);
+  const ci = (c) => cols.indexOf(c);
+
+  const row = (key, label, extra = {}) => ({ key, date: '2026-10-01', label, tonnage: 1000, ...extra });
+  eq(ctx.upsert_('sessions', [row('a', 'A'), row('b', 'B'), row('c', 'C')]), 3, 'a first push writes every row');
+  const sh = sheets.sessions;
+  eq(sh.vals.length, 4, 'under one header row');
+
+  // The script's own Discord bookkeeping, and a formula he typed into a row the push does not touch.
+  sh.vals[1][ci('discordMessageId')] = 'msg-a';
+  sh.fx[2][ci('notes')] = '=1+1';
+  sh.vals[2][ci('notes')] = 2;
+
+  const before = { ...sh.calls };
+  const many = Array.from({ length: 300 }, (_, i) => row(`n${i}`, `N${i}`));
+  ctx.upsert_('sessions', [row('a', 'A2'), row('c', 'C2'), ...many, row('n5', 'N5-late')]);
+  eq(sh.calls.set - before.set, 2, 'a 303-row push is two writes, not one per row');
+  ok(sh.calls.get - before.get <= 3, 'and a couple of reads');
+  eq(sh.vals[1][ci('label')], 'A2', 'an existing row is updated in place');
+  eq(sh.vals[1][ci('discordMessageId')], 'msg-a', 'without wiping the Discord message id');
+  eq(sh.vals[3][ci('label')], 'C2', 'a later row too');
+  eq(sh.fx[2][ci('notes')], '=1+1', 'a formula in an untouched row in between stays a formula');
+  eq(sh.vals[2][ci('label')], 'B', 'and its values stay');
+  eq(sh.vals.length, 4 + 300, 'new rows are appended once each');
+  eq(sh.vals.filter((r) => r[0] === 'n5').length, 1, 'a key sent twice in one push lands once');
+  eq(sh.vals.find((r) => r[0] === 'n5')[ci('label')], 'N5-late', 'with the later version');
+
+  const again = { ...sh.calls };
+  ctx.upsert_('sessions', [row('a', 'A3')]);
+  eq(sh.vals.length, 304, 'a resend never duplicates');
+  eq(sh.calls.set - again.set, 1, 'one changed row is one write');
+}
+
+
 console.log(`\n\x1b[1m${fail ? '\x1b[31mFAILED' : '\x1b[32mPASSED'}\x1b[0m  ${pass} passed, ${fail} failed`);
 if (problems.length) {
   console.log('\nFailures:');

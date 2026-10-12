@@ -26,7 +26,7 @@
    ========================================================================== */
 
 /** Bump when Code.gs changes, so ping and diagnosePublish can report it. */
-var SCRIPT_VERSION = 5;
+var SCRIPT_VERSION = 6;
 
 /** Columns the script maintains itself; a push must never overwrite them. */
 var SCRIPT_OWNED = ['discordPostedAt', 'discordMessageId', 'discordHash'];
@@ -384,6 +384,9 @@ function headerMap_(sh) {
 /**
  * Write rows by key: existing keys are updated in place, new ones appended in
  * one block. Idempotent, so the app can resend a session as often as it likes.
+ *
+ * The sheet is read once and written once. A full re-sync rewrites every row,
+ * and one Sheets call per row took longer than the app waits for an answer.
  */
 function upsert_(name, rows) {
   if (!rows.length) return 0;
@@ -394,16 +397,17 @@ function upsert_(name, rows) {
   var keyCol = map[schema.key];
 
   var last = sh.getLastRow();
+  var range = last > 1 ? sh.getRange(2, 1, last - 1, width) : null;
+  var data = range ? range.getValues() : [];
   var index = {};
-  if (last > 1) {
-    var keys = sh.getRange(2, keyCol + 1, last - 1, 1).getValues();
-    for (var i = 0; i < keys.length; i++) {
-      var k = keys[i][0];
-      if (k !== '' && k !== null) index[String(k)] = i + 2;
-    }
+  for (var i = 0; i < data.length; i++) {
+    var k = data[i][keyCol];
+    if (k !== '' && k !== null) index[String(k)] = i;
   }
 
   var appends = [];
+  var touched = {};
+  var first = -1, lastTouched = -1;
   for (var r = 0; r < rows.length; r++) {
     var row = rows[r];
     var line = new Array(width).fill('');
@@ -411,26 +415,43 @@ function upsert_(name, rows) {
       if (Object.prototype.hasOwnProperty.call(row, col)) line[map[col]] = cell_(row[col]);
     }
     var at = index[String(row[schema.key])];
-    if (at) {
+    if (at !== undefined && at >= data.length) {
+      appends[at - data.length] = line;     // the same key twice in one push: the later wins
+    } else if (at !== undefined) {
       // These columns are the script's own bookkeeping, not the app's — never
       // let a resend wipe them, or a session gets posted to Discord twice and
       // loses the message id that makes a later correction editable.
       if (name === 'sessions') {
         for (var o = 0; o < SCRIPT_OWNED.length; o++) {
           var oc = map[SCRIPT_OWNED[o]];
-          if (oc !== undefined) line[oc] = sh.getRange(at, oc + 1).getValue();
+          if (oc !== undefined) line[oc] = data[at][oc];
         }
       }
-      sh.getRange(at, 1, 1, width).setValues([line]);
+      data[at] = line;
+      touched[at] = true;
+      if (first === -1 || at < first) first = at;
+      if (at > lastTouched) lastTouched = at;
     } else {
+      index[String(row[schema.key])] = data.length + appends.length;
       appends.push(line);
     }
   }
-  if (appends.length) sh.getRange(sh.getLastRow() + 1, 1, appends.length, width).setValues(appends);
+
+  if (first !== -1) {
+    // Rows between the first and last update that were not resent are written
+    // back as they were; keep any formula in them a formula.
+    var span = sh.getRange(first + 2, 1, lastTouched - first + 1, width);
+    var formulas = span.getFormulas();
+    var out = data.slice(first, lastTouched + 1).map(function (line, j) {
+      if (touched[first + j]) return line;
+      return line.map(function (v, c) { return formulas[j][c] || v; });
+    });
+    span.setValues(out);
+  }
+  if (appends.length) sh.getRange(last + 1, 1, appends.length, width).setValues(appends);
   return rows.length;
 }
 
-/** null/undefined become blank cells rather than the strings "null"/"undefined". */
 function cell_(v) {
   if (v === null || v === undefined) return '';
   if (typeof v === 'object') return JSON.stringify(v);

@@ -748,6 +748,7 @@ function syncCard(st) {
     ${c.lastResult?.sheetUrl ? `<a class="btn btn--ghost btn--block" href="${esc(c.lastResult.sheetUrl)}" target="_blank" rel="noopener">${icon('progress')} Open the sheet</a>` : ''}
     <a class="btn btn--ghost btn--block" href="dash.html" target="_blank" rel="noopener">${icon('trend')} Open the public dashboard</a>
     <button class="btn btn--ghost btn--block" data-act="syncnow" ${c.syncing ? 'disabled' : ''}>${icon('upload')} ${pending ? `Sync ${pending} now` : 'Re-sync everything'}</button>
+    <button class="btn btn--ghost btn--block" data-act="synctest">${icon('check')} Test the connection</button>
     <button class="btn btn--ghost btn--block" data-act="syncrestore">${icon('download')} Restore from the sheet</button>
     <button class="btn btn--ghost btn--block" data-act="syncsetup">Change URL or token</button>
     <p class="cite">Sessions upload when you finish one, and any that were queued go up next time you
@@ -762,6 +763,23 @@ function relTime(iso) {
   const hrs = Math.round(mins / 60);
   if (hrs < 24) return `${hrs}h ago`;
   return fmtDate(iso.slice(0, 10));
+}
+
+/** What a connection test found, as [tone, sentence]. */
+function testMessage(res) {
+  if (!res.ok) return ['warn', res.error];
+  if (res.stale) {
+    // The commonest confusing state: the app was updated, the script in the
+    // Apps Script editor was not, so newer features quietly do nothing.
+    return ['warn', `Connected, but the sheet is running an older version of the script `
+      + `(v${res.scriptVersion}; this app expects v${sync.EXPECTED_SCRIPT_VERSION}). `
+      + `Re-paste Code.gs in the Apps Script editor and redeploy as a new version, or newer features `
+      + `will silently do nothing.`];
+  }
+  return ['good', `Connected (script v${res.scriptVersion}). Discord ${res.discord ? 'is set up' : 'is not set up yet'}; `
+    + `public dashboard ${res.publish ? 'is set up' : 'is not set up yet'}; `
+    + `coach ${res.coach ? 'is set up' : 'is not set up yet (add ANTHROPIC_API_KEY to the script)'}; `
+    + `book library ${res.library?.length ? `has ${res.library.length} ${res.library.length === 1 ? 'book' : 'books'}` : 'is empty'}.`];
 }
 
 function openSyncSetup(ctx) {
@@ -804,20 +822,8 @@ function openSyncSetup(ctx) {
         btn.disabled = true; btn.textContent = 'Testing…';
         const res = await sync.test();
         btn.disabled = false; btn.textContent = 'Test the connection';
-        if (!res.ok) { show('warn', res.error); return; }
-        if (res.stale) {
-          // The commonest confusing state: the app was updated, the script in the
-          // Apps Script editor was not, so newer features quietly do nothing.
-          show('warn', `Connected, but the sheet is running an older version of the script `
-            + `(v${res.scriptVersion}; this app expects v${sync.EXPECTED_SCRIPT_VERSION}). `
-            + `Re-paste Code.gs in the Apps Script editor and redeploy, or newer features `
-            + `will silently do nothing.`);
-          return;
-        }
-        show('good', `Connected. Discord ${res.discord ? 'is set up' : 'is not set up yet'}; `
-          + `public dashboard ${res.publish ? 'is set up' : 'is not set up yet'}; `
-          + `coach ${res.coach ? 'is set up' : 'is not set up yet (add ANTHROPIC_API_KEY to the script)'}; `
-          + `book library ${res.library?.length ? `has ${res.library.length} ${res.library.length === 1 ? 'book' : 'books'}` : 'is empty'}.`);
+        const [kind, text] = testMessage(res);
+        show(kind, text);
       };
 
       $('[data-save]', root).onclick = () => {
@@ -955,6 +961,11 @@ function mount(root, ctx) {
     syncsetup: () => openSyncSetup(ctx),
     syncnow: () => doSyncNow(ctx),
     syncrestore: () => doSyncRestore(ctx),
+    synctest: async () => {
+      toast('Testing the connection…');
+      const [kind, text] = testMessage(await sync.test());
+      toast(text, kind === 'good' ? 'good' : 'bad', 8000);
+    },
     install: async () => { await promptInstall(); ctx.refresh(); },
     reset: async () => {
       const yes = await confirmSheet({
