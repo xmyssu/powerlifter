@@ -1,6 +1,6 @@
 {
  "v": 1,
- "generatedAt": "2026-10-12T10:53:51.748Z",
+ "generatedAt": "2026-10-12T10:54:43.551Z",
  "athlete": {
   "firstName": null
  },
@@ -9,8 +9,8 @@
  "totals": {
   "sessions": 37,
   "sets": 320,
-  "reps": 1650,
-  "tonnage": 128745,
+  "reps": 1649,
+  "tonnage": 128565,
   "firstDate": "2026-08-05",
   "lastDate": "2026-10-11"
  },
@@ -357,12 +357,12 @@
   {
    "lift": "deadlift",
    "label": "Deadlift",
-   "e1rm": 191.7,
-   "e1rmDate": "2026-09-08",
+   "e1rm": 185,
+   "e1rmDate": "2026-09-19",
    "tested": 175.7,
    "testedDate": "2026-09-13",
    "maxSource": "estimated",
-   "change28": -6.7,
+   "change28": 4,
    "trend": [
     {
      "date": "2026-08-07",
@@ -422,7 +422,7 @@
     },
     {
      "date": "2026-09-08",
-     "value": 191.7,
+     "value": 181,
      "deload": false,
      "soft": false,
      "submax": false
@@ -822,8 +822,8 @@
    "day": 0,
    "phase": "test",
    "sets": 3,
-   "reps": 3,
-   "tonnage": 510,
+   "reps": 2,
+   "tonnage": 330,
    "avgRPE": 7.8,
    "avgTargetRPE": null,
    "minutes": null
