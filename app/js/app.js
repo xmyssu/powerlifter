@@ -12,14 +12,16 @@ import today from './views/today.js';
 import session from './views/session.js';
 import progress from './views/progress.js';
 import coachview from './views/coachview.js';
+import askview from './views/askview.js';
 import reference from './views/reference.js';
 import settings from './views/settings.js';
 
-const VIEWS = { onboarding, today, session, progress, coach: coachview, reference, settings };
+const VIEWS = { onboarding, today, session, progress, ask: askview, coach: coachview, reference, settings };
 
 const TABS = [
   { id: 'today',     label: 'Today',    ico: 'today' },
   { id: 'progress',  label: 'Progress', ico: 'progress' },
+  { id: 'ask',       label: 'Ask',      ico: 'chat' },
   { id: 'coach',     label: 'Coach',    ico: 'coach' },
   { id: 'reference', label: 'Library',  ico: 'book' },
   { id: 'settings',  label: 'Settings', ico: 'settings' },

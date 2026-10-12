@@ -79,6 +79,7 @@ function view(ctx) {
         <div class="eyebrow">${esc(resolved.isMeet ? 'Meet day' : resolved.isTest ? 'Test day' : resolved.isPeak ? resolved.label : resolved.isDeload ? 'Deload' : resolved.isPainWeek ? 'High-rep week' : `Cycle ${ses.cycle} · Week ${ses.week} · Day ${ses.day}`)}</div>
         <div class="tiny dim" style="margin-top:2px">${doneSets} / ${totalSets} sets</div>
       </div>
+      <button class="btn btn--bare" data-ask aria-label="Ask the coach">${raw(icon('chat'))}</button>
       <button class="btn btn--bare" data-notes aria-label="Session notes">${raw(icon('note'))}</button>
     </div>
 
@@ -1317,6 +1318,7 @@ function showSummary(ctx, sessionId, notes) {
 
 function mount(root, ctx) {
   $$('[data-home]', root).forEach((b) => b.onclick = () => ctx.go('today'));
+  $$('[data-ask]', root).forEach((b) => b.onclick = () => ctx.go('ask', { from: 'session' }));
   $$('[data-expand]', root).forEach((b) => b.onclick = () => {
     expanded = expanded === b.dataset.expand ? null : b.dataset.expand;
     ctx.refresh();

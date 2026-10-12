@@ -815,7 +815,8 @@ function openSyncSetup(ctx) {
           return;
         }
         show('good', `Connected. Discord ${res.discord ? 'is set up' : 'is not set up yet'}; `
-          + `public dashboard ${res.publish ? 'is set up' : 'is not set up yet'}.`);
+          + `public dashboard ${res.publish ? 'is set up' : 'is not set up yet'}; `
+          + `coach ${res.coach ? 'is set up' : 'is not set up yet (add ANTHROPIC_API_KEY to the script)'}.`);
       };
 
       $('[data-save]', root).onclick = () => {

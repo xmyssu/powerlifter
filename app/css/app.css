@@ -155,7 +155,7 @@ h3 { font-size: 1.05rem; }
 /* ---- bottom tab bar (thumb zone) ---- */
 .tabbar {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
-  display: grid; grid-template-columns: repeat(5, 1fr);
+  display: grid; grid-template-columns: repeat(6, 1fr);
   padding-bottom: var(--safe-b);
   background: color-mix(in srgb, var(--bg) 94%, transparent);
   backdrop-filter: saturate(1.6) blur(14px);
@@ -347,3 +347,42 @@ body[data-view="session"] .toaster { bottom: calc(var(--safe-b) + 88px); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+
+/* ---- ask the coach ---- */
+body[data-view="ask"] .view { padding-bottom: calc(var(--tabbar-h) + var(--safe-b) + 96px); }
+.ask__q {
+  align-self: flex-end; max-width: 85%;
+  background: var(--accent-wash); color: var(--text);
+  padding: 10px 14px; border-radius: var(--r-lg) var(--r-lg) var(--r-sm) var(--r-lg);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.ask__a {
+  background: var(--surface); border: 1px solid var(--line-soft);
+  padding: 12px 14px; border-radius: var(--r-lg) var(--r-lg) var(--r-lg) var(--r-sm);
+  overflow-wrap: anywhere;
+}
+.ask__a p + p, .ask__a p + ul, .ask__a ul + p { margin-top: 8px; }
+.ask__list { padding-left: 18px; }
+.ask__list li + li { margin-top: 4px; }
+.ask__warn { margin-top: 10px; }
+.ask__meta { margin-top: 8px; }
+.ask__a--busy { color: var(--text-2); }
+.ask__dots::before { content: '•••'; letter-spacing: 2px; animation: ask-pulse 1.2s ease-in-out infinite; }
+@keyframes ask-pulse { 50% { opacity: .3; } }
+.ask__thread { display: flex; flex-direction: column; }
+.ask__chip { justify-content: flex-start; text-align: left; white-space: normal; height: auto; min-height: var(--tap); }
+.ask__bar {
+  position: fixed; left: 0; right: 0; z-index: 40;
+  bottom: calc(var(--tabbar-h) + var(--safe-b));
+  display: flex; gap: 8px; align-items: flex-end;
+  padding: 10px 14px;
+  max-width: 680px; margin: 0 auto;
+  background: color-mix(in srgb, var(--bg) 94%, transparent);
+  backdrop-filter: saturate(1.6) blur(14px);
+  border-top: 1px solid var(--line-soft);
+}
+textarea.input.ask__input { flex: 1; resize: none; min-height: var(--tap); max-height: 140px; font-size: 16px; line-height: 1.35; padding: 12px 14px; }
+.ask__send { width: var(--tap); min-width: var(--tap); padding: 0; }
+
+[data-new][hidden] { display: none; }
+@media (prefers-reduced-motion: reduce) { .ask__dots::before { animation: none; } }

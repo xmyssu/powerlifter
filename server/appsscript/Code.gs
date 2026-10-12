@@ -23,7 +23,7 @@
    ========================================================================== */
 
 /** Bump when Code.gs changes, so ping and diagnosePublish can report it. */
-var SCRIPT_VERSION = 3;
+var SCRIPT_VERSION = 4;
 
 /** Columns the script maintains itself; a push must never overwrite them. */
 var SCRIPT_OWNED = ['discordPostedAt', 'discordMessageId', 'discordHash'];
@@ -42,6 +42,7 @@ function doPost(e) {
       case 'ping': return ok(ping_());
       case 'pull': return ok(pull_());
       case 'push': return ok(push_(body));
+      case 'ask': return ok(ask_(body));
       default: return fail('Unknown request kind: ' + body.kind);
     }
   } catch (err) {
@@ -91,9 +92,103 @@ function ping_() {
     sheetName: ss.getName(),
     discordConfigured: !!prop('DISCORD_WEBHOOK_URL'),
     publishConfigured: !!(prop('GITHUB_TOKEN') && prop('GITHUB_REPO')),
+    coachConfigured: !!prop('ANTHROPIC_API_KEY'),
     scriptVersion: SCRIPT_VERSION,
     snapshots: countSnapshots_(),
   };
+}
+
+/* ---- coach ------------------------------------------------------------- */
+
+/**
+ * Relay one coach request to the Claude API.
+ *
+ * The app sends the conversation, the system prompt and the tool definitions;
+ * this adds the key and decides everything that costs money — model, effort,
+ * output cap — so a leaked sync token cannot be used to run a bigger model.
+ * The tools themselves run on the phone, against its own training log.
+ *
+ * Script properties:
+ *   ANTHROPIC_API_KEY   required
+ *   ANTHROPIC_MODEL     optional, default claude-opus-5-5
+ *   ASK_EFFORT          optional, low | medium | high (default medium)
+ *   ASK_DAILY_LIMIT     optional, model calls per day (default 80). One
+ *                       question is usually two to five calls.
+ */
+var ASK_MODEL = 'claude-opus-5-5';
+var ASK_MAX_TOKENS = 8000;
+
+function ask_(body) {
+  var key = prop('ANTHROPIC_API_KEY');
+  if (!key) throw new Error('ANTHROPIC_API_KEY is not set in the script properties.');
+  var req = body.request || {};
+  if (!req.messages || !req.messages.length) throw new Error('No conversation to send.');
+  countAsk_();
+
+  var effort = prop('ASK_EFFORT') || 'medium';
+  var payload = {
+    model: prop('ANTHROPIC_MODEL') || ASK_MODEL,
+    max_tokens: ASK_MAX_TOKENS,
+    system: String(req.system || ''),
+    tools: req.tools || [],
+    messages: req.messages,
+    output_config: { effort: effort },
+    // Caches the system prompt, tools and conversation so far: each round of a
+    // tool loop resends all of it.
+    cache_control: { type: 'ephemeral' },
+    // If a safety classifier declines, retry on the recommended fallback model
+    // inside the same call rather than failing the question.
+    fallbacks: 'default',
+  };
+
+  var res = UrlFetchApp.fetch('https://api.anthropic.com/v1/messages', {
+    method: 'post',
+    contentType: 'application/json',
+    headers: {
+      'x-api-key': key,
+      'anthropic-version': '2023-06-01',
+      'anthropic-beta': 'server-side-fallback-2026-07-01',
+    },
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true,
+  });
+
+  var code = res.getResponseCode();
+  var data;
+  try { data = JSON.parse(res.getContentText()); } catch (e) { data = null; }
+  if (code !== 200 || !data) {
+    // The API's own message, never the request: it carries no key.
+    var why = data && data.error && data.error.message ? data.error.message : 'HTTP ' + code;
+    if (code === 429) why = 'The API is rate-limiting this key. Wait a minute and ask again.';
+    if (code === 401) why = 'The API rejected the key. Check ANTHROPIC_API_KEY in the script properties.';
+    throw new Error('Coach: ' + why);
+  }
+  return {
+    message: {
+      content: data.content,
+      stop_reason: data.stop_reason,
+      model: data.model,
+      usage: data.usage,
+    },
+  };
+}
+
+/** A daily ceiling on model calls, so a stuck loop or a leaked token has a bounded cost. */
+function countAsk_() {
+  var limit = Number(prop('ASK_DAILY_LIMIT')) || 80;
+  var day = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) throw new Error('Busy, try again.');
+  try {
+    var props = PropertiesService.getScriptProperties();
+    var raw = props.getProperty('ASK_COUNT') || '';
+    var parts = raw.split(':');
+    var n = parts[0] === day ? Number(parts[1]) || 0 : 0;
+    if (n >= limit) throw new Error('The coach has hit today\'s limit of ' + limit + ' calls (ASK_DAILY_LIMIT). It resets at midnight.');
+    props.setProperty('ASK_COUNT', day + ':' + (n + 1));
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 /* ---- push -------------------------------------------------------------- */

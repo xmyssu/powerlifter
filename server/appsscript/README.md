@@ -167,6 +167,38 @@ placeholder.
 - To stop publishing, delete `GITHUB_TOKEN`. To take the dashboard down, delete
   `app/dash.html` and `app/data/stats.json` from the repo.
 
+## 7. The coach (optional)
+
+The app's **Ask** tab sends questions to Claude through this same script. The
+script holds the API key and chooses the model, so neither is ever in the app or
+in this repo. The coach's tools — the RPE calculator, your log, your maxes — run
+on your phone, so only the conversation and what those tools return leave it.
+
+1. Get an API key at [console.anthropic.com](https://console.anthropic.com) ›
+   **API keys** › **Create key**. While you are there, set a monthly spend
+   limit under **Billing › Limits**. That limit is the real ceiling on what this
+   can cost you.
+2. Apps Script › **Project Settings › Script properties › Add**:
+   - Property: `ANTHROPIC_API_KEY`
+   - Value: the key (starts `sk-ant-`).
+3. Re-paste `Code.gs` and redeploy as a **new version**, as in
+   [Keeping Code.gs in step](#keeping-codegs-in-step-with-the-app). This step is
+   needed once, because the coach is new code. The first run asks you to
+   re-authorise, since the script now calls an outside API.
+4. In the app: **Settings › Cloud sync › Test the connection** should report
+   the coach as set up. Then open **Ask**.
+
+Optional properties:
+
+| Property | Default | What it does |
+| --- | --- | --- |
+| `ANTHROPIC_MODEL` | `claude-opus-5-5` | Which Claude model answers. |
+| `ASK_EFFORT` | `medium` | How hard it thinks: `low`, `medium` or `high`. Higher is slower and costs more. |
+| `ASK_DAILY_LIMIT` | `80` | Model calls per day. A question is usually two to five calls, one per round of checking your data. Stops a stuck loop or a leaked token from running up a bill. |
+
+Each question costs a few cents, depending on how much of your log it reads.
+Check **Usage** in the console after your first few questions for real numbers.
+
 ---
 
 ## What lands where
@@ -211,6 +243,9 @@ you like without touching any code.
 | "Bad token." | The token in the app doesn't match `SYNC_TOKEN`. Watch for a trailing space. |
 | "Could not reach the sheet" | Wrong URL, or no connection. The URL must end in `/exec`, not `/dev`. |
 | Rows sync but Discord is silent | `DISCORD_WEBHOOK_URL` isn't set, or that session's `discordPostedAt` already says `backfill` or a timestamp. |
+| Ask says "Your Apps Script is older than this app" | Re-paste `Code.gs` and redeploy a new version. |
+| "ANTHROPIC_API_KEY is not set" / "The API rejected the key" | Add or fix the key in Script properties. No redeploy needed. |
+| "The coach has hit today's limit" | `ASK_DAILY_LIMIT` reached. It resets at midnight, script time zone. |
 | Sessions stuck in "waiting to upload" | Failures back off up to 30 minutes. **Sync now** forces an immediate retry and shows the real error. |
 
 ### Keeping `Code.gs` in step with the app
@@ -242,5 +277,6 @@ a session or use **Re-sync everything**.
 
 ## Cost and limits
 
-Free. Apps Script's free quota is 20,000 outbound requests and 90 minutes of
+Sync is free. The coach is not: it is billed per question by Anthropic, see
+[section 7](#7-the-coach-optional). Apps Script's free quota is 20,000 outbound requests and 90 minutes of
 runtime per day; four workouts a week uses a rounding error of that.

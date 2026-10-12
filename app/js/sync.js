@@ -34,9 +34,11 @@ export const PROTOCOL = 1;
  * nothing rather than an error. The connection test compares this against what
  * the script reports so a stale paste is diagnosable instead of mysterious.
  */
-export const EXPECTED_SCRIPT_VERSION = 3;
+export const EXPECTED_SCRIPT_VERSION = 4;
 
 const TIMEOUT_MS = 25000;
+/** One coach round trip: the script waits on the model, which can think for a while. */
+const ASK_TIMEOUT_MS = 150000;
 const MAX_BACKOFF_MS = 30 * 60 * 1000;
 
 /* ---- config ----------------------------------------------------------- */
@@ -166,10 +168,10 @@ async function run(reason) {
   }
 }
 
-async function post(payload) {
+async function post(payload, { timeoutMs = TIMEOUT_MS } = {}) {
   const { endpoint } = config();
   const ctl = new AbortController();
-  const bail = setTimeout(() => ctl.abort(), TIMEOUT_MS);
+  const bail = setTimeout(() => ctl.abort(), timeoutMs);
   let res;
   try {
     res = await fetch(endpoint, {
@@ -213,12 +215,35 @@ export async function test() {
       sheetUrl: res.sheetUrl || null,
       discord: !!res.discordConfigured,
       publish: !!res.publishConfigured,
+      coach: !!res.coachConfigured,
       scriptVersion: res.scriptVersion || 1,
       stale: (res.scriptVersion || 1) < EXPECTED_SCRIPT_VERSION,
     };
   } catch (err) {
     patch({ lastError: String(err.message || err) });
     return { ok: false, error: String(err.message || err) };
+  }
+}
+
+/* ---- coach ------------------------------------------------------------ */
+
+/**
+ * One request to the model, relayed by the script, which adds the API key and
+ * picks the model. Resolves to the API's message; throws with a readable
+ * reason. The sheet and the coach share an endpoint and a token, so a phone
+ * that syncs can ask.
+ */
+export async function askClaude(request) {
+  if (!config().endpoint || !config().token) throw new Error('Set up sync in Settings first — the coach goes through the same script.');
+  try {
+    const res = await post({ app: 'powerlifter', v: PROTOCOL, kind: 'ask', token: config().token, request }, { timeoutMs: ASK_TIMEOUT_MS });
+    if (!res.message) throw new Error('The script answered without a message.');
+    return res.message;
+  } catch (err) {
+    const m = String(err.message || err);
+    if (/Unknown request kind: ask/.test(m)) throw new Error('Your Apps Script is older than this app. Paste the new Code.gs and redeploy (Settings › Sync explains how).');
+    if (/Timed out/.test(m)) throw new Error('The coach took too long to answer. Try again, or ask something narrower.');
+    throw err;
   }
 }
 

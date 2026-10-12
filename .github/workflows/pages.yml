@@ -33,6 +33,9 @@ jobs:
       - name: Run sync tests
         run: node --test app/js/sync.test.mjs
 
+      - name: Run coach tests
+        run: node --test app/js/ask.test.mjs
+
       # Property sweeps over every template x day x week x phase x plate set,
       # plus seeded random training histories. Slower to write than a worked
       # example and far faster to run than to debug what it catches.
