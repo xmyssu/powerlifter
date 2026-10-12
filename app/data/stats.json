@@ -1,6 +1,6 @@
 {
  "v": 1,
- "generatedAt": "2026-10-12T10:54:43.551Z",
+ "generatedAt": "2026-10-12T10:54:59.641Z",
  "athlete": {
   "firstName": null
  },
@@ -9,8 +9,8 @@
  "totals": {
   "sessions": 37,
   "sets": 320,
-  "reps": 1649,
-  "tonnage": 128565,
+  "reps": 1648,
+  "tonnage": 128465,
   "firstDate": "2026-08-05",
   "lastDate": "2026-10-11"
  },
@@ -161,7 +161,7 @@
    "tested": 95,
    "testedDate": "2026-09-13",
    "maxSource": "estimated",
-   "change28": 0.3,
+   "change28": 1.8,
    "trend": [
     {
      "date": "2026-08-05",
@@ -249,7 +249,7 @@
     },
     {
      "date": "2026-09-13",
-     "value": 100,
+     "value": 96.9,
      "deload": false,
      "soft": false,
      "submax": false
@@ -850,9 +850,9 @@
    "day": 0,
    "phase": "test",
    "sets": 2,
-   "reps": 2,
-   "tonnage": 193,
-   "avgRPE": 9.5,
+   "reps": 1,
+   "tonnage": 93,
+   "avgRPE": 9,
    "avgTargetRPE": null,
    "minutes": 167
   },
