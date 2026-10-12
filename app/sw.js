@@ -6,7 +6,7 @@
    VERSION whenever the assets change.
    ========================================================================== */
 
-const VERSION = 'v17';
+const VERSION = 'v18';
 const CACHE = `powerlifter-${VERSION}`;
 
 const ASSETS = [
@@ -83,12 +83,18 @@ self.addEventListener('fetch', (e) => {
   }
 
   // Navigations: serve the shell so a cold offline launch works.
+  // Only a clean 200 of the shell itself may replace the cached copy: a gym
+  // Wi-Fi login page, a redirect or a 404 stored here is what the app would
+  // open to the next time there is no signal.
   if (req.mode === 'navigate') {
+    const isShell = url.pathname.endsWith('/') || url.pathname.endsWith('/index.html');
     e.respondWith(
       fetch(req)
         .then((res) => {
-          const copy = res.clone();
-          caches.open(CACHE).then((c) => c.put('./index.html', copy)).catch(() => {});
+          if (isShell && res.ok && res.type === 'basic' && !res.redirected) {
+            const copy = res.clone();
+            caches.open(CACHE).then((c) => c.put('./index.html', copy)).catch(() => {});
+          }
           return res;
         })
         .catch(() => caches.match('./index.html').then((r) => r || caches.match('./')))
