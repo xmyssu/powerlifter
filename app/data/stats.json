@@ -1,6 +1,6 @@
 {
  "v": 1,
- "generatedAt": "2026-10-12T11:44:34.642Z",
+ "generatedAt": "2026-10-12T12:43:54.303Z",
  "athlete": {
   "firstName": null
  },
@@ -8,7 +8,8 @@
  "displayUnit": "kg",
  "totals": {
   "sessions": 37,
-  "sets": 320,
+  "sets": 318,
+  "missed": 2,
   "reps": 1648,
   "tonnage": 128465,
   "firstDate": "2026-08-05",
