@@ -18,14 +18,15 @@ globalThis.document = { dispatchEvent() {}, addEventListener() {} };
 if (!globalThis.navigator) globalThis.navigator = {};
 globalThis.CustomEvent = class { constructor(t, o) { this.type = t; Object.assign(this, o); } };
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
+import vm from 'node:vm';
 
 const store = await import('./store.js');
 const { buildProgram, startSession, completeSession, easyMaxDetail, loadOptsFor, competitionChoice } = await import('./program.js');
 const { loadFor, roundToLoadable, rpeFor } = await import('./rpe.js');
 const { INTERMEDIATE_PL } = await import('./templates.js');
 const { SLOT_DEFAULTS } = await import('./exercises.js');
-const { TOOLS, SYSTEM, runTool, ask, uncheckedLoads, searchLibrary, contextLine, MAX_ROUNDS } = await import('./ask.js');
+const { TOOLS, SYSTEM, runTool, ask, uncheckedLoads, searchLibrary, contextLine, MAX_ROUNDS, MAX_NOTES } = await import('./ask.js');
 
 let pass = 0, fail = 0;
 const problems = [];
@@ -259,6 +260,95 @@ hr('8. Apps Script relay');
   ok(/countAsk_\(\);/.test(gs), 'and counts calls against a daily limit');
   const askFn = gs.slice(gs.indexOf('function ask_('), gs.indexOf('function countAsk_('));
   ok(!/return[\s\S]*\bkey\b/.test(askFn.slice(askFn.lastIndexOf('return {'))), 'the key never goes back in a reply');
+}
+
+
+/* ======================================================================
+   9. The book library and the coach's notes
+   ====================================================================== */
+hr('9. Book search and notes');
+{
+  const calls = [];
+  const searchBook = async (query, opts) => {
+    calls.push({ query, opts });
+    return { configured: true, sources: ['Pyramid'], passages: [{ source: 'Pyramid', edition: '2nd ed.', page: 121, chapter: 'PROGRESSION', text: 'If you make no progress over 8–12 weeks…' }] };
+  };
+  const hit = await runTool(st, 'search_book', { query: 'advanced lifter stall' }, { today: TODAY, searchBook });
+  eq(hit.passages[0].page, 121, 'a book passage comes back with its printed page');
+  eq(hit.passages[0].book, 'Pyramid', 'and the book it is from');
+  eq(calls[0].opts.limit, 5, 'five passages unless the model asks for more');
+  await runTool(st, 'search_book', { query: 'x y', limit: 50 }, { today: TODAY, searchBook });
+  eq(calls[1].opts.limit, 8, 'and never more than eight');
+  const empty = await runTool(st, 'search_book', { query: 'taper' }, { today: TODAY, searchBook: async () => ({ configured: false, passages: [] }) });
+  ok(empty.count === 0 && /search_library/.test(empty.note), 'an empty library says so and points to the summaries');
+  let threw = null;
+  try { await runTool(st, 'search_book', { query: 'taper' }, { today: TODAY }); } catch (e) { threw = e.message; }
+  ok(/unavailable/.test(threw || ''), 'without a connection to the library the tool says it is unavailable');
+
+  // Notes.
+  const kept = [];
+  const remember = (n) => kept.push(n);
+  const r = runTool(st, 'remember', { note: '  Prefers  paused bench on technique days. ' }, { today: TODAY, remember });
+  ok(r.saved && kept[0].text === 'Prefers paused bench on technique days.', 'a note is saved, tidied');
+  eq(kept[0].by, 'coach', 'marked as saved by the coach');
+  eq(kept[0].date, TODAY, 'and dated');
+  throws(() => runTool(st, 'remember', { note: 'x'.repeat(301) }, { remember }), /longer/, 'an essay is refused');
+  throws(() => runTool(st, 'remember', { note: 'Likes paused bench.' }, {}), /cannot be saved/, 'without a store the tool says so');
+  const full = { ...st, coachNotes: Array.from({ length: MAX_NOTES }, (_, i) => ({ id: `n${i}`, text: `note ${i}`, date: TODAY, by: 'you' })) };
+  throws(() => runTool(full, 'remember', { note: 'One more thing.' }, { remember }), /delete one/, `the notes stop at ${MAX_NOTES}`);
+  const dup = runTool({ ...st, coachNotes: [{ id: 'a', text: 'Likes paused bench.', date: TODAY, by: 'you' }] }, 'remember', { note: 'likes paused bench.' }, { remember: () => ok(false, 'a duplicate is not saved') });
+  eq(dup.saved, false, 'a note he already has is not saved twice');
+
+  const withNotes = { ...st, coachNotes: [{ id: 'a', text: 'Keep accessories to 2 sets in the peak.', date: '2026-10-10', by: 'you' }] };
+  const line = contextLine(withNotes, { today: TODAY });
+  ok(line.includes('Keep accessories to 2 sets in the peak.') && line.includes('written by him'), 'his notes travel in front of every question');
+  ok(!contextLine(st, { today: TODAY }).includes('notes'), 'and with no notes there is no notes line');
+  ok(!SYSTEM.includes('Keep accessories'), 'notes never go in the cached system prompt');
+
+  // The loop: two remember calls in one turn see each other, and the answer reports what was saved.
+  const saved = [];
+  const { send } = fakeModel([
+    { stop_reason: 'tool_use', content: [
+      { type: 'tool_use', id: 'm1', name: 'remember', input: { note: 'Competes in the 83 kg class.' } },
+      { type: 'tool_use', id: 'm2', name: 'remember', input: { note: 'competes in the 83 kg class.' } },
+      { type: 'tool_use', id: 'm3', name: 'search_book', input: { query: 'weight class' } }] },
+    { stop_reason: 'end_turn', content: [{ type: 'text', text: 'Noted: you compete at 83 kg.' }] },
+  ]);
+  const before = JSON.stringify(st.coachNotes || []);
+  const res = await ask({ state: st, history: [], question: 'Remember I compete in the 83 kg class.', send, today: TODAY,
+    searchBook, remember: (n) => saved.push(n) });
+  ok(res.ok, 'a question that saves a note resolves');
+  eq(saved.length, 1, 'the same note twice in one turn is saved once');
+  eq(res.saved.join('|'), 'Competes in the 83 kg class.', 'and the answer reports what it saved');
+  eq(JSON.stringify(st.coachNotes || []), before, 'the state handed in is not mutated behind the store\'s back');
+  eq(res.unchecked.length, 0, 'a weight he typed is not flagged');
+}
+
+/* ---- the script's book search ----------------------------------------- */
+{
+  const gs = readFileSync(new URL('../../server/appsscript/Code.gs', import.meta.url), 'utf8');
+  ok(/case 'book': return ok\(book_\(body\)\);/.test(gs), 'the script answers book searches, behind the token');
+  const ctx = vm.createContext({});
+  vm.runInContext(gs, ctx);
+  const book = { title: 'Test Book', authors: 'A. Author', passages: [
+    { id: 0, page: 10, chapter: 'VOLUME', text: 'Volume is the number of hard sets per muscle per week.' },
+    { id: 1, page: 56, chapter: 'PROGRESSION', text: 'A taper reduces volume by 40 to 60 percent while keeping intensity high before a meet.' },
+    { id: 2, page: 57, chapter: 'PROGRESSION', text: 'Tapering for one to two weeks lets fatigue dissipate.' },
+    { id: 3, page: 90, chapter: 'TEMPO', text: 'Lifting tempo matters less than intent.' },
+  ] };
+  const hits = ctx.searchPassages_([book], 'how long should my taper be before the meet', 3);
+  eq(hits[0]?.page, 56, 'the passage that matches best comes first');
+  ok(hits.every((h) => h.source === 'Test Book' && h.text), 'each passage says which book it is from');
+  ok(!hits.some((h) => h.page === 90), 'passages that do not match are left out');
+  eq(ctx.searchPassages_([book], 'the and of', 3).length, 0, 'a query of only stopwords finds nothing');
+  eq(ctx.searchPassages_([], 'taper', 3).length, 0, 'an empty library finds nothing');
+  // The real index is copyrighted and never in the repo, so this runs only on the machine that built it.
+  const real = new URL('../../private/muscle-strength-pyramid-training.json', import.meta.url);
+  if (existsSync(real)) {
+    const idx = JSON.parse(readFileSync(real, 'utf8'));
+    const t = ctx.searchPassages_([idx], 'taper volume before a meet', 5);
+    ok(t.length === 5 && t.some((h) => /taper/i.test(h.text)), 'on the real book, a taper question finds taper passages');
+  }
 }
 
 /* ---- report ----------------------------------------------------------- */

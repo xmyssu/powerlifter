@@ -125,6 +125,7 @@ function seed(sessions) {
     },
     readiness: [{ date: '2026-08-15', sleep: 2, stress: 3, soreness: 3, motivation: 4, score: 3 }],
     bodyweightLog: [{ date: '2026-08-10', value: 84.2 }],
+    coachNotes: [{ id: 'note_1', text: 'Left knee twinges below parallel', date: '2026-08-15', by: 'you' }],
     sessions,
   });
   sync.configure({ endpoint: 'https://script.google.com/macros/s/AKfycb/exec', token: 'tok', enabled: true });
@@ -413,6 +414,7 @@ hr('10. What the public dashboard is allowed to see');
   ok(!/Orlov/.test(wire), 'the surname never leaves the device');
   ok(!/"token"|supersecret|\/exec/.test(wire), 'no credentials or endpoints');
   ok(!/"queue"|"lastError"|"endpoint"/.test(wire), 'and none of the sync plumbing');
+  ok(!/knee twinges|coachNotes/i.test(wire), 'nor the notes he keeps for the coach');
   eq(pub.athlete.firstName, 'Daniel', 'just a first name');
 
   // --- the things that must be there ------------------------------------
@@ -421,6 +423,7 @@ hr('10. What the public dashboard is allowed to see');
   eq(pub.totals.sets, 8, 'and logged sets only');
   ok(pub.totals.tonnage > 0, 'and total tonnage');
   eq(pub.totals.firstDate, '2026-08-10', 'with the date the log starts');
+  eq(pub.totals.missed, 0, 'and no misses when there were none');
 
   eq(pub.lifts.length, 3, 'all three competition lifts get a block');
   const squat = pub.lifts.find((l) => l.lift === 'squat');
@@ -447,6 +450,19 @@ hr('10. What the public dashboard is allowed to see');
 
   eq(pub.bodyweight.length, 1, 'bodyweight is included, as chosen');
   eq(pub.bodyweight[0].kg, 84.2, 'in kilos');
+}
+
+{
+  const missedOne = session('ses_miss', '2026-08-17', 150);
+  missedOne.entries[0].sets.push({ load: 180, reps: 0, rpe: null, done: true, failed: true, ts: missedOne.startedAt });
+  seed([session('ses_old', '2026-08-10', 140), missedOne]);
+  sync.enqueueAll();
+  await sync.flush({ force: true });
+  const t = sent.body.public.totals;
+  eq(t.sets, 8, 'a missed attempt is not counted as a set in the public totals');
+  eq(t.missed, 1, 'it is counted as a miss instead');
+  ok(!/knee twinges/i.test(JSON.stringify(sent.body.public)), 'notes stay out of the public file');
+  ok(/knee twinges/i.test(JSON.stringify(sent.body)), 'but go in the private Drive snapshot, so they back up');
 }
 
 /* ======================================================================

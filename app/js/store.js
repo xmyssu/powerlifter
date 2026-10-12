@@ -66,6 +66,7 @@ export function defaultState() {
 
     readiness: [],          // [{date, sleep, stress, soreness, motivation, score}]
     bodyweightLog: [],      // [{date, value}]
+    coachNotes: [],         // [{id, text, date, by: 'you'|'coach'}] — standing instructions the coach reads
 
     /**
      * Cloud sync (sync.js). `token` is the only secret the device holds and it
@@ -152,7 +153,7 @@ function reconcile(saved) {
   for (const lift of ['squat', 'bench', 'deadlift']) {
     out.maxes[lift] = { ...base.maxes[lift], ...((saved.maxes || {})[lift] || {}) };
   }
-  for (const k of ['sessions', 'readiness', 'bodyweightLog']) {
+  for (const k of ['sessions', 'readiness', 'bodyweightLog', 'coachNotes']) {
     if (!Array.isArray(out[k])) out[k] = [];
   }
   return out;

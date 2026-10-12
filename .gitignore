@@ -26,3 +26,6 @@
 # Node (not used at runtime, but keep it out if you ever add tooling)
 node_modules/
 npm-debug.log*
+
+# Book indexes built by tools/build_book_index.py: copyrighted text, Drive only
+private/

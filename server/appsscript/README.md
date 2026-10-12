@@ -199,6 +199,38 @@ Optional properties:
 Each question costs a few cents, depending on how much of your log it reads.
 Check **Usage** in the console after your first few questions for real numbers.
 
+### Books the coach can search
+
+The app has its own short summaries of the Pyramid book built in. For the
+coach to search a whole book, give it a passage index of that book:
+
+1. On your Mac, from the repo folder (needs `pip install pypdf` once):
+
+   ```
+   python3 tools/build_book_index.py BOOK.pdf --title "The Muscle & Strength Pyramid: Training" \
+     --authors "Eric Helms, Andy Morgan, Andrea Valdez" --edition "2nd ed." --year 2019 \
+     --header "THE MUSCLE & STRENGTH PYRAMID: TRAINING"
+   ```
+
+   This writes `private/<title>.json`. The `private/` folder is git-ignored:
+   the file is the book's own text, so it must never go in this public repo.
+2. In Google Drive, make a folder named exactly **Powerlifter library** (in the
+   same account as the script) and drag the `.json` file into it.
+3. **Test the connection** in the app now lists how many books it has.
+
+To add another book, run the script on its PDF and drop the new file in the
+folder. To remove one, delete its file. No other changes are needed. Each
+passage keeps the page number printed in the book, so the coach cites the
+page you would turn to.
+
+### Notes the coach keeps
+
+**Ask › Notes** holds short standing instructions the coach reads before every
+answer, for example "Keep accessories to 2 sets in the peak". You can write
+them, or tell the coach to remember something. Every note shows who wrote it
+and can be deleted. Notes sync and back up with the rest of your data, and never
+go into the public dashboard file.
+
 ---
 
 ## What lands where
@@ -220,6 +252,10 @@ switch units or log a lift in pounds.
 `e1rmKg` is blank for sets logged without an RPE, deliberately. An estimated max
 invented from a default RPE would sit in the same column as the measured ones
 and quietly bend every trend line.
+
+`failed` is TRUE for a weight you loaded and missed. Its reps are 0, so filter
+on `failed` rather than reps when you want to see your misses. Sheets made before
+script v5 get the column at the far right on the next sync.
 
 Full backups: **Drive › Powerlifter snapshots**. `latest.json` is what
 **Restore from the sheet** reads. The dated files are history, newest 60 kept.

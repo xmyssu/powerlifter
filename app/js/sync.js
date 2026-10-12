@@ -34,7 +34,7 @@ export const PROTOCOL = 1;
  * nothing rather than an error. The connection test compares this against what
  * the script reports so a stale paste is diagnosable instead of mysterious.
  */
-export const EXPECTED_SCRIPT_VERSION = 4;
+export const EXPECTED_SCRIPT_VERSION = 5;
 
 const TIMEOUT_MS = 25000;
 /** One coach round trip: the script waits on the model, which can think for a while. */
@@ -216,6 +216,7 @@ export async function test() {
       discord: !!res.discordConfigured,
       publish: !!res.publishConfigured,
       coach: !!res.coachConfigured,
+      library: Array.isArray(res.library) ? res.library : [],
       scriptVersion: res.scriptVersion || 1,
       stale: (res.scriptVersion || 1) < EXPECTED_SCRIPT_VERSION,
     };
@@ -243,6 +244,24 @@ export async function askClaude(request) {
     const m = String(err.message || err);
     if (/Unknown request kind: ask/.test(m)) throw new Error('Your Apps Script is older than this app. Paste the new Code.gs and redeploy (Settings › Sync explains how).');
     if (/Timed out/.test(m)) throw new Error('The coach took too long to answer. Try again, or ask something narrower.');
+    throw err;
+  }
+}
+
+const BOOK_TIMEOUT_MS = 30000;
+
+/**
+ * Search the books in the script's private Drive library. Resolves to
+ * {configured, sources, passages: [{source, page, chapter, text}]}.
+ */
+export async function searchBook(query, { limit = 5 } = {}) {
+  if (!config().endpoint || !config().token) throw new Error('Sync is not set up, so the book library cannot be reached.');
+  try {
+    return await post({ app: 'powerlifter', v: PROTOCOL, kind: 'book', token: config().token, query, limit }, { timeoutMs: BOOK_TIMEOUT_MS });
+  } catch (err) {
+    const m = String(err.message || err);
+    if (/Unknown request kind: book/.test(m)) throw new Error('The Apps Script is older than this app (no book search). He needs to paste the new Code.gs and redeploy.');
+    if (/Timed out/.test(m)) throw new Error('The book search timed out.');
     throw err;
   }
 }
@@ -740,12 +759,14 @@ const byDate = (a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
 const round1 = (n) => Math.round(n * 10) / 10;
 
 function totals(st, done) {
-  let sets = 0, reps = 0, tonnage = 0;
+  let sets = 0, reps = 0, tonnage = 0, missed = 0;
   for (const ses of done) {
     const u = ses.units || st.profile.units;
     for (const e of ses.entries) {
       for (const s of e.sets) {
         if (!s.done) continue;
+        // A miss is reported on its own, as the session cards do, not as a set.
+        if (s.failed) { missed += 1; continue; }
         sets += 1;
         reps += s.reps || 0;
         tonnage += convertLoad(s.load || 0, u, 'kg') * (s.reps || 0);
@@ -755,6 +776,7 @@ function totals(st, done) {
   return {
     sessions: done.length,
     sets,
+    missed,
     reps,
     tonnage: Math.round(tonnage),
     firstDate: done.length ? done[0].date : null,

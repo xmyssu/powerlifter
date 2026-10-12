@@ -816,7 +816,8 @@ function openSyncSetup(ctx) {
         }
         show('good', `Connected. Discord ${res.discord ? 'is set up' : 'is not set up yet'}; `
           + `public dashboard ${res.publish ? 'is set up' : 'is not set up yet'}; `
-          + `coach ${res.coach ? 'is set up' : 'is not set up yet (add ANTHROPIC_API_KEY to the script)'}.`);
+          + `coach ${res.coach ? 'is set up' : 'is not set up yet (add ANTHROPIC_API_KEY to the script)'}; `
+          + `book library ${res.library?.length ? `has ${res.library.length} ${res.library.length === 1 ? 'book' : 'books'}` : 'is empty'}.`);
       };
 
       $('[data-save]', root).onclick = () => {

@@ -386,3 +386,6 @@ textarea.input.ask__input { flex: 1; resize: none; min-height: var(--tap); max-h
 
 [data-new][hidden] { display: none; }
 @media (prefers-reduced-motion: reduce) { .ask__dots::before { animation: none; } }
+.ask__notes { margin-bottom: 12px; }
+.ask__note { align-items: flex-start; }
+.ask__note .btn--bare { flex: none; }

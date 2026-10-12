@@ -12,6 +12,9 @@
      4. Commits the app's curated public projection to GitHub, which is what the
         public dashboard reads. Opt-in: skipped unless GITHUB_TOKEN and
         GITHUB_REPO are set.
+     5. Relays the in-app coach to the Claude API (ask_) and searches the
+        books in the private "Powerlifter library" Drive folder for it
+        (book_). Opt-in: needs ANTHROPIC_API_KEY.
 
    Everything is upsert-by-key, so a resync is always safe: rows get rewritten
    in place rather than duplicated.
@@ -23,7 +26,7 @@
    ========================================================================== */
 
 /** Bump when Code.gs changes, so ping and diagnosePublish can report it. */
-var SCRIPT_VERSION = 4;
+var SCRIPT_VERSION = 5;
 
 /** Columns the script maintains itself; a push must never overwrite them. */
 var SCRIPT_OWNED = ['discordPostedAt', 'discordMessageId', 'discordHash'];
@@ -43,6 +46,7 @@ function doPost(e) {
       case 'pull': return ok(pull_());
       case 'push': return ok(push_(body));
       case 'ask': return ok(ask_(body));
+      case 'book': return ok(book_(body));
       default: return fail('Unknown request kind: ' + body.kind);
     }
   } catch (err) {
@@ -93,6 +97,7 @@ function ping_() {
     discordConfigured: !!prop('DISCORD_WEBHOOK_URL'),
     publishConfigured: !!(prop('GITHUB_TOKEN') && prop('GITHUB_REPO')),
     coachConfigured: !!prop('ANTHROPIC_API_KEY'),
+    library: libraryFiles_().map(function (f) { return f.getName(); }),
     scriptVersion: SCRIPT_VERSION,
     snapshots: countSnapshots_(),
   };
@@ -191,6 +196,104 @@ function countAsk_() {
   }
 }
 
+/* ---- the book library ------------------------------------------------- */
+
+/**
+ * The coach's search over whole books.
+ *
+ * Each book is a passage index made by tools/build_book_index.py and dropped
+ * into this Drive folder by hand. It is the book's own text, so it lives here,
+ * private, and never in the public repository. Add a source by adding a file;
+ * remove one by deleting it.
+ */
+var LIBRARY_FOLDER = 'Powerlifter library';
+var BOOK_STOP = ('a an the and or of to in on for with is are was be it my i me you your do does how what why '
+  + 'when should can could would at by as this that from not if than then so about into over').split(' ');
+
+function libraryFiles_() {
+  var it = DriveApp.getFoldersByName(LIBRARY_FOLDER);
+  if (!it.hasNext()) return [];
+  var files = [];
+  var fit = it.next().getFiles();
+  while (fit.hasNext()) {
+    var f = fit.next();
+    if (/\.json$/i.test(f.getName()) && !f.isTrashed()) files.push(f);
+  }
+  return files;
+}
+
+function book_(body) {
+  var query = String(body.query || '').slice(0, 300);
+  if (!query.trim()) throw new Error('No search query.');
+  var limit = Math.min(8, Math.max(1, Number(body.limit) || 5));
+  var sources = [];
+  libraryFiles_().forEach(function (f) {
+    try {
+      var d = JSON.parse(f.getBlob().getDataAsString());
+      if (d && d.passages && d.passages.length) sources.push(d);
+    } catch (e) { /* a half-uploaded or foreign file: skip it */ }
+  });
+  return {
+    configured: sources.length > 0,
+    sources: sources.map(function (d) { return d.title; }),
+    passages: searchPassages_(sources, query, limit),
+  };
+}
+
+function bookTerms_(text) {
+  var words = String(text).toLowerCase().normalize('NFKD').match(/[a-z0-9]+/g) || [];
+  var out = [];
+  for (var i = 0; i < words.length; i++) {
+    if (BOOK_STOP.indexOf(words[i]) !== -1) continue;
+    out.push(words[i].replace(/(ing|ed|es|s)$/, '') || words[i]);
+  }
+  return out;
+}
+
+/** BM25 over every passage of every book; the best `limit`, with where each came from. */
+function searchPassages_(sources, query, limit) {
+  var q = bookTerms_(query).filter(function (t, i, a) { return a.indexOf(t) === i; });
+  if (!q.length) return [];
+  var docs = [];
+  sources.forEach(function (src) {
+    src.passages.forEach(function (p) {
+      var tf = {};
+      var terms = bookTerms_((p.chapter || '') + ' ' + p.text);
+      for (var i = 0; i < terms.length; i++) tf[terms[i]] = (tf[terms[i]] || 0) + 1;
+      docs.push({ src: src, p: p, tf: tf, len: terms.length });
+    });
+  });
+  if (!docs.length) return [];
+  var avg = docs.reduce(function (n, d) { return n + d.len; }, 0) / docs.length;
+  var idf = {};
+  q.forEach(function (t) {
+    var df = docs.filter(function (d) { return d.tf[t]; }).length;
+    idf[t] = Math.log(1 + (docs.length - df + 0.5) / (df + 0.5));
+  });
+  var k1 = 1.2, b = 0.75;
+  var scored = [];
+  docs.forEach(function (d) {
+    var score = 0;
+    q.forEach(function (t) {
+      var f = d.tf[t];
+      if (f) score += idf[t] * (f * (k1 + 1)) / (f + k1 * (1 - b + b * d.len / avg));
+    });
+    if (score > 0) scored.push({ d: d, score: score });
+  });
+  scored.sort(function (x, y) { return y.score - x.score; });
+  return scored.slice(0, limit).map(function (x) {
+    var src = x.d.src;
+    return {
+      source: src.title,
+      authors: src.authors || null,
+      edition: src.edition || null,
+      page: x.d.p.page,
+      chapter: x.d.p.chapter || null,
+      text: x.d.p.text,
+    };
+  });
+}
+
 /* ---- push -------------------------------------------------------------- */
 
 /** Column order per tab. Adding a column here is enough — headers self-heal. */
@@ -199,7 +302,7 @@ var SCHEMA = {
     key: 'key',
     cols: ['key', 'date', 'sessionId', 'label', 'cycle', 'week', 'day', 'phase',
       'slotKey', 'exerciseId', 'exercise', 'setIndex', 'load', 'unit', 'loadKg',
-      'reps', 'rpe', 'e1rmKg', 'targetReps', 'targetRPE', 'plannedLoad', 'loggedAt', 'note'],
+      'reps', 'rpe', 'failed', 'e1rmKg', 'targetReps', 'targetRPE', 'plannedLoad', 'loggedAt', 'note'],
   },
   sessions: {
     key: 'key',
