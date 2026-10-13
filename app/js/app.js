@@ -27,12 +27,14 @@ const TABS = [
   { id: 'settings',  label: 'Settings', ico: 'settings' },
 ];
 
-const APP_VERSION = '1.8.1';
+const APP_VERSION = '1.8.2';
 
 /* ---- routing ---------------------------------------------------------- */
 
 let current = null;
 let params = {};
+/** The page last drawn, route plus params, so a redraw can tell "same page" from "new page". */
+let drawnPage = null;
 
 function parseHash() {
   const h = (location.hash || '').replace(/^#\/?/, '');
@@ -82,7 +84,12 @@ function draw() {
   view.mount?.(root, ctx);
 
   drawTabs(name, st);
-  window.scrollTo({ top: 0 });
+  // Only a new page starts at the top. Most redraws come from a tap on this
+  // page (logging a set, a toggle), and render() has kept the reader where
+  // they were; jumping to the top there threw them off what they just touched.
+  const page = `${name}?${new URLSearchParams(params)}`;
+  if (page !== drawnPage) window.scrollTo({ top: 0 });
+  drawnPage = page;
 }
 
 function drawTabs(activeName, st) {

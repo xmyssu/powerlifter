@@ -447,13 +447,14 @@ function volBar(label, value, [lo, hi]) {
 
 function mount(root, ctx) {
   const rerender = () => ctx.refresh();
+  // A new step is a new screen; the shell keeps the scroll for redraws within one.
+  const toStep = (n) => { w.step = n; rerender(); window.scrollTo({ top: 0 }); };
 
   $$('[data-next]', root).forEach((b) => b.onclick = () => {
     if (STEPS[w.step] === 'maxes' && !allMaxesSet()) return;
-    w.step = Math.min(STEPS.length - 1, w.step + 1);
-    rerender();
+    toStep(Math.min(STEPS.length - 1, w.step + 1));
   });
-  $$('[data-back]', root).forEach((b) => b.onclick = () => { w.step = Math.max(0, w.step - 1); rerender(); });
+  $$('[data-back]', root).forEach((b) => b.onclick = () => toStep(Math.max(0, w.step - 1)));
 
   // A returning lifter should not have to build a program before they are
   // allowed to restore the one they already had.
