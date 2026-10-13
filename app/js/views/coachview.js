@@ -133,7 +133,7 @@ function trainingAgeCard(st) {
     <span class="kv__k">${esc(row.label)}</span>
     <span class="kv__v">${row.qualifies
       ? '<span class="pill pill--warn">qualifies</span>'
-      : `<span class="dim" style="font-weight:400">${row.stalls === 0 ? 'no stalls' : `${row.stalls} stall${row.stalls === 1 ? '' : 's'}`} · ${row.smallIncrement ? 'increments cut' : 'full increments'}</span>`}</span>
+      : `<span class="dim" style="font-weight:400">${row.stalls === 0 ? 'no stalls' : `${esc(row.stalls)} stall${row.stalls === 1 ? '' : 's'}`} · ${row.smallIncrement ? 'increments cut' : 'full increments'}</span>`}</span>
   </div>`).join('');
 
   return `<div class="card">
@@ -160,8 +160,8 @@ function statusCard(st, tpl) {
   const done = st.sessions.filter((s) => s.status === 'done').length;
   return `<div class="card">
     <div class="kv"><span class="kv__k">Program</span><span class="kv__v">${esc(tpl.name)}</span></div>
-    <div class="kv"><span class="kv__k">Position</span><span class="kv__v">${p.cursor.phase === 'deload' ? 'Deload week' : `Cycle ${p.cursor.cycle}, week ${p.cursor.week} of ${weeks}`} · Day ${p.cursor.day}</span></div>
-    <div class="kv"><span class="kv__k">Cycles since a deload</span><span class="kv__v">${p.cyclesSinceDeload}${p.cyclesSinceDeload >= 2 ? ' <span class="pill pill--warn">due</span>' : ''}</span></div>
+    <div class="kv"><span class="kv__k">Position</span><span class="kv__v">${p.cursor.phase === 'deload' ? 'Deload week' : `Cycle ${esc(p.cursor.cycle)}, week ${esc(p.cursor.week)} of ${esc(weeks)}`} · Day ${esc(p.cursor.day)}</span></div>
+    <div class="kv"><span class="kv__k">Cycles since a deload</span><span class="kv__v">${esc(p.cyclesSinceDeload)}${p.cyclesSinceDeload >= 2 ? ' <span class="pill pill--warn">due</span>' : ''}</span></div>
     <div class="kv"><span class="kv__k">Sessions logged</span><span class="kv__v">${done}</span></div>
     ${p.meetDate ? `<div class="kv"><span class="kv__k">Meet</span><span class="kv__v">${esc(fmtDate(p.meetDate))}</span></div>` : ''}
   </div>`;
@@ -185,7 +185,7 @@ function stallCard(st, tpl) {
       ${rows.map(({ slot, s, day }) => `<div class="kv">
         <span class="kv__k">${esc(byId(st.program.choices[slot.key])?.short || slot.slotType)} <span class="dim tiny">D${day.n}</span></span>
         <span class="kv__v" style="font-size:.813rem">
-          ${s.stalls ? `<span class="pill pill--warn">${s.stalls} stall${s.stalls > 1 ? 's' : ''}</span>` : ''}
+          ${s.stalls ? `<span class="pill pill--warn">${esc(s.stalls)} stall${s.stalls > 1 ? 's' : ''}</span>` : ''}
           ${s.smallIncrement ? `<span class="pill">small jumps</span>` : ''}
           ${s.extendedRange ? `<span class="pill">wide range</span>` : ''}
         </span>
@@ -207,7 +207,7 @@ function eventLog(st) {
     <div class="acc__body">
       ${ev.map((e) => `<div class="kv">
         <span class="kv__k">${esc(fmtDate(e.date))}</span>
-        <span class="kv__v" style="font-weight:550;font-size:.813rem">${esc(label[e.kind] || e.kind)}${e.verdict ? ` — ${esc(e.verdict)}` : ''}${e.cycle ? ` ${e.cycle}` : ''}</span>
+        <span class="kv__v" style="font-weight:550;font-size:.813rem">${esc(label[e.kind] || e.kind)}${e.verdict ? ` — ${esc(e.verdict)}` : ''}${e.cycle ? ` ${esc(e.cycle)}` : ''}</span>
       </div>`).join('')}
     </div>
   </details>`;
@@ -491,7 +491,7 @@ function openMeet(ctx) {
           <label class="field__label" for="goaltotal">Total you are chasing</label>
           <div class="row" style="gap:8px">
             <input class="input input--num grow" id="goaltotal" type="text" inputmode="decimal"
-                   value="${st.program.goalTotal ?? ''}" placeholder="${attempts.every((a) => a.max) ? fmtLoadBare(attempts.reduce((n, a) => n + a.second, 0)) : '—'}" data-goal>
+                   value="${esc(st.program.goalTotal ?? '')}" placeholder="${attempts.every((a) => a.max) ? fmtLoadBare(attempts.reduce((n, a) => n + a.second, 0)) : '—'}" data-goal>
             <span class="pill mono" style="flex:0 0 auto">${esc(units)}</span>
           </div>
           <div class="field__hint">Optional, and the most useful number on the platform — the board tracks against it between attempts, so the third-attempt call is arithmetic rather than a feeling. Three second attempts is a total you should make; three thirds is one you might.</div>

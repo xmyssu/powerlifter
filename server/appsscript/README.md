@@ -30,6 +30,10 @@ from writing to your sheet. Make it long and random.
      ```
 3. **Save script properties**.
 
+   The script refuses tokens shorter than 24 characters (since v7). It also
+   holds your Anthropic key and GitHub token, so a guessable token is a key to
+   all of them.
+
 Keep that value somewhere you can paste it from — you'll type it into the app
 once, and you'll want it again if you ever set up a second device.
 

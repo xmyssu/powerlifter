@@ -26,13 +26,15 @@
    ========================================================================== */
 
 /** Bump when Code.gs changes, so ping and diagnosePublish can report it. */
-var SCRIPT_VERSION = 6;
+var SCRIPT_VERSION = 7;
 
 /** Columns the script maintains itself; a push must never overwrite them. */
 var SCRIPT_OWNED = ['discordPostedAt', 'discordMessageId', 'discordHash'];
 
 var SNAPSHOT_FOLDER = 'Powerlifter snapshots';
 var SNAPSHOTS_TO_KEEP = 60;
+/** Years of training are well under 2 MB; this only stops a flood of Drive junk. */
+var MAX_SNAPSHOT_CHARS = 20 * 1000 * 1000;
 
 /* ---- entry points ------------------------------------------------------ */
 
@@ -84,7 +86,15 @@ function prop(name) {
 function requireToken(given) {
   var want = prop('SYNC_TOKEN');
   if (!want) throw new Error('SYNC_TOKEN is not set in the script properties.');
-  if (!given || String(given) !== want) throw new Error('Bad token.');
+  if (want.length < 24) throw new Error('SYNC_TOKEN is too short to be safe. Use at least 24 random characters.');
+  if (!given || !sameSecret_(String(given), want)) throw new Error('Bad token.');
+}
+
+/** Compare without stopping at the first wrong character, so timing says nothing. */
+function sameSecret_(a, b) {
+  var diff = a.length ^ b.length;
+  for (var i = 0; i < b.length; i++) diff |= (a.charCodeAt(i) || 0) ^ b.charCodeAt(i);
+  return diff === 0;
 }
 
 /* ---- ping -------------------------------------------------------------- */
@@ -331,6 +341,9 @@ function push_(body) {
       maxes: upsert_('maxes', body.maxes || []),
     };
 
+    if (body.snapshot && (typeof body.snapshot !== 'string' || body.snapshot.length > MAX_SNAPSHOT_CHARS)) {
+      throw new Error('The snapshot is not text or is too large.');
+    }
     var snapshot = body.snapshot ? saveSnapshot_(body.snapshot, body.sessions || []) : null;
     var posted = postToDiscord_(body.discord || []);
     var published = publishPublic_(body.public);
@@ -543,10 +556,16 @@ function pull_() {
  */
 var PUBLIC_PATH = 'app/data/stats.json';
 
+var MAX_PUBLIC_CHARS = 500 * 1000;
+
 function publishPublic_(publicData) {
   var token = prop('GITHUB_TOKEN');
   var repo = prop('GITHUB_REPO');
   if (!token || !repo || !publicData) return null;
+  // Whatever lands here is world-readable and drawn by a page that shares an
+  // origin with the app, so it must at least be the right kind of thing.
+  var why = publicShapeProblem_(publicData);
+  if (why) return { error: 'Not published: ' + why };
 
   var api = 'https://api.github.com/repos/' + repo + '/contents/' + PUBLIC_PATH;
   var headers = {
@@ -600,6 +619,14 @@ function publishPublic_(publicData) {
   return { error: 'GitHub returned ' + code, detail: res.getContentText().slice(0, 200) };
 }
 
+function publicShapeProblem_(d) {
+  if (typeof d !== 'object' || Array.isArray(d)) return 'not an object';
+  if (d.v !== 1) return 'unknown version';
+  if (!Array.isArray(d.lifts)) return 'no lifts';
+  if (JSON.stringify(d).length > MAX_PUBLIC_CHARS) return 'too large';
+  return '';
+}
+
 /** Compare the API's base64 blob against what we are about to write. */
 function sameContent_(base64FromApi, text) {
   try {
@@ -648,12 +675,20 @@ function hash_(text) {
 
 /** The app's own icon, derived from the dashboard URL rather than configured. */
 function avatarFor_(url) {
-  if (!url) return null;
+  if (!safeUrl_(url)) return null;
   return url.replace(/dash\.html.*$/, 'icons/icon-192.png');
 }
 
+/** Only an https link goes into a message; anything else is dropped. */
+function safeUrl_(url) {
+  return typeof url === 'string' && /^https:\/\/[^\s"<>]+$/.test(url) && url.length < 500 ? url : undefined;
+}
+
+/** Text in an embed never pings anyone, whatever it says. */
+var NO_MENTIONS = { parse: [] };
+
 function webhookPayload_(embed, url) {
-  var body = { username: 'Powerlifter', embeds: [embed] };
+  var body = { username: 'Powerlifter', embeds: [embed], allowed_mentions: NO_MENTIONS };
   var avatar = avatarFor_(url);
   if (avatar) body.avatar_url = avatar;
   return body;
@@ -709,7 +744,7 @@ function postToDiscord_(cards) {
         var patch = UrlFetchApp.fetch(base + '/messages/' + found.msgId, {
           method: 'patch',
           contentType: 'application/json',
-          payload: JSON.stringify({ embeds: [embed] }),
+          payload: JSON.stringify({ embeds: [embed], allowed_mentions: NO_MENTIONS }),
           muteHttpExceptions: true,
         });
         if (patch.getResponseCode() < 300) {
@@ -865,7 +900,7 @@ function embed_(card) {
 
   return {
     title: (card.deload ? 'Deload · ' : '') + (card.title || 'Session logged'),
-    url: card.url || undefined,
+    url: safeUrl_(card.url),
     description: card.notes ? clip_(card.notes, 400) : undefined,
     color: card.prs && card.prs.length ? ACCENT_PR
       : card.stalled && card.stalled.length ? ACCENT_ST
@@ -938,7 +973,7 @@ function weeklyEmbed_(w) {
 
   return {
     title: 'Week of ' + w.weekKey + (w.deloadWeek ? ' · deload' : ''),
-    url: w.url || undefined,
+    url: safeUrl_(w.url),
     color: w.deloadWeek ? ACCENT_DL : ACCENT,
     timestamp: new Date(w.weekEnd + 'T12:00:00Z').toISOString(),
     footer: { text: w.label + ' · estimated maxes in kg' },

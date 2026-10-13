@@ -252,10 +252,12 @@ hr('5. Secrets');
 
   const snap = JSON.parse(sent.body.snapshot);
   eq(snap.sync.token, '', 'the snapshot uploaded to Drive carries no token');
-  ok(snap.sync.endpoint.endsWith('/exec'), 'but keeps the endpoint, so a restore only needs the token retyped');
+  eq(snap.sync.endpoint, '', 'nor the endpoint, the other half of the credential');
+  eq(snap.sync.enabled, false, 'and does not claim sync is on');
   eq(snap.sessions.length, 1, 'and it is a real full-state backup');
 
   eq(JSON.parse(store.exportJSON()).sync.token, '', 'a downloaded backup file carries no token either');
+  eq(JSON.parse(store.exportJSON()).sync.endpoint, '', 'nor an endpoint');
   eq(store.getState().sync.token, 'tok', 'while the device itself keeps it');
 }
 
@@ -343,16 +345,61 @@ hr('8. Restore from the sheet');
   eq(store.getState().sync.queue.length, 0, 'with an empty queue');
   eq(store.getState().sync.syncing, false, 'and no stale in-flight flag');
 
-  // The snapshot carried the endpoint but not the token, so a restored phone
-  // knows where its sheet is and only needs the secret typed back in.
-  ok(store.getState().sync.endpoint.endsWith('/exec'), 'the restored state knows its endpoint');
-  eq(store.getState().sync.token, '', 'but not its token');
+  // A restore never sets credentials: a wiped phone types the URL and token in.
+  eq(store.getState().sync.endpoint, '', 'the restored state has no endpoint from the file');
+  eq(store.getState().sync.token, '', 'nor a token');
 
-  sync.configure({ token: 'tok', enabled: true });
+  sync.configure({ endpoint: 'https://script.google.com/macros/s/AKfycb/exec', token: 'tok', enabled: true });
   reply = { ok: true, snapshot: null };
   const empty = await sync.pullLatest();
   ok(!empty.ok && /no snapshot/.test(empty.error), 'a sheet with nothing in it says so plainly', empty.error);
   reply = { ok: true, sheetUrl: 'https://sheet/FAKE' };
+}
+
+hr('8b. A hostile backup cannot redirect sync');
+{
+  seed([session('ses_new', '2026-08-15', 147.5)]);
+  sync.configure({ endpoint: 'https://script.google.com/macros/s/AKfycb/exec', token: 'tok', enabled: true });
+  const evil = JSON.parse(store.exportJSON());
+  evil.sync = { enabled: true, endpoint: 'https://script.google.com/macros/s/ATTACKER/exec', token: 'theirs', queue: ['ses_new'] };
+
+  const res = store.importJSON(JSON.stringify(evil));
+  ok(res.ok, 'the file itself still imports');
+  eq(store.getState().sync.endpoint, 'https://script.google.com/macros/s/AKfycb/exec', 'but the phone keeps its own endpoint');
+  eq(store.getState().sync.token, 'tok', 'and its own token');
+  eq(store.getState().sync.enabled, true, 'and its own on/off');
+  eq(store.getState().sync.queue.length, 0, 'and takes no queue from the file');
+
+  // On a phone with sync off, a file cannot switch it on either.
+  sync.configure({ endpoint: '', token: '', enabled: false });
+  store.importJSON(JSON.stringify(evil));
+  eq(store.getState().sync.enabled, false, 'a file cannot turn sync on');
+  eq(store.getState().sync.endpoint, '', 'or plant an endpoint for the next setup to send a token to');
+
+  // Shape checks: a file that would crash a view is refused before anything changes.
+  const before = store.getState().sessions.length;
+  for (const [label, patch] of [
+    ['sessions as an object', { sessions: { a: 1 } }],
+    ['a session without an id', { sessions: [{ entries: [] }] }],
+    ['a session that is a string', { sessions: ['<img src=x onerror=alert(1)>'] }],
+    ['profile as an array', { profile: [] }],
+  ]) {
+    const r = store.importJSON(JSON.stringify({ ...evil, ...patch }));
+    ok(!r.ok, `refuses ${label}`);
+  }
+  eq(store.getState().sessions.length, before, 'and a refused file changes nothing');
+
+  // Requests only ever go to an Apps Script URL, however the state got there.
+  ok(!sync.isValidEndpoint('https://evil.example/exec'), 'a foreign host is not an endpoint');
+  ok(!sync.isValidEndpoint('https://script.google.com.evil.example/macros/s/x/exec'), 'nor a lookalike host');
+  ok(!sync.isValidEndpoint('http://script.google.com/macros/s/x/exec'), 'nor plain http');
+  ok(sync.isValidEndpoint('https://script.google.com/a/macros/example.com/s/AKfy-c_b/exec'), 'a Workspace URL is fine');
+  store.update((s) => { s.sync = { ...s.sync, enabled: true, endpoint: 'https://evil.example/exec', token: 'tok' }; });
+  sync.enqueueAll();
+  sent = null;
+  eq((await sync.flush({ force: true })).skipped, 'not-configured', 'a bad endpoint in state counts as not configured');
+  eq(sent, null, 'and nothing is sent to it');
+  sync.configure({ endpoint: 'https://script.google.com/macros/s/AKfycb/exec', token: 'tok', enabled: true });
 }
 
 /* ======================================================================

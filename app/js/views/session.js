@@ -162,7 +162,7 @@ function meetCard(st, ses) {
       <label class="field__label" for="goaltotal">Total you are chasing</label>
       <div class="row" style="gap:8px">
         <input class="input input--num grow" id="goaltotal" type="text" inputmode="decimal"
-               value="${goal ?? ''}" placeholder="—" data-goal data-focus-key="goaltotal">
+               value="${esc(goal ?? '')}" placeholder="—" data-goal data-focus-key="goaltotal">
         <span class="pill mono" style="flex:0 0 auto">${esc(units)}</span>
       </div>
       ${t ? `<div class="field__hint">${t.hit
@@ -178,7 +178,7 @@ function meetCard(st, ses) {
         <div class="insight__t">${esc(p.nextUp.name)} · ${esc(p.nextUp.attempt.name.toLowerCase())}</div>
         <div class="insight__b">${esc(advice.text)}</div>
         ${advice.changed && advice.load != null ? `<button class="btn btn--ghost" style="margin-top:10px"
-          data-advice="${esc(p.nextUp.slotKey)}" data-advice-n="${p.nextUp.attempt.n - 1}" data-advice-load="${advice.load}">
+          data-advice="${esc(p.nextUp.slotKey)}" data-advice-n="${esc(p.nextUp.attempt.n - 1)}" data-advice-load="${esc(advice.load)}">
           ${icon('swap')} Change it to ${fmtLoadBare(advice.load)} ${esc(units)}</button>` : ''}
       </div>
     </div>` : ''}
@@ -200,9 +200,9 @@ function exerciseCard(entry, resolved, i, st, ses, goals = []) {
   const targetStr = resolved.isTest || resolved.isMeet
     ? (a ? `<b>${fmtLoadBare(a.opener)}</b> · <b>${fmtLoadBare(a.second)}</b> · <b>${fmtLoadBare(a.third)}</b> ${esc(units)}`
          : '<b>Work up by feel</b>')
-    : `<b>${entry.targetSets} × ${entry.targetReps ?? '—'}</b>`
+    : `<b>${esc(entry.targetSets)} × ${esc(entry.targetReps ?? '—')}</b>`
       + (entry.targetRPE != null ? ` @ RPE <b>${fmtRPE(entry.targetRPE)}</b>`
-        : entry.rpeRange ? ` @ RPE <b>${entry.rpeRange[0]}-${entry.rpeRange[1]}</b>` : '');
+        : entry.rpeRange ? ` @ RPE <b>${esc(entry.rpeRange[0])}-${esc(entry.rpeRange[1])}</b>` : '');
 
   return `<div class="ex ${isOpen ? 'ex--active' : ''} ${done ? 'ex--done' : ''}">
     <button class="ex__head" data-expand="${esc(entry.slotKey)}">
@@ -385,7 +385,7 @@ function warmupStrip(entry, st) {
       <div class="tiny mono">${w.sets.map((x) =>
         `${fmtLoadBare(x.load)} × ${esc(String(x.reps))}`).join('  ·  ')}</div>
       <p class="cite" style="margin-top:8px">${esc(w.label)}. Rest as little as you like down here — the ramp is
-      preparation, not training, and the only set that counts is the one at ${fmtLoadBare(entry.plannedLoad)} ${units}.</p>
+      preparation, not training, and the only set that counts is the one at ${fmtLoadBare(entry.plannedLoad)} ${esc(units)}.</p>
     </div>
   </details>`;
 }
@@ -734,7 +734,7 @@ function rpeCheckNote(slot, entry, units) {
   if (heavier && readsHeavy(heavyCheckMax(slot)?.value, slot.rpeCheckLoad, entry.targetReps, targetRPEOf(entry))) return '';
   return `<div class="banner banner--warn" style="margin-bottom:12px">
     <b>Worth a look.</b> The program says ${fmtLoadBare(rx)} ${esc(units)}, but your recent
-    sets suggest ${fmtLoadBare(slot.rpeCheckLoad)} ${esc(units)} is what ${entry.targetReps} reps at RPE
+    sets suggest ${fmtLoadBare(slot.rpeCheckLoad)} ${esc(units)} is what ${esc(entry.targetReps)} reps at RPE
     ${fmtRPE(entry.targetRPE ?? 8)} actually looks like for you right now — ${fmtLoadBare(Math.abs(diff))} ${esc(units)}
     ${heavier ? 'heavier' : 'lighter'}. The RPE is the prescription; the number is a guess. Your call.
   </div>`;
@@ -762,7 +762,7 @@ function loadStepper(entry, st, { attempts = false, index = 0, platform = false 
   return `<div class="stepper" style="margin-bottom:12px">
     <button class="stepper__btn" data-load-delta="${-step}" data-slot="${esc(entry.slotKey)}"${tag} aria-label="Less weight">−</button>
     <div class="stepper__val">
-      <input type="text" inputmode="decimal" value="${value}" placeholder="—"
+      <input type="text" inputmode="decimal" value="${esc(value)}" placeholder="—"
              data-load-set="${esc(entry.slotKey)}"${tag} data-focus-key="load-${esc(entry.slotKey)}" aria-label="${esc(label)}">
       <span class="stepper__unit">${esc(st.profile.units)}</span>
     </div>
@@ -776,7 +776,8 @@ const ATTEMPT_NAMES = ['1st', '2nd', '3rd'];
 
 function setRow(entry, s, si, isNext, units, isTest = false) {
   const cls = s.failed ? 'set--failed' : s.done ? 'set--done' : isNext ? 'set--next' : '';
-  const k = `${entry.slotKey}-${si}`;
+  // Only ever an attribute value; the handlers read it back decoded.
+  const k = esc(`${entry.slotKey}-${si}`);
   const label = isTest ? esc(ATTEMPT_NAMES[si] || si + 1) : si + 1;
 
   // A miss has no rep count and no RPE to report — the weight and the fact that
@@ -787,7 +788,7 @@ function setRow(entry, s, si, isNext, units, isTest = false) {
     : `<div class="set__cell">
       <span class="set__k">Reps</span>
       <input class="set__in" type="text" inputmode="numeric"
-             value="${s.reps ?? ''}" placeholder="${entry.targetReps ?? '—'}"
+             value="${esc(s.reps ?? '')}" placeholder="${esc(entry.targetReps ?? '—')}"
              data-set-reps="${k}" data-focus-key="sr-${k}" aria-label="Set ${si + 1} reps">
     </div>
     <div class="set__cell">
@@ -800,7 +801,7 @@ function setRow(entry, s, si, isNext, units, isTest = false) {
     <div class="set__cell">
       <span class="set__k">${esc(units)}</span>
       <input class="set__in" type="text" inputmode="decimal"
-             value="${s.load ?? ''}" placeholder="${entry.plannedLoad ?? '—'}"
+             value="${esc(s.load ?? '')}" placeholder="${esc(entry.plannedLoad ?? '—')}"
              data-set-load="${k}" data-focus-key="sl-${k}" aria-label="Set ${si + 1} load"${s.failed ? ' disabled' : ''}>
     </div>
     ${body}

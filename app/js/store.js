@@ -69,8 +69,8 @@ export function defaultState() {
     coachNotes: [],         // [{id, text, date, by: 'you'|'coach'}] — standing instructions the coach reads
 
     /**
-     * Cloud sync (sync.js). `token` is the only secret the device holds and it
-     * is stripped from every export, so it never travels with a backup.
+     * Cloud sync (sync.js). `endpoint` and `token` are the device's credentials:
+     * stripped from every export, and never read back from an import.
      */
     sync: {
       enabled: false,
@@ -236,12 +236,20 @@ export function resetAll() {
 
 /* ---- backup / restore ------------------------------------------------- */
 
+/**
+ * The sync block as it may leave the device: no credentials at all.
+ *
+ * A backup file gets mailed to yourself, dropped in cloud storage and handed
+ * over for debugging. The token is write access to the sheet and the endpoint
+ * is the other half of it, so neither travels. A restore never reads them back
+ * either (see importJSON), so there is nothing to lose by leaving them out.
+ */
+function exportableSync(sync) {
+  return { ...sync, endpoint: '', token: '', enabled: false, queue: [], lastResult: null, lastError: null };
+}
+
 export function exportJSON() {
-  // The sync token is deliberately left out: a backup file gets mailed to
-  // yourself, dropped in cloud storage and handed over for debugging, and none
-  // of that should hand over write access to your sheet. The endpoint stays so
-  // a restore only needs the token retyped.
-  const out = { ...state, sync: { ...state.sync, token: '', queue: [] }, exportedAt: new Date().toISOString() };
+  const out = { ...state, sync: exportableSync(state.sync), exportedAt: new Date().toISOString() };
   return JSON.stringify(out, null, 2);
 }
 
@@ -249,20 +257,46 @@ export function exportFilename() {
   return `powerlifter-backup-${todayISO()}.json`;
 }
 
-/** Returns {ok, error, summary} without mutating unless ok. */
+const isPlain = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+
+/**
+ * Returns {ok, error, summary} without mutating unless ok.
+ *
+ * A backup is untrusted input: anyone can hand you a file. So a restore brings
+ * in training data only. Where this phone syncs to, and with what token, stay
+ * exactly as they were — otherwise a file could quietly point the phone at
+ * someone else's script, which would then receive every session, and the token
+ * the moment you retyped it.
+ */
 export function importJSON(text, { apply = true } = {}) {
   let parsed;
   try { parsed = JSON.parse(text); } catch (e) { return { ok: false, error: 'Not valid JSON.' }; }
-  if (!parsed || typeof parsed !== 'object') return { ok: false, error: 'Not a backup file.' };
+  if (!isPlain(parsed)) return { ok: false, error: 'Not a backup file.' };
   if (!('profile' in parsed) && !('sessions' in parsed)) {
     return { ok: false, error: 'This file does not look like a Powerlifter backup.' };
+  }
+  for (const k of ['profile', 'settings', 'meta', 'maxes']) {
+    if (k in parsed && parsed[k] != null && !isPlain(parsed[k])) return { ok: false, error: `The backup's ${k} is malformed.` };
+  }
+  for (const k of ['sessions', 'readiness', 'bodyweightLog', 'coachNotes']) {
+    if (k in parsed && parsed[k] != null && !Array.isArray(parsed[k])) return { ok: false, error: `The backup's ${k} is malformed.` };
+  }
+  if ((parsed.sessions || []).some((s) => !isPlain(s) || typeof s.id !== 'string' || !Array.isArray(s.entries || []))) {
+    return { ok: false, error: 'The backup has a malformed session in it.' };
   }
   const summary = {
     sessions: Array.isArray(parsed.sessions) ? parsed.sessions.length : 0,
     hasProgram: !!parsed.program,
-    exportedAt: parsed.exportedAt || null,
+    exportedAt: typeof parsed.exportedAt === 'string' ? parsed.exportedAt : null,
   };
-  if (apply) replaceState(parsed);
+  if (apply) {
+    const { exportedAt, ...data } = parsed;
+    // Arrays of plain records only, so a stray string or null cannot reach a view.
+    for (const k of ['readiness', 'bodyweightLog', 'coachNotes']) {
+      if (Array.isArray(data[k])) data[k] = data[k].filter(isPlain);
+    }
+    replaceState({ ...data, sync: { ...state.sync, queue: [] } });
+  }
   return { ok: true, summary };
 }
 

@@ -491,7 +491,7 @@ const IMPL = {
     if (!remember) throw new Error('Notes cannot be saved from here.');
     const notes = state.coachNotes || [];
     if (notes.length >= MAX_NOTES) throw new Error(`He already has ${MAX_NOTES} notes; ask him to delete one in the Ask tab's Notes first.`);
-    if (notes.some((n) => n.text.toLowerCase() === text.toLowerCase())) return { saved: false, reason: 'Already in his notes.' };
+    if (notes.some((n) => String(n?.text ?? '').toLowerCase() === text.toLowerCase())) return { saved: false, reason: 'Already in his notes.' };
     remember({ text, date: today, by: 'coach' });
     return { saved: true, note: text };
   },

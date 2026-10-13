@@ -6,7 +6,7 @@
    VERSION whenever the assets change.
    ========================================================================== */
 
-const VERSION = 'v21';
+const VERSION = 'v22';
 const CACHE = `powerlifter-${VERSION}`;
 
 const ASSETS = [
@@ -27,6 +27,7 @@ const ASSETS = [
   './js/sync.js',
   './js/ask.js',
   './js/ui.js',
+  './js/dash.js',
   './js/views/onboarding.js',
   './js/views/today.js',
   './js/views/session.js',

@@ -177,7 +177,7 @@ function unitsStep() {
       <div class="field">
         <label class="field__label" for="bar">Bar weight</label>
         <input class="input input--num" id="bar" type="text" inputmode="decimal"
-               value="${w.barWeight}" data-bar data-focus-key="bar">
+               value="${esc(w.barWeight)}" data-bar data-focus-key="bar">
       </div>
 
       <div class="field">
@@ -201,7 +201,7 @@ function unitsStep() {
       <div class="field">
         <label class="field__label" for="bw">Bodyweight <span class="dim">(optional)</span></label>
         <input class="input input--num" id="bw" type="text" inputmode="decimal"
-               value="${w.bodyweight}" placeholder="—" data-bw data-focus-key="bw">
+               value="${esc(w.bodyweight)}" placeholder="—" data-bw data-focus-key="bw">
       </div>
 
       ${nav()}

@@ -169,7 +169,7 @@ function view(ctx) {
         </div>
         <button class="btn btn--ghost btn--block" data-act="export">${raw(icon('download'))} Export backup</button>
         <button class="btn btn--ghost btn--block" data-act="import">${raw(icon('upload'))} Restore from backup</button>
-        ${raw(st.settings.lastBackupAt ? `<p class="cite">Last export ${esc(fmtDate(st.settings.lastBackupAt.slice(0, 10)))}.</p>` : '')}
+        ${raw(typeof st.settings.lastBackupAt === 'string' ? `<p class="cite">Last export ${esc(fmtDate(st.settings.lastBackupAt.slice(0, 10)))}.</p>` : '')}
       </div>
 
       <div class="stack-sm">
@@ -344,11 +344,11 @@ function openGridEditor(ctx, exerciseId) {
         <div class="row" style="gap:10px">
           <div class="field grow">
             <label class="field__label" for="gstart">Lightest weight</label>
-            <input class="input input--num" id="gstart" type="text" inputmode="decimal" value="${draft.start}" data-g="start">
+            <input class="input input--num" id="gstart" type="text" inputmode="decimal" value="${esc(draft.start)}" data-g="start">
           </div>
           <div class="field grow">
             <label class="field__label" for="gstep">Jump between weights</label>
-            <input class="input input--num" id="gstep" type="text" inputmode="decimal" value="${draft.step}" data-g="step">
+            <input class="input input--num" id="gstep" type="text" inputmode="decimal" value="${esc(draft.step)}" data-g="step">
           </div>
         </div>
         <div class="field__hint">Read them off the machine. If the plates are marked 8, 16, 24 the lightest is 8 and the jump is 8; if it goes 72 then 80, the jump is 8 whatever the bottom says.</div>
@@ -745,7 +745,7 @@ function syncCard(st) {
       <span class="kv__k grow">Status</span>
       <span class="kv__v" style="${status.tone ? `color:var(--${status.tone});` : ''}text-align:right;max-width:60%">${esc(status.text)}</span>
     </div>
-    ${c.lastResult?.sheetUrl ? `<a class="btn btn--ghost btn--block" href="${esc(c.lastResult.sheetUrl)}" target="_blank" rel="noopener">${icon('progress')} Open the sheet</a>` : ''}
+    ${/^https:\/\//.test(c.lastResult?.sheetUrl || '') ? `<a class="btn btn--ghost btn--block" href="${esc(c.lastResult.sheetUrl)}" target="_blank" rel="noopener">${icon('progress')} Open the sheet</a>` : ''}
     <a class="btn btn--ghost btn--block" href="dash.html" target="_blank" rel="noopener">${icon('trend')} Open the public dashboard</a>
     <button class="btn btn--ghost btn--block" data-act="syncnow" ${c.syncing ? 'disabled' : ''}>${icon('upload')} ${pending ? `Sync ${pending} now` : 'Re-sync everything'}</button>
     <button class="btn btn--ghost btn--block" data-act="synctest">${icon('check')} Test the connection</button>
@@ -800,7 +800,7 @@ function openSyncSetup(ctx) {
         <div class="field__label">Token</div>
         <input class="input mono" data-token type="text" autocapitalize="off" spellcheck="false"
           placeholder="the SYNC_TOKEN script property" value="${esc(c.token || '')}">
-        <div class="field__hint">Stays on this device. It is stripped out of every backup file.</div>
+        <div class="field__hint">Stays on this device. Backups carry neither the URL nor the token, and restoring one never changes them.</div>
       </div>
       <div data-result></div>
       <button class="btn btn--ghost btn--block" data-test>Test the connection</button>
@@ -828,7 +828,7 @@ function openSyncSetup(ctx) {
 
       $('[data-save]', root).onclick = () => {
         const { endpoint, token } = read();
-        if (!/^https:\/\/script\.google\.com\/.*\/exec$/.test(endpoint.trim())) {
+        if (!sync.isValidEndpoint(endpoint)) {
           show('warn', 'That does not look like an Apps Script web app URL ending in /exec.');
           return;
         }
@@ -875,12 +875,9 @@ async function doSyncRestore(ctx) {
   });
   if (!yes) return;
 
-  // The snapshot deliberately carries no token, so hold onto the credentials
-  // that just fetched it rather than making the lifter retype them.
-  const { endpoint, token } = ctx.state.sync;
+  // importJSON keeps this phone's own URL and token, so sync carries on as it was.
   const res = ctx.store.importJSON(got.text);
   if (!res.ok) { toast(res.error, 'bad', 5000); return; }
-  sync.configure({ endpoint, token, enabled: true });
   toast(`Restored ${res.summary.sessions} session${res.summary.sessions === 1 ? '' : 's'}.`, 'good');
   ctx.go('today');
 }

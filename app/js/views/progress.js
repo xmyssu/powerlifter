@@ -167,7 +167,7 @@ function openDetail(ctx, lift) {
       <thead><tr><th>Date</th><th>Where</th><th class="r">e1RM</th></tr></thead>
       <tbody>${[...points].reverse().map((p) => `<tr>
         <td>${esc(fmtDate(p.date))}</td>
-        <td class="small muted">C${p.cycle} W${p.week} D${p.day}</td>
+        <td class="small muted">C${esc(p.cycle)} W${esc(p.week)} D${esc(p.day)}</td>
         <td class="r mono">${fmtLoadBare(p.value)}${p.estimatedFromHighReps ? ' <span class="dim">?</span>' : ''}</td>
       </tr>`).join('')}</tbody>
     </table></div>
@@ -192,7 +192,7 @@ function historyTab(st) {
       return `<button class="hist" data-session="${esc(s.id)}">
         <div class="hist__date">${esc(fmtDate(s.date))}</div>
         <div class="hist__body">
-          <div class="hist__t">${esc(s.phase === 'deload' ? 'Deload' : s.phase === 'painWeek' ? 'High-rep week' : s.phase === 'meetWeek' ? 'Meet week' : s.phase === 'test' ? 'Test day' : `Cycle ${s.cycle} · Week ${s.week}`)} · Day ${s.day}${day ? ` · ${esc(day.label)}` : ''}</div>
+          <div class="hist__t">${esc(s.phase === 'deload' ? 'Deload' : s.phase === 'painWeek' ? 'High-rep week' : s.phase === 'meetWeek' ? 'Meet week' : s.phase === 'test' ? 'Test day' : `Cycle ${s.cycle} · Week ${s.week}`)} · Day ${esc(s.day)}${day ? ` · ${esc(day.label)}` : ''}</div>
           <div class="hist__s">${sets.length} sets · ${Math.round(tonnage).toLocaleString()} ${esc(units)}${s.corrections?.length ? ' · corrected' : ''}</div>
         </div>
         ${icon('chevron', 'dim')}
@@ -219,13 +219,13 @@ function openSession(ctx, id) {
         <div>
           <div class="row-between" style="margin-bottom:6px">
             <b class="small">${esc(byId(e.exerciseId)?.short || e.slotKey)}</b>
-            <span class="tiny dim">target ${e.targetSets}×${e.targetReps ?? '—'}${e.targetRPE != null ? ` @ ${fmtRPE(e.targetRPE)}` : ''}</span>
+            <span class="tiny dim">target ${esc(e.targetSets)}×${esc(e.targetReps ?? '—')}${e.targetRPE != null ? ` @ ${fmtRPE(e.targetRPE)}` : ''}</span>
           </div>
           <div class="tbl-wrap"><table class="tbl">
             <tbody>${e.sets.filter((s) => s.done).map((s, i) => `<tr>
               <td class="dim" style="width:24px">${i + 1}</td>
               <td class="mono">${fmtLoadBare(s.load)} ${esc(units)}</td>
-              <td class="mono">${s.failed ? '<span style="color:var(--bad)">missed</span>' : `${s.reps} reps`}</td>
+              <td class="mono">${s.failed ? '<span style="color:var(--bad)">missed</span>' : `${esc(s.reps)} reps`}</td>
               <td class="r mono">${s.rpe != null ? `RPE ${fmtRPE(s.rpe)}` : '—'}</td>
             </tr>`).join('')}</tbody>
           </table></div>
@@ -236,7 +236,7 @@ function openSession(ctx, id) {
         <div class="insight__icon">${icon('warn')}</div>
         <div><div class="insight__t">${ses.corrections.length} ${ses.corrections.length === 1 ? 'entry has' : 'entries have'} been corrected</div>
         <div class="insight__b">${ses.corrections.slice(-6).map((c) =>
-          `${esc(byId(ses.entries.find((e) => e.slotKey === c.slotKey)?.exerciseId)?.short || c.slotKey)} set ${c.setIndex + 1}: `
+          `${esc(byId(ses.entries.find((e) => e.slotKey === c.slotKey)?.exerciseId)?.short || c.slotKey)} set ${esc(Number(c.setIndex) + 1)}: `
           + esc(correctionWords(c))).join('<br>')}</div></div>
       </div>` : ''}
       <button class="btn btn--ghost btn--block" data-correct="${esc(ses.id)}">Correct an entry, or mark a set missed</button>
@@ -327,7 +327,7 @@ async function openCorrect(ctx, id) {
         return `<div>
           <div class="row-between" style="margin-bottom:6px">
             <b class="small">${esc(byId(e.exerciseId)?.short || e.slotKey)}</b>
-            <span class="tiny dim">target ${e.targetSets}×${e.targetReps ?? '—'}${e.targetRPE != null ? ` @ ${fmtRPE(e.targetRPE)}` : ''}</span>
+            <span class="tiny dim">target ${esc(e.targetSets)}×${esc(e.targetReps ?? '—')}${e.targetRPE != null ? ` @ ${fmtRPE(e.targetRPE)}` : ''}</span>
           </div>
           <div class="stack-sm">
             <div class="row" style="gap:8px;align-items:center">
@@ -623,7 +623,7 @@ function completionCard(st) {
     <div class="tbl-wrap"><table class="tbl">
       <thead><tr><th>Cycle</th><th class="r">Sessions</th><th class="r">Sets</th><th class="r">Avg RPE</th></tr></thead>
       <tbody>${ordered.map((v) => `<tr>
-        <td class="mono">${v.cycle}${v.deload ? ' <span class="dim">deload</span>' : ''}</td>
+        <td class="mono">${esc(v.cycle)}${v.deload ? ' <span class="dim">deload</span>' : ''}</td>
         <td class="r mono">${v.sessions}</td>
         <td class="r mono">${v.logged}</td>
         <td class="r mono">${v.rpeN ? (v.rpeSum / v.rpeN).toFixed(1) : '—'}</td>

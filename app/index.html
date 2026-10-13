@@ -2,6 +2,10 @@
 <html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
+<!-- No inline script, no third-party code. Data this page draws is escaped
+     where it is drawn; this is the backstop if a spot is ever missed: injected
+     markup cannot run, and nothing can be sent anywhere but the Apps Script. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://script.google.com https://script.googleusercontent.com; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; worker-src 'self'">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
 <title>Powerlifter</title>
 <meta name="description" content="An RPE-driven powerlifting program tracker built on Eric Helms' Muscle &amp; Strength Pyramid.">

@@ -34,7 +34,7 @@ export const PROTOCOL = 1;
  * nothing rather than an error. The connection test compares this against what
  * the script reports so a stale paste is diagnosable instead of mysterious.
  */
-export const EXPECTED_SCRIPT_VERSION = 6;
+export const EXPECTED_SCRIPT_VERSION = 7;
 
 const TIMEOUT_MS = 25000;
 /** One coach round trip: the script waits on the model, which can think for a while. */
@@ -51,9 +51,18 @@ const MAX_BACKOFF_MS = 30 * 60 * 1000;
 
 export function config() { return store.getState().sync; }
 
+/**
+ * An Apps Script web app URL and nothing else. Checked where a request is
+ * sent, not only where the URL is typed: the token and the whole training log
+ * go to whatever this says, so no other route into the state may widen it.
+ */
+export function isValidEndpoint(url) {
+  return /^https:\/\/script\.google\.com\/(a\/macros\/[A-Za-z0-9.-]+|macros)\/s\/[A-Za-z0-9_-]+\/exec$/.test(String(url || '').trim());
+}
+
 export function isConfigured() {
   const c = config();
-  return !!(c.enabled && c.endpoint && c.token);
+  return !!(c.enabled && isValidEndpoint(c.endpoint) && c.token);
 }
 
 export function pendingCount() { return config().queue.length; }
@@ -176,6 +185,7 @@ async function run(reason) {
 
 async function post(payload, { timeoutMs = TIMEOUT_MS } = {}) {
   const { endpoint } = config();
+  if (!isValidEndpoint(endpoint)) throw new Error('The sync URL is not an Apps Script web app URL. Set it again in Settings.');
   const ctl = new AbortController();
   const bail = setTimeout(() => ctl.abort(), timeoutMs);
   let res;
@@ -325,7 +335,7 @@ function buildPayload(st, ids, reason) {
 }
 
 /**
- * The whole state, minus the credential that got it here — same rule as
+ * The whole state, minus the credentials that got it here — same rule as
  * store.exportJSON: a snapshot sitting in a Drive folder must not hand over
  * write access to the sheet it is sitting in.
  */
