@@ -1,19 +1,19 @@
 {
  "v": 1,
- "generatedAt": "2026-10-12T12:43:54.303Z",
+ "generatedAt": "2026-10-13T12:32:57.558Z",
  "athlete": {
   "firstName": null
  },
  "unit": "kg",
  "displayUnit": "kg",
  "totals": {
-  "sessions": 37,
-  "sets": 318,
+  "sessions": 38,
+  "sets": 323,
   "missed": 2,
-  "reps": 1648,
-  "tonnage": 128465,
+  "reps": 1653,
+  "tonnage": 128985,
   "firstDate": "2026-08-05",
-  "lastDate": "2026-10-11"
+  "lastDate": "2026-10-12"
  },
  "lifts": [
   {
@@ -547,48 +547,37 @@
   }
  ],
  "lastSession": {
-  "date": "2026-10-11",
-  "label": "Meet week · Day 2 · Technique",
+  "date": "2026-10-12",
+  "label": "Meet week · Day 3 · Strength",
   "cycle": 3,
   "week": 4,
-  "day": 2,
+  "day": 3,
   "phase": "meetWeek",
-  "sets": 8,
-  "reps": 14,
-  "tonnage": 840,
-  "avgRPE": 5.4,
-  "avgTargetRPE": 5.3,
-  "minutes": 295,
+  "sets": 5,
+  "reps": 5,
+  "tonnage": 520,
+  "avgRPE": 4,
+  "avgTargetRPE": 4,
+  "minutes": null,
   "unit": "kg",
   "lifts": [
    {
     "exercise": "Low-Bar Back Squat",
-    "detail": "120×1@5, 120×1@5",
-    "topKg": 120
+    "detail": "115×1@4, 115×1@4",
+    "topKg": 115
    },
    {
     "exercise": "Bench Press",
-    "detail": "80×1@5, 80×1@5",
-    "topKg": 80
+    "detail": "75×1@4, 75×1@4",
+    "topKg": 75
    },
    {
     "exercise": "Deadlift",
-    "detail": "140×1@5, 140×1@5",
+    "detail": "140×1@4",
     "topKg": 140
-   },
-   {
-    "exercise": "Dips",
-    "detail": "20×4@6, 20×4@7",
-    "topKg": 20
    }
   ],
-  "prs": [
-   {
-    "exercise": "Dips",
-    "gain": 0.784,
-    "e1rm": 25.445
-   }
-  ]
+  "prs": []
  },
  "sessions": [
   {
@@ -1108,6 +1097,20 @@
    "avgRPE": 5.4,
    "avgTargetRPE": 5.3,
    "minutes": 295
+  },
+  {
+   "date": "2026-10-12",
+   "label": "Meet week · Day 3 · Strength",
+   "cycle": 3,
+   "week": 4,
+   "day": 3,
+   "phase": "meetWeek",
+   "sets": 5,
+   "reps": 5,
+   "tonnage": 520,
+   "avgRPE": 4,
+   "avgTargetRPE": 4,
+   "minutes": null
   }
  ],
  "bodyweight": [
