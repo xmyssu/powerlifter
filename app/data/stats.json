@@ -1,30 +1,30 @@
 {
  "v": 1,
- "generatedAt": "2026-10-13T12:32:57.558Z",
+ "generatedAt": "2026-10-17T20:06:28.839Z",
  "athlete": {
   "firstName": null
  },
  "unit": "kg",
  "displayUnit": "kg",
  "totals": {
-  "sessions": 38,
-  "sets": 323,
-  "missed": 2,
-  "reps": 1653,
-  "tonnage": 128985,
+  "sessions": 39,
+  "sets": 331,
+  "missed": 3,
+  "reps": 1661,
+  "tonnage": 130135,
   "firstDate": "2026-08-05",
-  "lastDate": "2026-10-12"
+  "lastDate": "2026-10-16"
  },
  "lifts": [
   {
    "lift": "squat",
    "label": "Squat",
-   "e1rm": 156.4,
-   "e1rmDate": "2026-08-22",
-   "tested": 150,
-   "testedDate": "2026-09-13",
-   "maxSource": "estimated",
-   "change28": -5.5,
+   "e1rm": 160,
+   "e1rmDate": "2026-10-16",
+   "tested": 160,
+   "testedDate": "2026-10-16",
+   "maxSource": "tested",
+   "change28": 3.6,
    "trend": [
     {
      "date": "2026-08-07",
@@ -151,18 +151,25 @@
      "deload": false,
      "soft": false,
      "submax": true
+    },
+    {
+     "date": "2026-10-16",
+     "value": 160,
+     "deload": false,
+     "soft": false,
+     "submax": false
     }
    ]
   },
   {
    "lift": "bench",
    "label": "Bench press",
-   "e1rm": 100.3,
-   "e1rmDate": "2026-10-07",
-   "tested": 95,
-   "testedDate": "2026-09-13",
-   "maxSource": "estimated",
-   "change28": 1.8,
+   "e1rm": 104.7,
+   "e1rmDate": "2026-10-16",
+   "tested": 104.7,
+   "testedDate": "2026-10-16",
+   "maxSource": "tested",
+   "change28": 6.1,
    "trend": [
     {
      "date": "2026-08-05",
@@ -352,17 +359,24 @@
      "deload": false,
      "soft": false,
      "submax": true
+    },
+    {
+     "date": "2026-10-16",
+     "value": 104.7,
+     "deload": false,
+     "soft": false,
+     "submax": false
     }
    ]
   },
   {
    "lift": "deadlift",
    "label": "Deadlift",
-   "e1rm": 185,
-   "e1rmDate": "2026-09-19",
-   "tested": 173.8,
-   "testedDate": "2026-10-12",
-   "maxSource": "estimated",
+   "e1rm": 180,
+   "e1rmDate": "2026-10-16",
+   "tested": 180,
+   "testedDate": "2026-10-16",
+   "maxSource": "tested",
    "change28": 4,
    "trend": [
     {
@@ -483,6 +497,13 @@
      "deload": false,
      "soft": false,
      "submax": true
+    },
+    {
+     "date": "2026-10-16",
+     "value": 180,
+     "deload": false,
+     "soft": false,
+     "submax": false
     }
    ]
   }
@@ -498,11 +519,11 @@
   },
   {
    "exercise": "Low-Bar Back Squat",
-   "e1rm": 156.4,
-   "date": "2026-08-22",
-   "load": 135,
-   "reps": 3,
-   "rpe": 8
+   "e1rm": 160,
+   "date": "2026-10-16",
+   "load": 160,
+   "reps": 1,
+   "rpe": 10
   },
   {
    "exercise": "Barbell Row",
@@ -523,11 +544,11 @@
   },
   {
    "exercise": "Bench Press",
-   "e1rm": 101.2,
-   "date": "2026-10-09",
-   "load": 95,
+   "e1rm": 104.7,
+   "date": "2026-10-16",
+   "load": 100,
    "reps": 1,
-   "rpe": 8.5
+   "rpe": 9
   },
   {
    "exercise": "Close-Grip Bench Press",
@@ -547,37 +568,48 @@
   }
  ],
  "lastSession": {
-  "date": "2026-10-12",
-  "label": "Meet week · Day 3 · Strength",
+  "date": "2026-10-16",
+  "label": "Meet week · Day 4 · Strength",
   "cycle": 3,
   "week": 4,
-  "day": 3,
+  "day": 4,
   "phase": "meetWeek",
-  "sets": 5,
-  "reps": 5,
-  "tonnage": 520,
-  "avgRPE": 4,
-  "avgTargetRPE": 4,
+  "sets": 9,
+  "reps": 8,
+  "tonnage": 1150,
+  "avgRPE": 8.8,
+  "avgTargetRPE": null,
   "minutes": null,
   "unit": "kg",
   "lifts": [
    {
     "exercise": "Low-Bar Back Squat",
-    "detail": "115×1@4, 115×1@4",
-    "topKg": 115
+    "detail": "140×1@8, 150×1@9, 160×1@10",
+    "topKg": 160
    },
    {
     "exercise": "Bench Press",
-    "detail": "75×1@4, 75×1@4",
-    "topKg": 75
+    "detail": "90×1@8, 100×1@9, 110×0",
+    "topKg": 110
    },
    {
     "exercise": "Deadlift",
-    "detail": "140×1@4",
-    "topKg": 140
+    "detail": "160×1@7, 170×1@9.5, 180×1@10",
+    "topKg": 180
    }
   ],
-  "prs": []
+  "prs": [
+   {
+    "exercise": "Low-Bar Back Squat",
+    "gain": 10,
+    "e1rm": 160
+   },
+   {
+    "exercise": "Bench Press",
+    "gain": 7.853,
+    "e1rm": 104.712
+   }
+  ]
  },
  "sessions": [
   {
@@ -1110,6 +1142,20 @@
    "tonnage": 520,
    "avgRPE": 4,
    "avgTargetRPE": 4,
+   "minutes": null
+  },
+  {
+   "date": "2026-10-16",
+   "label": "Meet week · Day 4 · Strength",
+   "cycle": 3,
+   "week": 4,
+   "day": 4,
+   "phase": "meetWeek",
+   "sets": 9,
+   "reps": 8,
+   "tonnage": 1150,
+   "avgRPE": 8.8,
+   "avgTargetRPE": null,
    "minutes": null
   }
  ],
