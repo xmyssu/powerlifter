@@ -1,19 +1,19 @@
 {
  "v": 1,
- "generatedAt": "2026-10-17T20:06:28.839Z",
+ "generatedAt": "2026-10-20T12:47:46.091Z",
  "athlete": {
   "firstName": null
  },
  "unit": "kg",
  "displayUnit": "kg",
  "totals": {
-  "sessions": 39,
-  "sets": 331,
+  "sessions": 40,
+  "sets": 352,
   "missed": 3,
-  "reps": 1661,
-  "tonnage": 130135,
+  "reps": 1868,
+  "tonnage": 138880,
   "firstDate": "2026-08-05",
-  "lastDate": "2026-10-16"
+  "lastDate": "2026-10-20"
  },
  "lifts": [
   {
@@ -166,9 +166,9 @@
    "label": "Bench press",
    "e1rm": 104.7,
    "e1rmDate": "2026-10-16",
-   "tested": 104.7,
-   "testedDate": "2026-10-16",
-   "maxSource": "tested",
+   "tested": 100,
+   "testedDate": "2026-10-17",
+   "maxSource": "entered",
    "change28": 6.1,
    "trend": [
     {
@@ -377,7 +377,7 @@
    "tested": 180,
    "testedDate": "2026-10-16",
    "maxSource": "tested",
-   "change28": 4,
+   "change28": -2.8,
    "trend": [
     {
      "date": "2026-08-07",
@@ -534,6 +534,14 @@
    "rpe": 7.5
   },
   {
+   "exercise": "Pause Squat",
+   "e1rm": 108.3,
+   "date": "2026-10-20",
+   "load": 80,
+   "reps": 5,
+   "rpe": 5
+  },
+  {
    "exercise": "Pendlay Row",
    "e1rm": 107.9,
    "date": "2026-08-16",
@@ -568,48 +576,57 @@
   }
  ],
  "lastSession": {
-  "date": "2026-10-16",
-  "label": "Meet week · Day 4 · Strength",
-  "cycle": 3,
-  "week": 4,
-  "day": 4,
-  "phase": "meetWeek",
-  "sets": 9,
-  "reps": 8,
-  "tonnage": 1150,
-  "avgRPE": 8.8,
+  "date": "2026-10-20",
+  "label": "Post-meet week · Day 1",
+  "cycle": 4,
+  "week": 1,
+  "day": 1,
+  "phase": "postMeet",
+  "sets": 21,
+  "reps": 207,
+  "tonnage": 8745,
+  "avgRPE": 5.4,
   "avgTargetRPE": null,
-  "minutes": null,
+  "minutes": 140,
   "unit": "kg",
   "lifts": [
    {
-    "exercise": "Low-Bar Back Squat",
-    "detail": "140×1@8, 150×1@9, 160×1@10",
-    "topKg": 160
+    "exercise": "Pause Squat",
+    "detail": "80×5@5, 80×5@5, 80×5@5",
+    "topKg": 80
    },
    {
     "exercise": "Bench Press",
-    "detail": "90×1@8, 100×1@9, 110×0",
-    "topKg": 110
+    "detail": "50×5@4, 50×5@4, 50×5@4",
+    "topKg": 50
    },
    {
-    "exercise": "Deadlift",
-    "detail": "160×1@7, 170×1@9.5, 180×1@10",
-    "topKg": 180
+    "exercise": "Romanian Deadlift",
+    "detail": "70×8@4, 70×8@4, 70×8@4",
+    "topKg": 70
+   },
+   {
+    "exercise": "Chest-Supported Dumbbell Row",
+    "detail": "20×12@5, 20×12@5, 20×12@5",
+    "topKg": 20
+   },
+   {
+    "exercise": "Face Pull",
+    "detail": "30×15@4, 30×15@5, 30×15@5",
+    "topKg": 30
+   },
+   {
+    "exercise": "Bicep Curl",
+    "detail": "16×15@7, 14×15@7.5, 10×12@9.5",
+    "topKg": 16
+   },
+   {
+    "exercise": "Weighted Ab Exercise",
+    "detail": "82.5×10@5, 82.5×10@7.5, 82.5×10@8.5",
+    "topKg": 82.5
    }
   ],
-  "prs": [
-   {
-    "exercise": "Low-Bar Back Squat",
-    "gain": 10,
-    "e1rm": 160
-   },
-   {
-    "exercise": "Bench Press",
-    "gain": 7.853,
-    "e1rm": 104.712
-   }
-  ]
+  "prs": []
  },
  "sessions": [
   {
@@ -1157,6 +1174,20 @@
    "avgRPE": 8.8,
    "avgTargetRPE": null,
    "minutes": null
+  },
+  {
+   "date": "2026-10-20",
+   "label": "Post-meet week · Day 1",
+   "cycle": 4,
+   "week": 1,
+   "day": 1,
+   "phase": "postMeet",
+   "sets": 21,
+   "reps": 207,
+   "tonnage": 8745,
+   "avgRPE": 5.4,
+   "avgTargetRPE": null,
+   "minutes": 140
   }
  ],
  "bodyweight": [
