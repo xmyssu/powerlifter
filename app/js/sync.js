@@ -353,6 +353,7 @@ function labelFor(st, ses) {
   if (ses.phase === 'deload') return `Deload · Day ${ses.day}${focus}`;
   if (ses.phase === 'painWeek') return `High-rep week · Day ${ses.day}${focus}`;
   if (ses.phase === 'meetWeek') return `Meet week · Day ${ses.day}${focus}`;
+  if (ses.phase === 'postMeet') return `Post-meet week · Day ${ses.day}`;
   return `C${ses.cycle} W${ses.week} · Day ${ses.day}${focus}`;
 }
 

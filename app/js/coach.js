@@ -8,7 +8,7 @@ import { templateOf, graduationCheck, slotHistory, slotE1RM, volumeAudit, loadin
          MISS_MEMORY_DAYS, isSubmaximalSlot, gradeSets, RELIABLE_E1RM_REPS,
          missedAttempts, peakStatus, PEAK_MIN_DAYS, goalFor, goalTargetFor,
          isCompetitionSlot, peakKeepsFullSets, maxBasisLabel, RECORD_BINDS_DAYS, easyMaxDetail,
-         attemptsFor } from './program.js';
+         attemptsFor, postMeetStatus, TRAINING_MAX_PCT, daysUntil } from './program.js';
 import { e1RM, fmtLoad, fmtLoadBare, fmtRPE, rpeFor, convertLoad } from './rpe.js';
 import { byId } from './exercises.js';
 import { relDays, fmtDate } from './ui.js';
@@ -334,6 +334,7 @@ export function trainingRhythm(state, { today = todayISO() } = {}) {
   // strength yesterday".
   const lastLabel = last.phase === 'test' ? 'a test day'
     : last.phase === 'meetWeek' ? `meet week, day ${last.day}`
+    : last.phase === 'postMeet' ? `post-meet day ${last.day}, a light session`
     : lastDef ? `day ${last.day}, your ${lastDef.label.toLowerCase()} session`
     : `day ${last.day}`;
   return {
@@ -455,7 +456,7 @@ export function sessionBriefing(resolved, state) {
 
   // Not during a peak: its week 1 is the opposite of an ordinary one — the reps
   // came *down* and the bar went up to meet them.
-  if (resolved.week === 1 && resolved.cycle > 1 && !resolved.isDeload && !resolved.isPeak) {
+  if (resolved.week === 1 && resolved.cycle > 1 && !resolved.isDeload && !resolved.isPeak && !resolved.isPostMeet) {
     notes.push({
       kind: 'cycle',
       title: `Cycle ${resolved.cycle}, week 1`,
@@ -1734,7 +1735,125 @@ export function activeInsights(state) {
   const peak = peakStatus(state);
   if (peak) out.push(...meetInsights(state, peak));
 
+  out.push(...afterMeetInsights(state));
+  out.push(...blockInsights(state));
+
   return out.sort((a, b) => a.priority - b.priority);
+}
+
+/** "Mon 26 Oct", or "today" / "tomorrow" when it is that close. */
+function whenLabel(iso, today = todayISO()) {
+  const d = daysUntil(iso, today);
+  if (d === 0) return 'today';
+  if (d === 1) return 'tomorrow';
+  const day = new Date(`${iso}T00:00:00`).toLocaleDateString('en-GB', { weekday: 'short' });
+  return `${day} ${fmtDate(iso)}`;
+}
+
+const LIFT_WORDS = { squat: 'squat', bench: 'bench', deadlift: 'deadlift' };
+
+/** "squat 145, bench 90, deadlift 162.5". */
+function liftList(values) {
+  return ['squat', 'bench', 'deadlift'].filter((l) => values?.[l] > 0)
+    .map((l) => `${LIFT_WORDS[l]} ${fmtLoadBare(values[l])}`).join(', ');
+}
+
+/**
+ * Between the meet and the next block: offer the light week, track it, and say
+ * when to start accumulation.
+ *
+ * Suggestions, not switches. The app picks a date from the light-week log and
+ * the readiness check-ins, but those can only ever push the date later: the
+ * lifter's RPE calls run light, so a log that looks easy is not taken as proof
+ * that it was. Starting early is always the lifter's call, made against the
+ * checklist in the card.
+ */
+function afterMeetInsights(state) {
+  const pm = postMeetStatus(state);
+  if (!pm) return [];
+  const today = todayISO();
+
+  if (pm.kind === 'offer') {
+    return [{
+      kind: 'meet', priority: 0,
+      title: `You competed ${pm.since === 1 ? 'yesterday' : `${pm.since} days ago`} — start the light week?`,
+      text: 'Four short sessions at 50-65% of what you lifted at the meet, with the deadlift kept lightest, plus the rows, arms, single-leg and core work peaking left out. No singles, no top sets. It also sets training maxes for your next blocks at 90% of the meet result, so the volume work is not built on a peaked number.',
+      action: 'postMeetStart',
+    }];
+  }
+
+  // Readiness check-ins since the meet. A poor one means wait for the late date.
+  const levels = (state.readiness || []).filter((r) => r.date > pm.meetDate)
+    .map((r) => readinessVerdict(r, state)?.level).filter(Boolean);
+  const poorDay = levels.includes('poor');
+  const { earliest, usual, late } = pm.dates;
+  const suggested = poorDay ? late : usual;
+  const tms = liftList(pm.trainingMaxes);
+
+  if (pm.kind === 'transition') {
+    return [{
+      kind: 'meet', priority: 1,
+      title: `Post-meet week · session ${Math.min(pm.sessions + 1, pm.days)} of ${pm.days}`,
+      text: `Light on purpose: squat and bench at 50-65% of the meet, the deadlift lighter still, and nothing past RPE 6 on the big three. Every session should end feeling like you could do it again. Next block: usually ${whenLabel(usual, today)}; ${whenLabel(earliest, today)} at the earliest.`,
+    }];
+  }
+
+  const parts = [];
+  parts.push(today >= suggested
+    ? 'Suggested: start the accumulation block now.'
+    : `Suggested start for the accumulation block: ${whenLabel(suggested, today)}.`);
+  if (pm.hot.length) {
+    parts.push(`${pm.hot.length} light-week set${pm.hot.length === 1 ? '' : 's'} went past RPE 7 or ${pm.hot.length === 1 ? 'was' : 'were'} missed, so not before ${whenLabel(usual, today)}.`);
+  } else if (poorDay) {
+    parts.push(`A readiness check-in since the meet came out poor, so give it until ${whenLabel(late, today)}.`);
+  } else if (today < usual) {
+    parts.push(`As early as ${whenLabel(earliest, today)} if every light session felt easy, the bar moved fast and nothing aches.`);
+  }
+  if (!poorDay) {
+    parts.push(`Wait until ${whenLabel(late, today)} if your joints still ache, sleep is off, you do not feel like training, or warm-up weights feel heavy.`);
+  }
+  if (tms) parts.push(`The block's percentages come from training maxes at ${TRAINING_MAX_PCT}% of the meet: ${tms}.`);
+  parts.push('Its first week runs two-thirds of the sets. Expect to be sore anyway — that is the volume coming back, not a problem.');
+  parts.push('Real pain rather than general achiness: do not start. Use "Something hurts" and get it looked at.');
+
+  return [{
+    kind: 'meet', priority: 1,
+    title: pm.canStart ? 'Ready for the accumulation block?' : `Next block from ${whenLabel(suggested, today)}`,
+    text: parts.join(' '),
+    action: pm.canStart ? 'startAccumulation' : null,
+    endLightWeek: pm.inWeek && pm.canStart,
+  }];
+}
+
+/**
+ * The advanced blocks are a sequence — accumulation, then intensification —
+ * but the app runs each as its own program. So the moment to move on is said
+ * out loud rather than left to the deload checklist, which would otherwise
+ * roll straight into a second accumulation block.
+ */
+function blockInsights(state) {
+  const program = state.program;
+  const tpl = templateOf(program);
+  if (tpl.block !== 'accumulation' || program.pendingAssessment) return [];
+  const cur = program.cursor;
+  if (cur.cycle === 1 && cur.phase === 'load' && cur.week === tpl.cycleWeeks) {
+    return [{
+      kind: 'meet', priority: 3,
+      title: 'Last week of accumulation',
+      text: 'After this week the deload checklist runs. Once it is done — and once a deload week is done, if it gives you one — the next step is the intensification block.',
+    }];
+  }
+  if (cur.cycle >= 2 || cur.phase === 'deload') {
+    return [{
+      kind: 'meet', priority: 1,
+      title: cur.phase === 'deload' ? 'Intensification after this deload' : 'Accumulation done — intensification next',
+      text: cur.phase === 'deload'
+        ? 'Finish this deload week, then switch to the intensification block: fewer reps, heavier, and accessories stripped back.'
+        : `The accumulation block is done. The plan is accumulation then intensification: fewer reps, heavier, and accessories stripped back.${program.afterMeet ? ' Your training maxes carry over.' : ''}`,
+      action: cur.phase === 'deload' ? null : 'startIntensification',
+    }];
+  }
+  return [];
 }
 
 const PEAK_WEEKS_LABEL = 4;

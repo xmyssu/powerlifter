@@ -413,6 +413,89 @@ export const ADVANCED_INTENSIFICATION = {
   ],
 };
 
+/* ==========================================================================
+   POST-MEET WEEK — the light week between the platform and the next block
+   ========================================================================== */
+
+/**
+ * A competition lift, as a percentage of what was lifted on the platform.
+ *
+ * `exercise` names a variation outright; left null, the slot uses the lifter's
+ * own competition choice. `rpeMax` is a ceiling rather than a target: these
+ * days exist to be repeatable, so nothing on them should get past RPE 6.
+ */
+const pmMain = (key, lift, sets, reps, pctOfMeet, exercise = null, cue = null) => ({
+  key, slotType: lift, lift, exercise, role: 'main', sets, fixedReps: reps, pctOfMeet,
+  rpeMax: 6, cue, inc: lift === 'bench' ? 'other' : 'lower',
+});
+
+/** The work the peaking block took away, in pump ranges, by feel. */
+const pmAcc = (key, slotType, exercise, sets, reps) => ({
+  key, slotType, lift: null, exercise, role: 'accessory', sets, fixedReps: reps, rpeMax: 7, inc: 'other',
+});
+
+/**
+ * Four light sessions in the week or so after a meet.
+ *
+ * A meet max is a peaked, tapered, adrenaline-assisted number, and the block
+ * before it cut volume to almost nothing. Walking straight back into a full
+ * accumulation week from there is how a lifter spends the next fortnight too
+ * sore to train. So squat and bench come back at 50-65% of the meet result,
+ * the deadlift stays the lightest of the three (RDLs first, then light pulls),
+ * and the rest of each day is the rows, arms, single-leg and core work that
+ * peaking stripped out.
+ */
+export const POST_MEET = {
+  id: 'post-meet',
+  name: 'Post-meet week',
+  days: [
+    { n: 1, role: 'transition', label: 'Light', title: 'Back under the bar',
+      why: 'Half of what you lifted on the platform, paused. This is not training the lifts — it is reminding them what a set of five feels like. Leave feeling like you could do the whole session again.',
+      slots: [
+        pmMain('pm1_squat', 'squat', 3, 5, 50, 'pause-squat', '2 s pause in the hole.'),
+        pmMain('pm1_bench', 'bench', 3, 5, 50, null, 'Pause every rep on the chest, like on the platform.'),
+        pmMain('pm1_rdl', 'deadlift', 3, 8, 40, 'romanian-deadlift', 'Slow on the way down. The deadlift stays the lightest lift this week.'),
+        pmAcc('pm1_row', 'horizontalPull2', 'chest-supported-row', 3, 12),
+        pmAcc('pm1_face', 'facePull', 'face-pull', 3, 15),
+        pmAcc('pm1_curl', 'biceps', 'bicep-curl', 3, 15),
+        pmAcc('pm1_ab', 'weightedAb', 'weighted-ab-exercise', 3, 10),
+      ] },
+    { n: 2, role: 'transition', label: 'Light', title: 'A little more, still easy',
+      why: 'One more set and a few more kilos. Slow the squat down rather than speeding it up — control is the point of the week.',
+      slots: [
+        pmMain('pm2_squat', 'squat', 4, 5, 55, null, '3 s on the way down.'),
+        pmMain('pm2_bench', 'bench', 4, 5, 55),
+        pmMain('pm2_rdl', 'deadlift', 3, 8, 45, 'romanian-deadlift'),
+        pmAcc('pm2_split', 'singleLeg', 'bulgarian-split-squat', 3, 10),
+        pmAcc('pm2_pulldown', 'verticalPull', 'lat-pulldown', 3, 12),
+        pmAcc('pm2_tri', 'triceps', 'triceps-extension', 3, 15),
+        pmAcc('pm2_ab', 'weightedAb', 'weighted-ab-exercise', 3, 10),
+      ] },
+    { n: 3, role: 'transition', label: 'Light', title: 'The deadlift comes back',
+      why: 'First conventional pulls since the platform, at half the meet number. If the bar speed on squat and bench is still good at 60%, the next block is close.',
+      slots: [
+        pmMain('pm3_squat', 'squat', 4, 5, 60),
+        pmMain('pm3_bench', 'bench', 4, 5, 60),
+        pmMain('pm3_dead', 'deadlift', 3, 5, 50),
+        pmAcc('pm3_row', 'horizontalPull2', 'chest-supported-row', 3, 12),
+        pmAcc('pm3_face', 'facePull', 'face-pull', 3, 15),
+        pmAcc('pm3_curl', 'biceps', 'bicep-curl', 3, 12),
+        pmAcc('pm3_backext', 'hipHingeVariant', 'weighted-back-extension', 3, 15),
+      ] },
+    { n: 4, role: 'transition', label: 'Light', title: 'Last light day',
+      why: 'Optional. 65% for fives; go to 70% only if every rep at 65% moved fast. No singles, no top sets — the heavy work starts with the next block, not here.',
+      slots: [
+        pmMain('pm4_squat', 'squat', 4, 5, 65),
+        pmMain('pm4_bench', 'bench', 4, 5, 65),
+        pmMain('pm4_dead', 'deadlift', 3, 5, 55),
+        pmAcc('pm4_split', 'singleLeg', 'bulgarian-split-squat', 3, 10),
+        pmAcc('pm4_pulldown', 'verticalPull', 'lat-pulldown', 3, 12),
+        pmAcc('pm4_tri', 'triceps', 'triceps-extension', 3, 15),
+        pmAcc('pm4_ab', 'weightedAb', 'weighted-ab-exercise', 3, 10),
+      ] },
+  ],
+};
+
 /** Advanced competition taper — meet week, p. 268. */
 export const ADVANCED_TAPER = {
   id: 'advanced-pl-taper',

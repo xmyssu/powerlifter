@@ -6,8 +6,9 @@ import { html, raw, esc, icon, $, $$, toast, sheet, closeSheet, fmtDate, relDays
 import { fmtLoadBare, plateBreakdown, fmtRPE } from '../rpe.js';
 import { resolveDay, startSession, templateOf, resolveAssessment, cyclePlan, loadingWeeks, resolveTestDay,
          attemptsFor, discardSession, exitPeak, loadOptsForSlot, resolvePeakPrompt, startPeakNow,
-         peakStatus, daysUntil, warmupFor, pctCaption, PEAK_WEEKS, PEAK_MIN_DAYS } from '../program.js';
-import { DELOAD_CHECKLIST, WARMUP, RPE_SCALE, INTERMEDIATE_PL, ADVANCED_ACCUMULATION } from '../templates.js';
+         peakStatus, daysUntil, warmupFor, pctCaption, PEAK_WEEKS, PEAK_MIN_DAYS,
+         startPostMeet, finishPostMeet, switchProgram } from '../program.js';
+import { DELOAD_CHECKLIST, WARMUP, RPE_SCALE, INTERMEDIATE_PL, ADVANCED_ACCUMULATION, ADVANCED_INTENSIFICATION } from '../templates.js';
 import { activeInsights, sessionBriefing, readinessVerdict, READINESS_QUESTIONS, PAIN_PROTOCOL,
          testReadiness, planTestBlock, testPromotion, restAdvice, TEST_PROMPT_QUIET_DAYS, fmtMax } from '../coach.js';
 import { byId } from '../exercises.js';
@@ -36,6 +37,8 @@ function view(ctx) {
   const brief = sessionBriefing(resolved, st);
   const todaysReadiness = st.readiness.find((r) => r.date === todayISO());
   const verdict = todaysReadiness ? readinessVerdict(todaysReadiness, st) : null;
+  // The swap offer names a day of the program; during the light week there is no such day to swap to.
+  if (verdict && program.cursor.phase === 'postMeet') verdict.offerSwap = false;
 
   // A milestone inside a plate's reach is the most actionable thing the app can
   // tell a lifter, so it does not belong under the fold beneath the warm-up
@@ -72,6 +75,8 @@ function view(ctx) {
         <div class="day-head__title">${esc(resolved.title || resolved.dayDef.label)}</div>
         ${raw(resolved.why ? `<div class="day-head__why">${esc(resolved.why)}</div>` : '')}
       </div>
+
+      ${raw(resolved.isIntro ? `<div class="banner banner--good"><b>Intro week</b><br>The first week back after the meet runs two-thirds of the written sets at the written loads. Expect to be sore anyway — that is the volume coming back after the taper. The full block starts next week.</div>` : '')}
 
       ${raw(brief.notes.filter((n) => n.kind === 'deload' || n.kind === 'painWeek' || n.kind === 'cycle').map((n) =>
         `<div class="banner ${n.kind === 'deload' ? 'banner--good' : n.kind === 'painWeek' ? 'banner--warn' : ''}"><b>${esc(n.title)}</b><br>${esc(n.text)}</div>`).join(''))}
@@ -149,6 +154,8 @@ function restCard(st, resolved) {
 /** What kind of week this is, in the words the lifter is living in. */
 function phaseLabel(resolved) {
   if (resolved.peakKind === 'meet') return 'Meet day';
+  if (resolved.isPostMeet) return 'Post-meet week';
+  if (resolved.isIntro) return `Cycle ${resolved.cycle} · Intro week`;
   if (resolved.peakWeek === PEAK_WEEKS || resolved.phase === 'meetWeek') return 'Meet week';
   if (resolved.isPeak) return `Peak · week ${resolved.peakWeek} of ${PEAK_WEEKS}`;
   if (resolved.isDeload) return 'Deload';
@@ -336,6 +343,10 @@ function insightCard(i) {
       <div class="insight__b">${esc(i.text)}</div>
       ${i.action === 'graduate' ? `<button class="btn btn--good" style="margin-top:10px" data-graduate>Switch to the advanced program</button>` : ''}
       ${i.action === 'closePeak' ? `<button class="btn btn--ghost" style="margin-top:10px" data-closepeak>Close the block — I did not compete</button>` : ''}
+      ${i.action === 'postMeetStart' ? `<button class="btn btn--primary" style="margin-top:10px" data-postmeet>Start the light week</button>` : ''}
+      ${i.action === 'startAccumulation' ? `<button class="btn btn--primary" style="margin-top:10px" data-block="${esc(ADVANCED_ACCUMULATION.id)}">Start the accumulation block</button>` : ''}
+      ${i.action === 'startIntensification' ? `<button class="btn btn--primary" style="margin-top:10px" data-block="${esc(ADVANCED_INTENSIFICATION.id)}">Start the intensification block</button>` : ''}
+      ${i.endLightWeek ? `<button class="btn btn--ghost" style="margin-top:10px" data-endlight>End the light week here</button>` : ''}
       ${i.action === 'startPeak' ? `<button class="btn btn--primary" style="margin-top:10px" data-peak="start">Start the peaking block now</button>` : ''}
     </div>
   </div>`;
@@ -808,6 +819,39 @@ function mount(root, ctx) {
     if (!yes) return;
     ctx.store.update((s) => { discardSession(s, active.id); });
     toast('Session discarded.');
+    ctx.refresh();
+  });
+
+  $$('[data-postmeet]', root).forEach((b) => b.onclick = () => {
+    ctx.store.update((s) => { startPostMeet(s); });
+    toast('Light week started.', 'good');
+    ctx.refresh();
+  });
+
+  $$('[data-endlight]', root).forEach((b) => b.onclick = async () => {
+    const yes = await confirmSheet({
+      title: 'End the light week?',
+      message: 'The rest of the post-meet sessions are skipped and your current program picks up at its first day. Use this if you are staying on this program; to start a block, use the block button instead.',
+      confirmLabel: 'End the light week',
+    });
+    if (!yes) return;
+    ctx.store.update((s) => { finishPostMeet(s); });
+    ctx.refresh();
+  });
+
+  $$('[data-block]', root).forEach((b) => b.onclick = async () => {
+    const id = b.dataset.block;
+    const accumulation = id === ADVANCED_ACCUMULATION.id;
+    const yes = await confirmSheet({
+      title: accumulation ? 'Start the accumulation block?' : 'Start the intensification block?',
+      message: accumulation
+        ? 'Six days a week, higher reps, more accessory work. The first week runs two-thirds of the sets. Your history and maxes are kept, and you can switch back in Settings.'
+        : 'Fewer reps and heavier loads, with the accessories stripped back. Your history and maxes are kept, and you can switch back in Settings.',
+      confirmLabel: accumulation ? 'Start accumulation' : 'Start intensification',
+    });
+    if (!yes) return;
+    ctx.store.update((s) => { switchProgram(s, id); });
+    toast(accumulation ? 'Accumulation block started.' : 'Intensification block started.', 'good');
     ctx.refresh();
   });
 

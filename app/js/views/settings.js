@@ -4,7 +4,7 @@
 
 import { html, raw, esc, icon, $, $$, sheet, toast, confirmSheet, fmtDate, restoreSheet } from '../ui.js';
 import { PLATE_PRESETS, fmtLoadBare, plateLabel, minIncrement, isLadder, e1RM, normalizeRPE, parseNum } from '../rpe.js';
-import { templateOf, buildProgram, volumeAudit, convertUnits, workingMaxDetail, maxDraftFor, applyMaxUpdate } from '../program.js';
+import { templateOf, switchProgram, volumeAudit, convertUnits, workingMaxDetail, maxDraftFor, applyMaxUpdate } from '../program.js';
 import { EMPHASIS, TEMPLATES, INTERMEDIATE_PL, INTERMEDIATE_PL_3DAY, ADVANCED_ACCUMULATION, ADVANCED_INTENSIFICATION } from '../templates.js';
 import { optionsForSlot, SLOT_INFO, byId } from '../exercises.js';
 import { todayISO } from '../store.js';
@@ -540,23 +540,7 @@ function openSwitch(ctx) {
             danger: inPeak,
           });
           if (!yes) return;
-          ctx.store.update((s) => {
-            const old = s.program;
-            s.program = buildProgram({
-              templateId: id, emphasis: old.emphasis, startDate: todayISO(), meetDate: old.meetDate,
-              choices: old.choices,
-            });
-            // A meet already lifted stays lifted, so that record carries across.
-            // A peak abandoned *by this switch* deliberately does not: the meet
-            // is still on the calendar, and someone moving to the three-day week
-            // three weeks out wants the block to pick them up again on the new
-            // program rather than to walk into a meet untapered.
-            if (old.peakDoneFor) s.program.peakDoneFor = old.peakDoneFor;
-            if (old.peak) s.program.events.push({ date: todayISO(), kind: 'peakEnd', meetDate: old.peak.meetDate, competed: false });
-            s.program.events.push({ date: todayISO(), kind: 'switched', from: old.templateId, to: id });
-            s.profile.trainingAge = TEMPLATES[id].trainingAge || s.profile.trainingAge;
-            s.profile.daysPerWeek = TEMPLATES[id].daysPerWeek || s.profile.daysPerWeek;
-          });
+          ctx.store.update((s) => { switchProgram(s, id); });
           close();
           toast(`${TEMPLATES[id].name} started.`, 'good');
         };

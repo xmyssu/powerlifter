@@ -11,7 +11,7 @@
    ========================================================================== */
 
 import { TEMPLATES, INTERMEDIATE_PL, INTERMEDIATE_PEAK, PEAK_DAYS, EMPHASIS,
-         incrementFor, assessDeload, TEST_DAY, WARMUP } from './templates.js';
+         incrementFor, assessDeload, TEST_DAY, WARMUP, POST_MEET } from './templates.js';
 import { SLOT_DEFAULTS, byId } from './exercises.js';
 import { e1RM, loadFor, roundToLoadable, pctOf1RM, normalizeRPE, convertLoad, loadBand, minIncrement,
          loadStep, gridFloor, isLadder, rpeFor, fmtLoadBare, RPE_TOLERANCE, PLATE_PRESETS,
@@ -921,6 +921,11 @@ export function maxBasisLabel(detail, lift) {
   // as ISO — this phrase sits in a paragraph next to "Oct 16" and "Sep 8".
   if (detail.basis === 'miss') {
     return `your ${lift} max, ${v} — held under the ${fmtLoadBare(detail.cappedBy.load)} you loaded and missed on ${fmtDate(detail.cappedBy.date)}`;
+  }
+  // From `trainingMaxFor`: the meet result with its peak taken off.
+  if (detail.basis === 'training') {
+    const t = detail.training;
+    return `your ${lift} training max, ${v} — ${TRAINING_MAX_PCT}% of the ${fmtLoadBare(t.result)} you lifted at the meet${t.meetDate ? ` on ${fmtDate(t.meetDate)}` : ''}`;
   }
   if (detail.basis === 'tested') {
     return `your tested ${lift} max, ${v}${detail.tested?.date ? ` from ${fmtDate(detail.tested.date)}` : ''}`;
@@ -2012,6 +2017,345 @@ export function exitPeak(state, { competed = true, meetStillOn = false } = {}) {
   return { meetDate, competed };
 }
 
+/* ---- after the meet ---------------------------------------------------- */
+
+/** Training maxes after a meet are this share of what was lifted on the platform. */
+export const TRAINING_MAX_PCT = 90;
+
+/**
+ * When the next block may start, in days after the meet.
+ *
+ * About a week of nothing heavy is where most post-meet guidance lands, and the
+ * light week is four sessions long, so the usual answer is the Monday ten days
+ * out. Six is the floor for a lifter who came through the week with nothing
+ * aching and the bar moving; seventeen is for one who did not.
+ */
+export const POST_MEET_START = { earliest: 6, usual: 10, late: 17 };
+
+/** How long the training maxes stand in for the meet result: both blocks, with room. */
+const AFTER_MEET_HOLDS_DAYS = 84;
+
+/** How long after a meet the light week is still worth offering. */
+const POST_MEET_OFFER_DAYS = 14;
+
+const MEET_LIFTS = ['squat', 'bench', 'deadlift'];
+
+/** `iso` plus `n` days, as ISO. */
+export function isoPlusDays(iso, n) {
+  const d = new Date(`${iso}T00:00:00`);
+  d.setDate(d.getDate() + n);
+  const p = (x) => String(x).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/**
+ * The logged platform session for a meet: the meet-week session that carries
+ * attempts. Logged on the day, or within a few days of it by a lifter who
+ * typed it in afterwards.
+ */
+function meetSession(state, meetDate) {
+  if (!meetDate) return null;
+  const testKeys = new Set(TEST_DAY.slots.map((x) => x.key));
+  const found = (state.sessions || []).filter((x) => x.status === 'done' && x.phase === 'meetWeek'
+    && x.entries?.some((e) => testKeys.has(e.slotKey))
+    && Math.abs(daysUntil(meetDate, x.date) ?? Infinity) <= 3);
+  return found.length ? found[found.length - 1] : null;
+}
+
+/** The heaviest attempt made on each lift. Missed attempts are not results. */
+function meetResults(session) {
+  const out = {};
+  for (const entry of session?.entries || []) {
+    const lift = TEST_DAY.slots.find((x) => x.key === entry.slotKey)?.lift;
+    if (!lift) continue;
+    for (const x of entry.sets || []) {
+      if (!x.done || x.failed || !(x.load > 0) || !(x.reps >= 1)) continue;
+      if (!(out[lift] >= x.load)) out[lift] = x.load;
+    }
+  }
+  return out;
+}
+
+/**
+ * Start the light week after a meet.
+ *
+ * Runs on its own when the meet is logged, and from the Today screen for a meet
+ * logged before this existed. It also sets the training maxes the next two
+ * blocks are built from: 90% of the meet result, to the platform's 2.5 kg.
+ *
+ * Meets logged before the platform rule in `recordTestedMaxes` wrote the
+ * table's estimate as the tested max — 100 x 1 at RPE 9 went in as 104.7. That
+ * is the same session the results come from, so the stored figure is brought
+ * down to the bar that was lifted. Nothing the lifter typed is touched: only a
+ * record dated that session and marked as tested, and only ever downwards.
+ */
+export function startPostMeet(state, { meetDate = null, today = todayISO() } = {}) {
+  const program = state.program;
+  meetDate = meetDate || program.peakDoneFor || program.meetDate;
+  const ses = meetSession(state, meetDate);
+  const results = meetResults(ses);
+
+  for (const lift of MEET_LIFTS) {
+    const rec = state.maxes?.[lift];
+    if (ses && results[lift] && rec?.source === 'tested' && rec.date === ses.date && rec.value > results[lift]) {
+      rec.value = results[lift];
+    }
+  }
+
+  const step = state.profile?.units === 'lb' ? 5 : 2.5;
+  const trainingMaxes = {};
+  for (const lift of MEET_LIFTS) {
+    const r = results[lift] ?? (Number(state.maxes?.[lift]?.value) || null);
+    if (!(r > 0)) continue;
+    results[lift] = r;
+    trainingMaxes[lift] = +(Math.round((r * TRAINING_MAX_PCT) / 100 / step) * step).toFixed(2);
+  }
+
+  program.afterMeet = {
+    meetDate,
+    recordedOn: ses?.date || meetDate,
+    results,
+    trainingMaxes,
+    startedAt: today,
+    sessions: 0,
+    doneAt: null,
+    introPending: true,
+  };
+  program.cursor.phase = 'postMeet';
+  program.cursor.day = POST_MEET.days[0].n;
+  program.events.push({ date: today, kind: 'postMeetStart', meetDate });
+  return program.afterMeet;
+}
+
+/** One light session done: move to the next, or close the week after the last. */
+function advancePostMeet(state) {
+  const program = state.program;
+  const cur = program.cursor;
+  if (program.afterMeet) program.afterMeet.sessions = (program.afterMeet.sessions || 0) + 1;
+  const days = POST_MEET.days.map((d) => d.n);
+  const idx = days.indexOf(cur.day);
+  if (program.afterMeet && idx >= 0 && idx < days.length - 1) {
+    cur.day = days[idx + 1];
+    return [];
+  }
+  finishPostMeet(state);
+  return [{
+    kind: 'postMeetDone',
+    title: 'Light week done',
+    text: 'That is the post-meet week. The Today screen now suggests when to start your next block.',
+  }];
+}
+
+/** Close the light week and put the cursor back on the program's first day. */
+export function finishPostMeet(state, { today = todayISO() } = {}) {
+  const program = state.program;
+  if (program.afterMeet && !program.afterMeet.doneAt) program.afterMeet.doneAt = today;
+  if (program.cursor.phase === 'postMeet') {
+    program.cursor.phase = 'load';
+    program.cursor.day = templateOf(program).days[0].n;
+    program.events.push({ date: today, kind: 'postMeetEnd', meetDate: program.afterMeet?.meetDate || null });
+  }
+}
+
+/**
+ * The training max for a lift, while there is one.
+ *
+ * A meet max is peaked, tapered and adrenaline-assisted; volume work built off
+ * it is too heavy. So for the blocks after a meet, percentages come from 90% of
+ * it instead. It stops counting when the lifter records anything newer for the
+ * lift, or once both blocks would have run their course.
+ */
+export function trainingMaxFor(state, lift, { today = todayISO() } = {}) {
+  const am = state?.program?.afterMeet;
+  const value = Number(am?.trainingMaxes?.[lift]);
+  if (!(value > 0)) return null;
+  const since = -(daysUntil(am.meetDate, today) ?? -Infinity);
+  if (!(since >= 0) || since > AFTER_MEET_HOLDS_DAYS) return null;
+  const rec = state.maxes?.[lift];
+  if (rec?.date && rec.date > (am.recordedOn || am.meetDate)) return null;
+  return { value, meetDate: am.meetDate, result: am.results?.[lift] ?? null };
+}
+
+/** Is this the thinned first loading week after a meet? */
+export function introWeekActive(program, { week, phase }) {
+  return !!program?.afterMeet?.introPending && phase === 'load' && week === 1;
+}
+
+/**
+ * One day of the light week, in the same shape `resolveDay` returns.
+ *
+ * Loads are a percentage of what was lifted at the meet, not of a training or
+ * working max: this is the week the rule was written for, and it is light
+ * enough that the difference only matters if it runs the other way.
+ */
+function resolvePostMeetDay(state, { cycle, week, day, phase }) {
+  const program = state.program;
+  const dayDef = POST_MEET.days.find((d) => d.n === day) || POST_MEET.days[0];
+  const results = program.afterMeet?.results || {};
+
+  const slots = dayDef.slots.map((slot, i) => {
+    const exId = slot.exercise || competitionChoice(state, slot.lift) || SLOT_DEFAULTS[slot.slotType] || null;
+    const loadOpts = loadOptsFor(state, exId);
+    const result = slot.lift ? (results[slot.lift] ?? (Number(state.maxes?.[slot.lift]?.value) || null)) : null;
+    const load = result && slot.pctOfMeet ? roundToLoadable((result * slot.pctOfMeet) / 100, loadOpts) : null;
+    // A variation is loaded off the lift it varies, but it is not that lift:
+    // rating an RDL against a deadlift max would call every set of it easy.
+    const isLift = !!slot.lift && !slot.exercise;
+    const recorded = slot.lift ? Number(state.maxes?.[slot.lift]?.value) : 0;
+    const liftName = slot.lift === 'bench' ? 'bench' : slot.lift;
+
+    const loadNote = !slot.lift
+      ? `Pump work: a weight you could lift ${slot.fixedReps + 5} times or more, stopped about three reps short. By feel — this is the work peaking took away, not a test of anything.`
+      : load == null
+        ? 'No meet result on file for this lift — work up by feel and stop well short.'
+        : `${slot.pctOfMeet}% of the ${fmtLoadBare(result)} you lifted at the meet${isLift ? '' : `, on the ${liftName}`}.`
+          + `${slot.cue ? ` ${slot.cue}` : ''} Stop every set with four or more reps left.`;
+
+    return {
+      index: i,
+      slot,
+      slotKey: slot.key,
+      exerciseId: exId,
+      exercise: byId(exId),
+      role: slot.role,
+      sets: slot.sets,
+      reps: slot.fixedReps,
+      targetRPE: null,
+      rpeRange: null,
+      rpeMax: slot.rpeMax ?? null,
+      pct: slot.pctOfMeet ?? null,
+      timed: false,
+      prescription: null,
+      peakThinned: false,
+      introThinned: false,
+      slotDeload: false,
+      plannedLoad: load,
+      loadRange: null,
+      gridStep: loadStep(loadOpts),
+      impliedRPE: null,
+      rateBasis: isLift && result ? { value: result, basis: 'tested', lift: slot.lift } : null,
+      checkMax: null,
+      recordedMax: isLift && recorded > 0 ? recorded : null,
+      recordedFresh: isLift ? recordBinds(state, slot.lift) : false,
+      loadSource: load != null ? 'postMeet' : 'discover',
+      loadNote,
+      rpeCheckLoad: null,
+      increment: null,
+      lastTime: lastComparable(state, slot.key, { reps: slot.fixedReps }),
+    };
+  });
+
+  return {
+    template: templateOf(program),
+    dayDef,
+    cycle, week, day: dayDef.n, phase,
+    isDeload: false,
+    isPainWeek: false,
+    isTest: false,
+    isIntro: false,
+    isPeak: false,
+    isPostMeet: true,
+    peakKind: null,
+    peakWeek: null,
+    label: `Post-meet week · Day ${dayDef.n}`,
+    scheduleNote: null,
+    why: dayDef.why,
+    title: dayDef.title,
+    slots,
+  };
+}
+
+/**
+ * Where the lifter is between the meet and the next block, for the Today card.
+ *
+ * Returns null when there is nothing to say, or one of:
+ *  - `offer`: a meet was logged before the light week existed; offer it.
+ *  - `transition`: the light week is running.
+ *  - `ready`: enough of it is done to talk about the next block.
+ *
+ * `hot` lists light-week sets that ran past RPE 7 or were missed. The lifter's
+ * calls run light rather than heavy, so these can only ever argue for waiting —
+ * an easy-looking log is never taken as permission to start early.
+ */
+export function postMeetStatus(state, { today = todayISO() } = {}) {
+  const program = state?.program;
+  if (!program) return null;
+  const am = program.afterMeet;
+
+  if (!am) {
+    const meetDate = program.peakDoneFor;
+    const since = meetDate ? -(daysUntil(meetDate, today) ?? -Infinity) : null;
+    if (!(since >= 0) || since > POST_MEET_OFFER_DAYS) return null;
+    if (!meetSession(state, meetDate)) return null;
+    const trained = (state.sessions || []).some((x) => x.status === 'done' && x.date > meetDate && x.phase === 'load');
+    return trained ? null : { kind: 'offer', meetDate, since };
+  }
+
+  const since = -(daysUntil(am.meetDate, today) ?? -Infinity);
+  const dates = {
+    earliest: isoPlusDays(am.meetDate, POST_MEET_START.earliest),
+    usual: isoPlusDays(am.meetDate, POST_MEET_START.usual),
+    late: isoPlusDays(am.meetDate, POST_MEET_START.late),
+  };
+  // Once a block is chosen, or long after the window, there is nothing to suggest.
+  if (templateOf(program).model === 'block' || since > POST_MEET_START.late + 14) return null;
+
+  const hot = [];
+  for (const x of state.sessions || []) {
+    if (x.status !== 'done' || x.phase !== 'postMeet') continue;
+    for (const e of x.entries || []) {
+      for (const set of e.sets || []) {
+        if (!set.done) continue;
+        if (set.failed || (set.rpe != null && set.rpe > 7)) hot.push({ date: x.date, exerciseId: e.exerciseId, rpe: set.rpe });
+      }
+    }
+  }
+
+  const inWeek = program.cursor.phase === 'postMeet';
+  const enough = !!am.doneAt || (am.sessions || 0) >= POST_MEET.days.length - 1;
+  return {
+    kind: inWeek && !enough ? 'transition' : 'ready',
+    meetDate: am.meetDate,
+    since,
+    day: inWeek ? program.cursor.day : null,
+    days: POST_MEET.days.length,
+    sessions: am.sessions || 0,
+    inWeek,
+    dates,
+    hot,
+    canStart: enough && today >= dates.earliest,
+    trainingMaxes: am.trainingMaxes,
+    results: am.results,
+  };
+}
+
+/**
+ * Start a different program, keeping what should survive the switch.
+ *
+ * History and maxes live outside the program and are untouched. A meet already
+ * lifted stays lifted. The after-meet record carries over too — the training
+ * maxes are meant for both blocks, and the intro week belongs to whichever
+ * program runs first — but a light week still running is closed, because the
+ * new program starts at its own day 1.
+ */
+export function switchProgram(state, templateId, { today = todayISO() } = {}) {
+  const old = state.program;
+  const next = buildProgram({
+    templateId, emphasis: old.emphasis, startDate: today, meetDate: old.meetDate, choices: old.choices,
+  });
+  // A peak abandoned *by this switch* deliberately does not carry: the meet is
+  // still on the calendar, and someone moving to the three-day week three
+  // weeks out wants the block to pick them up again on the new program.
+  if (old.peakDoneFor) next.peakDoneFor = old.peakDoneFor;
+  if (old.peak) next.events.push({ date: today, kind: 'peakEnd', meetDate: old.peak.meetDate, competed: false });
+  if (old.afterMeet) next.afterMeet = { ...old.afterMeet, doneAt: old.afterMeet.doneAt || today };
+  next.events.push({ date: today, kind: 'switched', from: old.templateId, to: templateId });
+  state.program = next;
+  state.profile.trainingAge = TEMPLATES[templateId].trainingAge || state.profile.trainingAge;
+  state.profile.daysPerWeek = TEMPLATES[templateId].daysPerWeek || state.profile.daysPerWeek;
+  return next;
+}
+
 /* ---- prescription ---------------------------------------------------- */
 
 /**
@@ -2028,6 +2372,7 @@ export function resolveDay(state, { cycle, week, day, phase } = {}) {
   phase = phase ?? cur.phase;
 
   if (phase === 'test') return resolveTestDay(state, { lifts: state.program?.testLifts });
+  if (phase === 'postMeet') return resolvePostMeetDay(state, { cycle, week, day, phase });
 
   // The peaking cycle replaces two of its sixteen days outright and deloads
   // part of a third. Everything it does not name falls through to the wave.
@@ -2051,10 +2396,19 @@ export function resolveDay(state, { cycle, week, day, phase } = {}) {
     if (!lift) return null;
     if (!maxMemo.has(lift)) {
       const working = workingMaxDetail(state, lift);
-      maxMemo.set(lift, { working, easy: easyFromWorking(state, lift, working) });
+      const easy = easyFromWorking(state, lift, working);
+      // After a meet, percentages are taken from the training max rather than
+      // from the peaked number — but only the loads. The RPE readouts on the
+      // card still rate a weight against what the lifter can actually do, or
+      // 77.5% of a training max would read as a harder set than it is.
+      const tm = trainingMaxFor(state, lift);
+      const capped = (d) => (!tm || (d?.value && d.value <= tm.value) ? d
+        : { ...(d || {}), value: tm.value, basis: 'training', training: tm });
+      maxMemo.set(lift, { working, easy, plan: { working: capped(working), easy: capped(easy) } });
     }
     return maxMemo.get(lift);
   };
+  const intro = introWeekActive(program, { week, phase });
 
   const slots = dayDef.slots.map((slot, i) => {
     const st = program.slots[slot.key] || {};
@@ -2153,11 +2507,16 @@ export function resolveDay(state, { cycle, week, day, phase } = {}) {
 
     if (peakThinned) sets = peakSetsFor(slot, program, peak?.kind);
 
+    // The first loading week after a meet: same loads and RPE, two-thirds of
+    // the sets. Coming off a taper, full volume is soreness, not training.
+    const introThinned = intro && !slotDeload && !isPainWeek && sets > 1;
+    if (introThinned) sets = Math.max(1, Math.floor((sets * 2) / 3));
+
     // --- load --------------------------------------------------------
     const submaximal = isSubmaximalWork(dayDef, slot);
     const maxes = maxesOf(slot.lift);
     const plan = plannedLoad({ state, program, slot, week: waveWeek, isDeload: slotDeload, repsRaised,
-                               inc, pct, reps, targetRPE, rpeRange, submaximal, maxes, loadOpts });
+                               inc, pct, reps, targetRPE, rpeRange, submaximal, maxes: maxes?.plan, loadOpts });
     const planned = plan.load == null ? null : roundToLoadable(plan.load, loadOpts);
     const loadRange = submaximal
       ? easyBandFor(planned, reps, targetRPE, rpeRange, loadOpts)
@@ -2183,6 +2542,7 @@ export function resolveDay(state, { cycle, week, day, phase } = {}) {
       timed: !!slot.timed,
       prescription: slot.prescription || null,
       peakThinned,
+      introThinned,
       /**
        * Whether *this slot* is deloaded, which is not the same question as
        * whether the day is. Peak week 3 deloads everything the block is not
@@ -2261,6 +2621,7 @@ export function resolveDay(state, { cycle, week, day, phase } = {}) {
     isDeload,
     isPainWeek,
     isTest: false,
+    isIntro: intro,
     isPeak: !!peak,
     peakKind: peak?.kind || null,
     peakWeek: peak?.week || null,
@@ -2528,6 +2889,7 @@ function dayLabel(tpl, dayDef, { week, cycle, phase, peak }) {
   if (peak?.kind === 'taper') return `Meet week · Day ${dayDef.n} · Taper`;
   if (peak) return `Peak week ${peak.week} · Day ${dayDef.n} · ${dayDef.label}`;
   if (phase === 'deload') return `Deload · Day ${dayDef.n}`;
+  if (phase === 'postMeet') return `Post-meet week · Day ${dayDef.n}`;
   if (phase === 'painWeek') return `High-rep week · Day ${dayDef.n}`;
   return `${tpl.name.includes('Advanced') ? tpl.block ? cap(tpl.block) : 'Block' : 'Week'} ${week} · Day ${dayDef.n} · ${dayDef.label}`;
 }
@@ -2682,8 +3044,14 @@ export function markSetMissed(session, slotKey, i, { at = null, today = null, mi
  * Only a completed single counts. A missed third attempt is information about
  * the day, not about the lifter, and writing it in as a max would hand the next
  * cycle a number the lifter has never actually lifted.
+ *
+ * On the platform the max is the bar, not what the table reads off it. A test
+ * day turns 100 x 1 at RPE 9 into 104.7, which is a fair estimate; a meet that
+ * went 100 made and 110 missed has a result, and the result is 100. Writing
+ * 104.7 down as "tested" hands the lifter a number they never lifted with the
+ * one label that says they did.
  */
-function recordTestedMaxes(state, session) {
+function recordTestedMaxes(state, session, { platform = false } = {}) {
   const notes = [];
   for (const entry of session.entries) {
     const def = TEST_DAY.slots.find((x) => x.key === entry.slotKey);
@@ -2697,12 +3065,14 @@ function recordTestedMaxes(state, session) {
 
     // The heaviest completed set, expressed as a one-rep max. A clean double at
     // the end is worth more than a missed single, and the table knows it.
-    const best = singles.reduce((a, b) => {
-      const av = e1RM(a.load, a.reps, a.rpe ?? 10) || 0;
-      const bv = e1RM(b.load, b.reps, b.rpe ?? 10) || 0;
-      return bv > av ? b : a;
-    }, singles[0]);
-    const value = +(e1RM(best.load, best.reps, best.rpe ?? 10) || best.load).toFixed(1);
+    const best = platform
+      ? singles.reduce((a, b) => (b.load > a.load ? b : a), singles[0])
+      : singles.reduce((a, b) => {
+        const av = e1RM(a.load, a.reps, a.rpe ?? 10) || 0;
+        const bv = e1RM(b.load, b.reps, b.rpe ?? 10) || 0;
+        return bv > av ? b : a;
+      }, singles[0]);
+    const value = platform ? best.load : +(e1RM(best.load, best.reps, best.rpe ?? 10) || best.load).toFixed(1);
     const prev = state.maxes?.[def.lift]?.value || 0;
 
     state.maxes[def.lift] = {
@@ -2828,15 +3198,23 @@ export function completeSession(state, sessionId) {
   // ending the peak have to happen together: a lifter who logs the platform and
   // then opens the app the next morning must not be shown the meet again.
   if (session.phase === 'meetWeek' && session.day === peakDayNumbers(tpl).competitionDay) {
-    notes.push(...recordTestedMaxes(state, session));
+    notes.push(...recordTestedMaxes(state, session, { platform: true }));
     const ended = exitPeak(state, { competed: true });
     if (ended) {
+      startPostMeet(state, { meetDate: ended.meetDate });
       notes.push({
         kind: 'meetDone',
         title: 'That is the meet',
-        text: 'Your peaking block is closed and a fresh cycle is waiting. Do not start it tomorrow — take the rest of the week off, eat, sleep, and let the next block begin when you actually want to train again. The attempts you just logged are now the maxes every load in it is built from.',
+        text: `Your peaking block is closed. Next is a light week: ${POST_MEET.days.length} short sessions at 50-65% of what you just lifted, plus the rows, arms and single-leg work peaking left out. Take two or three days off first. When the light week is done the app will suggest when to start your next block.`,
       });
     }
+    return { state, notes };
+  }
+
+  // The light week after a meet sits outside the wave like a test day does:
+  // nothing in it anchors, progresses or stalls. It only moves itself along.
+  if (session.phase === 'postMeet') {
+    notes.push(...advancePostMeet(state));
     return { state, notes };
   }
 
@@ -3034,6 +3412,11 @@ function endOfWeek(state) {
   // the checklist every time it came round, with no way out but answering
   // differently.
   if (cur.phase === 'deload' || cur.phase === 'painWeek') { startNextCycle(state); return; }
+
+  // The post-meet intro is one loading week long, whichever program it lands in.
+  if (cur.phase === 'load' && cur.week === 1 && program.afterMeet?.introPending) {
+    program.afterMeet.introPending = false;
+  }
 
   const weeks = loadingWeeks(program);
   if (cur.week < weeks) {

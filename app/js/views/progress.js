@@ -192,7 +192,7 @@ function historyTab(st) {
       return `<button class="hist" data-session="${esc(s.id)}">
         <div class="hist__date">${esc(fmtDate(s.date))}</div>
         <div class="hist__body">
-          <div class="hist__t">${esc(s.phase === 'deload' ? 'Deload' : s.phase === 'painWeek' ? 'High-rep week' : s.phase === 'meetWeek' ? 'Meet week' : s.phase === 'test' ? 'Test day' : `Cycle ${s.cycle} · Week ${s.week}`)} · Day ${esc(s.day)}${day ? ` · ${esc(day.label)}` : ''}</div>
+          <div class="hist__t">${esc(s.phase === 'deload' ? 'Deload' : s.phase === 'painWeek' ? 'High-rep week' : s.phase === 'meetWeek' ? 'Meet week' : s.phase === 'postMeet' ? 'Post-meet week' : s.phase === 'test' ? 'Test day' : `Cycle ${s.cycle} · Week ${s.week}`)} · Day ${esc(s.day)}${day ? ` · ${esc(day.label)}` : ''}</div>
           <div class="hist__s">${sets.length} sets · ${Math.round(tonnage).toLocaleString()} ${esc(units)}${s.corrections?.length ? ' · corrected' : ''}</div>
         </div>
         ${icon('chevron', 'dim')}

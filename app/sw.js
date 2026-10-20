@@ -6,7 +6,7 @@
    VERSION whenever the assets change.
    ========================================================================== */
 
-const VERSION = 'v24';
+const VERSION = 'v25';
 const CACHE = `powerlifter-${VERSION}`;
 
 const ASSETS = [
