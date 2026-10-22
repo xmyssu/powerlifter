@@ -1,19 +1,19 @@
 {
  "v": 1,
- "generatedAt": "2026-10-20T12:47:46.091Z",
+ "generatedAt": "2026-10-22T12:52:49.865Z",
  "athlete": {
   "firstName": null
  },
  "unit": "kg",
  "displayUnit": "kg",
  "totals": {
-  "sessions": 40,
-  "sets": 352,
+  "sessions": 41,
+  "sets": 375,
   "missed": 3,
-  "reps": 1868,
-  "tonnage": 138880,
+  "reps": 2073,
+  "tonnage": 149479,
   "firstDate": "2026-08-05",
-  "lastDate": "2026-10-20"
+  "lastDate": "2026-10-22"
  },
  "lifts": [
   {
@@ -576,54 +576,54 @@
   }
  ],
  "lastSession": {
-  "date": "2026-10-20",
-  "label": "Post-meet week · Day 1",
+  "date": "2026-10-22",
+  "label": "Post-meet week · Day 2",
   "cycle": 4,
   "week": 1,
-  "day": 1,
+  "day": 2,
   "phase": "postMeet",
-  "sets": 21,
-  "reps": 207,
-  "tonnage": 8745,
-  "avgRPE": 5.4,
+  "sets": 23,
+  "reps": 205,
+  "tonnage": 10599,
+  "avgRPE": 4.3,
   "avgTargetRPE": null,
-  "minutes": 140,
+  "minutes": 101,
   "unit": "kg",
   "lifts": [
    {
-    "exercise": "Pause Squat",
-    "detail": "80×5@5, 80×5@5, 80×5@5",
-    "topKg": 80
+    "exercise": "Low-Bar Back Squat",
+    "detail": "90×5@4, 90×5@4, 90×5@4, 90×5@4",
+    "topKg": 90
    },
    {
     "exercise": "Bench Press",
-    "detail": "50×5@4, 50×5@4, 50×5@4",
-    "topKg": 50
+    "detail": "60×5@4, 60×5@4, 60×5@4, 60×5@4",
+    "topKg": 60
    },
    {
     "exercise": "Romanian Deadlift",
-    "detail": "70×8@4, 70×8@4, 70×8@4",
-    "topKg": 70
+    "detail": "80×8@4, 80×8@4, 80×8@4",
+    "topKg": 80
    },
    {
-    "exercise": "Chest-Supported Dumbbell Row",
-    "detail": "20×12@5, 20×12@5, 20×12@5",
-    "topKg": 20
+    "exercise": "Bulgarian Split Squat",
+    "detail": "10×10@5, 10×10@6, 10×10@6",
+    "topKg": 10
    },
    {
-    "exercise": "Face Pull",
-    "detail": "30×15@4, 30×15@5, 30×15@5",
-    "topKg": 30
+    "exercise": "Lat Pulldown",
+    "detail": "64×12@5, 64×12@4, 64×12@6",
+    "topKg": 64
    },
    {
-    "exercise": "Bicep Curl",
-    "detail": "16×15@7, 14×15@7.5, 10×12@9.5",
-    "topKg": 16
+    "exercise": "Triceps Extension",
+    "detail": "25×15@4, 25×15@4, 25×15@4",
+    "topKg": 25
    },
    {
     "exercise": "Weighted Ab Exercise",
-    "detail": "82.5×10@5, 82.5×10@7.5, 82.5×10@8.5",
-    "topKg": 82.5
+    "detail": "65×10@4, 65×10@4, 65×10@4",
+    "topKg": 65
    }
   ],
   "prs": []
@@ -1188,6 +1188,20 @@
    "avgRPE": 5.4,
    "avgTargetRPE": null,
    "minutes": 140
+  },
+  {
+   "date": "2026-10-22",
+   "label": "Post-meet week · Day 2",
+   "cycle": 4,
+   "week": 1,
+   "day": 2,
+   "phase": "postMeet",
+   "sets": 23,
+   "reps": 205,
+   "tonnage": 10599,
+   "avgRPE": 4.3,
+   "avgTargetRPE": null,
+   "minutes": 101
   }
  ],
  "bodyweight": [
