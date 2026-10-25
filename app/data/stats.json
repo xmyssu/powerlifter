@@ -1,19 +1,19 @@
 {
  "v": 1,
- "generatedAt": "2026-10-24T14:47:49.700Z",
+ "generatedAt": "2026-10-25T17:58:17.353Z",
  "athlete": {
   "firstName": null
  },
  "unit": "kg",
  "displayUnit": "kg",
  "totals": {
-  "sessions": 42,
-  "sets": 398,
+  "sessions": 43,
+  "sets": 421,
   "missed": 3,
-  "reps": 2290,
-  "tonnage": 156065,
+  "reps": 2490,
+  "tonnage": 166469,
   "firstDate": "2026-08-05",
-  "lastDate": "2026-10-24"
+  "lastDate": "2026-10-25"
  },
  "lifts": [
   {
@@ -377,7 +377,7 @@
    "tested": 180,
    "testedDate": "2026-10-16",
    "maxSource": "tested",
-   "change28": -2.8,
+   "change28": -5,
    "trend": [
     {
      "date": "2026-08-07",
@@ -576,54 +576,54 @@
   }
  ],
  "lastSession": {
-  "date": "2026-10-24",
-  "label": "Post-meet week · Day 3",
+  "date": "2026-10-25",
+  "label": "Post-meet week · Day 4",
   "cycle": 4,
   "week": 1,
-  "day": 3,
+  "day": 4,
   "phase": "postMeet",
   "sets": 23,
-  "reps": 217,
-  "tonnage": 6586,
-  "avgRPE": 4.3,
+  "reps": 200,
+  "tonnage": 10404,
+  "avgRPE": 4.5,
   "avgTargetRPE": null,
-  "minutes": 93,
+  "minutes": 87,
   "unit": "kg",
   "lifts": [
    {
     "exercise": "Low-Bar Back Squat",
-    "detail": "95×5@4, 95×5@4, 95×5@4, 95×5@5",
-    "topKg": 95
+    "detail": "105×5@4, 105×5@4, 105×5@5, 105×5@5",
+    "topKg": 105
    },
    {
     "exercise": "Bench Press",
-    "detail": "60×5@4, 60×5@4, 60×5@4, 60×5@4",
-    "topKg": 60
+    "detail": "65×5@4, 65×5@4, 65×5@4, 65×5@4",
+    "topKg": 65
    },
    {
     "exercise": "Deadlift",
-    "detail": "90×5@4, 90×5@4, 90×5@4",
-    "topKg": 90
+    "detail": "100×5@4, 100×5@4, 100×5@4",
+    "topKg": 100
    },
    {
-    "exercise": "Chest-Supported Dumbbell Row",
-    "detail": "16×12@4, 16×12@4, 16×12@4",
-    "topKg": 16
+    "exercise": "Bulgarian Split Squat",
+    "detail": "10×10@6, 8×10@6, 8×10@6",
+    "topKg": 10
    },
    {
-    "exercise": "Face Pull",
+    "exercise": "Lat Pulldown",
+    "detail": "64×12@4, 64×12@4, 64×12@7.5",
+    "topKg": 64
+   },
+   {
+    "exercise": "Triceps Extension",
     "detail": "20×15@4, 20×15@4, 20×15@4",
     "topKg": 20
    },
    {
-    "exercise": "Bicep Curl",
-    "detail": "10×12@4, 10×12@4, 10×12@4",
-    "topKg": 10
-   },
-   {
-    "exercise": "Weighted Back Extension",
-    "detail": "10×15@5, 5×15@6, 5×15@6",
-    "topKg": 10
+    "exercise": "Weighted Ab Exercise",
+    "detail": "60×12@4, 60×12@4, 60×10@4",
+    "topKg": 60
    }
   ],
   "prs": []
@@ -1216,6 +1216,20 @@
    "avgRPE": 4.3,
    "avgTargetRPE": null,
    "minutes": 93
+  },
+  {
+   "date": "2026-10-25",
+   "label": "Post-meet week · Day 4",
+   "cycle": 4,
+   "week": 1,
+   "day": 4,
+   "phase": "postMeet",
+   "sets": 23,
+   "reps": 200,
+   "tonnage": 10404,
+   "avgRPE": 4.5,
+   "avgTargetRPE": null,
+   "minutes": 87
   }
  ],
  "bodyweight": [
