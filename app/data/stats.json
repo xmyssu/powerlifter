@@ -1,19 +1,19 @@
 {
  "v": 1,
- "generatedAt": "2026-10-25T17:58:17.353Z",
+ "generatedAt": "2026-10-27T17:33:24.180Z",
  "athlete": {
   "firstName": null
  },
  "unit": "kg",
  "displayUnit": "kg",
  "totals": {
-  "sessions": 43,
-  "sets": 421,
+  "sessions": 44,
+  "sets": 427,
   "missed": 3,
-  "reps": 2490,
-  "tonnage": 166469,
+  "reps": 2542,
+  "tonnage": 170709,
   "firstDate": "2026-08-05",
-  "lastDate": "2026-10-25"
+  "lastDate": "2026-10-26"
  },
  "lifts": [
   {
@@ -24,133 +24,14 @@
    "tested": 160,
    "testedDate": "2026-10-16",
    "maxSource": "tested",
-   "change28": 3.6,
+   "change28": 10,
    "trend": [
-    {
-     "date": "2026-08-07",
-     "value": 148,
-     "deload": false,
-     "soft": false,
-     "submax": true
-    },
-    {
-     "date": "2026-08-09",
-     "value": 154.1,
-     "deload": false,
-     "soft": false,
-     "submax": false
-    },
-    {
-     "date": "2026-08-14",
-     "value": 142.4,
-     "deload": false,
-     "soft": false,
-     "submax": true
-    },
-    {
-     "date": "2026-08-16",
-     "value": 152.3,
-     "deload": false,
-     "soft": false,
-     "submax": false
-    },
-    {
-     "date": "2026-08-20",
-     "value": 155.3,
-     "deload": false,
-     "soft": false,
-     "submax": true
-    },
-    {
-     "date": "2026-08-22",
-     "value": 156.4,
-     "deload": false,
-     "soft": false,
-     "submax": false
-    },
-    {
-     "date": "2026-08-31",
-     "value": 143.4,
-     "deload": true,
-     "soft": false,
-     "submax": true
-    },
-    {
-     "date": "2026-09-03",
-     "value": 147.1,
-     "deload": true,
-     "soft": false,
-     "submax": false
-    },
     {
      "date": "2026-09-10",
      "value": 150,
      "deload": false,
      "soft": false,
      "submax": false
-    },
-    {
-     "date": "2026-09-16",
-     "value": 144.8,
-     "deload": false,
-     "soft": false,
-     "submax": true
-    },
-    {
-     "date": "2026-09-17",
-     "value": 148,
-     "deload": false,
-     "soft": false,
-     "submax": false
-    },
-    {
-     "date": "2026-09-22",
-     "value": 165.4,
-     "deload": false,
-     "soft": false,
-     "submax": true
-    },
-    {
-     "date": "2026-09-24",
-     "value": 150.6,
-     "deload": false,
-     "soft": false,
-     "submax": false
-    },
-    {
-     "date": "2026-09-29",
-     "value": 154.1,
-     "deload": false,
-     "soft": false,
-     "submax": true
-    },
-    {
-     "date": "2026-10-01",
-     "value": 150.9,
-     "deload": false,
-     "soft": false,
-     "submax": false
-    },
-    {
-     "date": "2026-10-06",
-     "value": 149.3,
-     "deload": false,
-     "soft": false,
-     "submax": true
-    },
-    {
-     "date": "2026-10-07",
-     "value": 149.1,
-     "deload": false,
-     "soft": false,
-     "submax": false
-    },
-    {
-     "date": "2026-10-11",
-     "value": 143.4,
-     "deload": false,
-     "soft": false,
-     "submax": true
     },
     {
      "date": "2026-10-16",
@@ -169,92 +50,8 @@
    "tested": 100,
    "testedDate": "2026-10-17",
    "maxSource": "entered",
-   "change28": 6.1,
+   "change28": 7.8,
    "trend": [
-    {
-     "date": "2026-08-05",
-     "value": 95.6,
-     "deload": false,
-     "soft": true,
-     "submax": false
-    },
-    {
-     "date": "2026-08-07",
-     "value": 95.4,
-     "deload": false,
-     "soft": false,
-     "submax": true
-    },
-    {
-     "date": "2026-08-09",
-     "value": 95.6,
-     "deload": false,
-     "soft": false,
-     "submax": false
-    },
-    {
-     "date": "2026-08-13",
-     "value": 99,
-     "deload": false,
-     "soft": true,
-     "submax": false
-    },
-    {
-     "date": "2026-08-14",
-     "value": 95.6,
-     "deload": false,
-     "soft": false,
-     "submax": true
-    },
-    {
-     "date": "2026-08-16",
-     "value": 95.6,
-     "deload": false,
-     "soft": false,
-     "submax": false
-    },
-    {
-     "date": "2026-08-18",
-     "value": 94.7,
-     "deload": false,
-     "soft": true,
-     "submax": false
-    },
-    {
-     "date": "2026-08-20",
-     "value": 95.6,
-     "deload": false,
-     "soft": false,
-     "submax": true
-    },
-    {
-     "date": "2026-08-22",
-     "value": 98.5,
-     "deload": false,
-     "soft": false,
-     "submax": false
-    },
-    {
-     "date": "2026-08-30",
-     "value": 99,
-     "deload": true,
-     "soft": true,
-     "submax": false
-    },
-    {
-     "date": "2026-08-31",
-     "value": 95.6,
-     "deload": true,
-     "soft": false,
-     "submax": true
-    },
-    {
-     "date": "2026-09-03",
-     "value": 98.5,
-     "deload": true,
-     "soft": false,
-     "submax": false
-    },
     {
      "date": "2026-09-13",
      "value": 96.9,
@@ -263,108 +60,17 @@
      "submax": false
     },
     {
-     "date": "2026-09-14",
-     "value": 88.2,
-     "deload": false,
-     "soft": true,
-     "submax": false
-    },
-    {
-     "date": "2026-09-16",
-     "value": 98.6,
-     "deload": false,
-     "soft": false,
-     "submax": true
-    },
-    {
-     "date": "2026-09-17",
-     "value": 98.6,
-     "deload": false,
-     "soft": false,
-     "submax": false
-    },
-    {
-     "date": "2026-09-21",
-     "value": 95.6,
-     "deload": false,
-     "soft": true,
-     "submax": false
-    },
-    {
-     "date": "2026-09-22",
-     "value": 101.8,
-     "deload": false,
-     "soft": false,
-     "submax": true
-    },
-    {
-     "date": "2026-09-24",
-     "value": 96.8,
-     "deload": false,
-     "soft": false,
-     "submax": false
-    },
-    {
-     "date": "2026-09-28",
-     "value": 99,
-     "deload": false,
-     "soft": true,
-     "submax": false
-    },
-    {
-     "date": "2026-09-29",
-     "value": 98.6,
-     "deload": false,
-     "soft": false,
-     "submax": true
-    },
-    {
-     "date": "2026-10-01",
-     "value": 94,
-     "deload": false,
-     "soft": false,
-     "submax": false
-    },
-    {
-     "date": "2026-10-04",
-     "value": 95.6,
-     "deload": false,
-     "soft": true,
-     "submax": false
-    },
-    {
-     "date": "2026-10-06",
-     "value": 95.6,
-     "deload": false,
-     "soft": false,
-     "submax": true
-    },
-    {
-     "date": "2026-10-07",
-     "value": 100.3,
-     "deload": false,
-     "soft": false,
-     "submax": false
-    },
-    {
-     "date": "2026-10-10",
-     "value": 95.6,
-     "deload": false,
-     "soft": true,
-     "submax": false
-    },
-    {
-     "date": "2026-10-11",
-     "value": 95.6,
-     "deload": false,
-     "soft": false,
-     "submax": true
-    },
-    {
      "date": "2026-10-16",
      "value": 104.7,
      "deload": false,
      "soft": false,
+     "submax": false
+    },
+    {
+     "date": "2026-10-26",
+     "value": 102.9,
+     "deload": false,
+     "soft": true,
      "submax": false
     }
    ]
@@ -377,126 +83,14 @@
    "tested": 180,
    "testedDate": "2026-10-16",
    "maxSource": "tested",
-   "change28": -5,
+   "change28": -1,
    "trend": [
-    {
-     "date": "2026-08-07",
-     "value": 178.1,
-     "deload": false,
-     "soft": false,
-     "submax": true
-    },
-    {
-     "date": "2026-08-11",
-     "value": 175.7,
-     "deload": false,
-     "soft": false,
-     "submax": false
-    },
-    {
-     "date": "2026-08-14",
-     "value": 178.8,
-     "deload": false,
-     "soft": false,
-     "submax": true
-    },
-    {
-     "date": "2026-08-17",
-     "value": 179.2,
-     "deload": false,
-     "soft": false,
-     "submax": false
-    },
-    {
-     "date": "2026-08-20",
-     "value": 179.2,
-     "deload": false,
-     "soft": false,
-     "submax": true
-    },
-    {
-     "date": "2026-08-26",
-     "value": 179.6,
-     "deload": false,
-     "soft": false,
-     "submax": false
-    },
-    {
-     "date": "2026-08-31",
-     "value": 179.2,
-     "deload": true,
-     "soft": false,
-     "submax": true
-    },
-    {
-     "date": "2026-09-04",
-     "value": 172.6,
-     "deload": true,
-     "soft": false,
-     "submax": false
-    },
     {
      "date": "2026-09-08",
      "value": 181,
      "deload": false,
      "soft": false,
      "submax": false
-    },
-    {
-     "date": "2026-09-16",
-     "value": 184.5,
-     "deload": false,
-     "soft": false,
-     "submax": true
-    },
-    {
-     "date": "2026-09-19",
-     "value": 185,
-     "deload": false,
-     "soft": false,
-     "submax": false
-    },
-    {
-     "date": "2026-09-22",
-     "value": 179.2,
-     "deload": false,
-     "soft": false,
-     "submax": true
-    },
-    {
-     "date": "2026-09-26",
-     "value": 182.2,
-     "deload": false,
-     "soft": false,
-     "submax": false
-    },
-    {
-     "date": "2026-09-29",
-     "value": 178.8,
-     "deload": false,
-     "soft": false,
-     "submax": true
-    },
-    {
-     "date": "2026-10-01",
-     "value": 179.4,
-     "deload": false,
-     "soft": false,
-     "submax": false
-    },
-    {
-     "date": "2026-10-06",
-     "value": 179.2,
-     "deload": false,
-     "soft": false,
-     "submax": true
-    },
-    {
-     "date": "2026-10-11",
-     "value": 167.3,
-     "deload": false,
-     "soft": false,
-     "submax": true
     },
     {
      "date": "2026-10-16",
@@ -519,11 +113,11 @@
   },
   {
    "exercise": "Low-Bar Back Squat",
-   "e1rm": 160,
-   "date": "2026-10-16",
-   "load": 160,
-   "reps": 1,
-   "rpe": 10
+   "e1rm": 165.4,
+   "date": "2026-09-22",
+   "load": 130,
+   "reps": 3,
+   "rpe": 5
   },
   {
    "exercise": "Barbell Row",
@@ -576,54 +170,34 @@
   }
  ],
  "lastSession": {
-  "date": "2026-10-25",
-  "label": "Post-meet week · Day 4",
-  "cycle": 4,
+  "date": "2026-10-26",
+  "label": "C1 W1 · Day 1 · Volume",
+  "cycle": 1,
   "week": 1,
-  "day": 4,
-  "phase": "postMeet",
-  "sets": 23,
-  "reps": 200,
-  "tonnage": 10404,
-  "avgRPE": 4.5,
+  "day": 1,
+  "phase": "load",
+  "sets": 6,
+  "reps": 52,
+  "tonnage": 4240,
+  "avgRPE": 6.8,
   "avgTargetRPE": null,
-  "minutes": 87,
+  "minutes": null,
   "unit": "kg",
   "lifts": [
    {
-    "exercise": "Low-Bar Back Squat",
-    "detail": "105×5@4, 105×5@4, 105×5@5, 105×5@5",
+    "exercise": "High-Bar Back Squat",
+    "detail": "105×8@7, 105×8@7.5",
     "topKg": 105
    },
    {
     "exercise": "Bench Press",
-    "detail": "65×5@4, 65×5@4, 65×5@4, 65×5@4",
-    "topKg": 65
-   },
-   {
-    "exercise": "Deadlift",
-    "detail": "100×5@4, 100×5@4, 100×5@4",
-    "topKg": 100
-   },
-   {
-    "exercise": "Bulgarian Split Squat",
-    "detail": "10×10@6, 8×10@6, 8×10@6",
-    "topKg": 10
+    "detail": "70×8@6, 70×8@6",
+    "topKg": 70
    },
    {
     "exercise": "Lat Pulldown",
-    "detail": "64×12@4, 64×12@4, 64×12@7.5",
-    "topKg": 64
-   },
-   {
-    "exercise": "Triceps Extension",
-    "detail": "20×15@4, 20×15@4, 20×15@4",
-    "topKg": 20
-   },
-   {
-    "exercise": "Weighted Ab Exercise",
-    "detail": "60×12@4, 60×12@4, 60×10@4",
-    "topKg": 60
+    "detail": "72×10@7, 72×10@7",
+    "topKg": 72
    }
   ],
   "prs": []
@@ -1230,6 +804,20 @@
    "avgRPE": 4.5,
    "avgTargetRPE": null,
    "minutes": 87
+  },
+  {
+   "date": "2026-10-26",
+   "label": "C1 W1 · Day 1 · Volume",
+   "cycle": 1,
+   "week": 1,
+   "day": 1,
+   "phase": "load",
+   "sets": 6,
+   "reps": 52,
+   "tonnage": 4240,
+   "avgRPE": 6.8,
+   "avgTargetRPE": null,
+   "minutes": null
   }
  ],
  "bodyweight": [
