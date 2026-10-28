@@ -1,19 +1,19 @@
 {
  "v": 1,
- "generatedAt": "2026-10-27T17:33:24.180Z",
+ "generatedAt": "2026-10-28T16:48:39.981Z",
  "athlete": {
   "firstName": null
  },
  "unit": "kg",
  "displayUnit": "kg",
  "totals": {
-  "sessions": 44,
-  "sets": 427,
+  "sessions": 45,
+  "sets": 433,
   "missed": 3,
-  "reps": 2542,
-  "tonnage": 170709,
+  "reps": 2591,
+  "tonnage": 171373,
   "firstDate": "2026-08-05",
-  "lastDate": "2026-10-26"
+  "lastDate": "2026-10-27"
  },
  "lifts": [
   {
@@ -162,42 +162,42 @@
   },
   {
    "exercise": "Dips",
-   "e1rm": 25.4,
-   "date": "2026-10-11",
-   "load": 20,
-   "reps": 4,
-   "rpe": 6
+   "e1rm": 26.3,
+   "date": "2026-10-27",
+   "load": 22,
+   "reps": 6,
+   "rpe": 10
   }
  ],
  "lastSession": {
-  "date": "2026-10-26",
-  "label": "C1 W1 · Day 1 · Volume",
+  "date": "2026-10-27",
+  "label": "C1 W1 · Day 2 · Volume",
   "cycle": 1,
   "week": 1,
-  "day": 1,
+  "day": 2,
   "phase": "load",
   "sets": 6,
-  "reps": 52,
-  "tonnage": 4240,
-  "avgRPE": 6.8,
+  "reps": 49,
+  "tonnage": 664,
+  "avgRPE": 7.3,
   "avgTargetRPE": null,
   "minutes": null,
   "unit": "kg",
   "lifts": [
    {
-    "exercise": "High-Bar Back Squat",
-    "detail": "105×8@7, 105×8@7.5",
-    "topKg": 105
+    "exercise": "Weighted Back Extension",
+    "detail": "10×8@5, 15×8@6",
+    "topKg": 15
    },
    {
-    "exercise": "Bench Press",
-    "detail": "70×8@6, 70×8@6",
-    "topKg": 70
+    "exercise": "Dips",
+    "detail": "26×7@10, 22×6@10",
+    "topKg": 26
    },
    {
-    "exercise": "Lat Pulldown",
-    "detail": "72×10@7, 72×10@7",
-    "topKg": 72
+    "exercise": "Triceps Extension",
+    "detail": "7×10@6, 8×10@7",
+    "topKg": 8
    }
   ],
   "prs": []
@@ -816,6 +816,20 @@
    "reps": 52,
    "tonnage": 4240,
    "avgRPE": 6.8,
+   "avgTargetRPE": null,
+   "minutes": null
+  },
+  {
+   "date": "2026-10-27",
+   "label": "C1 W1 · Day 2 · Volume",
+   "cycle": 1,
+   "week": 1,
+   "day": 2,
+   "phase": "load",
+   "sets": 6,
+   "reps": 49,
+   "tonnage": 664,
+   "avgRPE": 7.3,
    "avgTargetRPE": null,
    "minutes": null
   }
