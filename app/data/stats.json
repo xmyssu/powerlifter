@@ -1,19 +1,19 @@
 {
  "v": 1,
- "generatedAt": "2026-10-29T17:23:26.688Z",
+ "generatedAt": "2026-10-30T16:51:57.002Z",
  "athlete": {
   "firstName": null
  },
  "unit": "kg",
  "displayUnit": "kg",
  "totals": {
-  "sessions": 46,
-  "sets": 439,
+  "sessions": 47,
+  "sets": 445,
   "missed": 3,
-  "reps": 2623,
-  "tonnage": 174173,
+  "reps": 2667,
+  "tonnage": 177753,
   "firstDate": "2026-08-05",
-  "lastDate": "2026-10-28"
+  "lastDate": "2026-10-30"
  },
  "lifts": [
   {
@@ -112,6 +112,13 @@
      "deload": false,
      "soft": false,
      "submax": false
+    },
+    {
+     "date": "2026-10-30",
+     "value": 169.1,
+     "deload": false,
+     "soft": false,
+     "submax": true
     }
    ]
   }
@@ -184,34 +191,34 @@
   }
  ],
  "lastSession": {
-  "date": "2026-10-28",
-  "label": "C1 W1 · Day 3 · Technique",
+  "date": "2026-10-30",
+  "label": "C1 W1 · Day 4 · Technique",
   "cycle": 1,
   "week": 1,
-  "day": 3,
+  "day": 4,
   "phase": "load",
   "sets": 6,
-  "reps": 32,
-  "tonnage": 2800,
-  "avgRPE": 6.3,
+  "reps": 44,
+  "tonnage": 3580,
+  "avgRPE": 5,
   "avgTargetRPE": null,
-  "minutes": null,
+  "minutes": 64,
   "unit": "kg",
   "lifts": [
    {
-    "exercise": "Low-Bar Back Squat",
-    "detail": "110×4@5, 110×4@5",
-    "topKg": 110
+    "exercise": "Deadlift",
+    "detail": "125×4@4, 125×4@4",
+    "topKg": 125
    },
    {
-    "exercise": "Bench Press",
-    "detail": "80×4@7, 80×4@7",
-    "topKg": 80
+    "exercise": "Close-Grip Bench Press",
+    "detail": "62.5×8@6, 65×8@6",
+    "topKg": 65
    },
    {
-    "exercise": "Barbell Row",
-    "detail": "80×8@7, 80×8@7",
-    "topKg": 80
+    "exercise": "Weighted Ab Exercise",
+    "detail": "78×10@5, 78×10@5",
+    "topKg": 78
    }
   ],
   "prs": []
@@ -860,6 +867,20 @@
    "avgRPE": 6.3,
    "avgTargetRPE": null,
    "minutes": null
+  },
+  {
+   "date": "2026-10-30",
+   "label": "C1 W1 · Day 4 · Technique",
+   "cycle": 1,
+   "week": 1,
+   "day": 4,
+   "phase": "load",
+   "sets": 6,
+   "reps": 44,
+   "tonnage": 3580,
+   "avgRPE": 5,
+   "avgTargetRPE": null,
+   "minutes": 64
   }
  ],
  "bodyweight": [
