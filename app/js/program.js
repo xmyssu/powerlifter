@@ -14,7 +14,7 @@ import { TEMPLATES, INTERMEDIATE_PL, INTERMEDIATE_PEAK, PEAK_DAYS, EMPHASIS,
          incrementFor, assessDeload, TEST_DAY, WARMUP, POST_MEET } from './templates.js';
 import { SLOT_DEFAULTS, byId } from './exercises.js';
 import { e1RM, loadFor, roundToLoadable, pctOf1RM, normalizeRPE, convertLoad, loadBand, minIncrement,
-         loadStep, gridFloor, isLadder, rpeFor, fmtLoadBare, RPE_TOLERANCE, PLATE_PRESETS,
+         loadStep, gridFloor, isLadder, rpeFor, fmtLoadBare, fmtRPE, RPE_TOLERANCE, PLATE_PRESETS,
          KG_PER_LB, parseNum, RPE_MIN, RPE_MAX } from './rpe.js';
 import { todayISO, uid } from './store.js';
 import { fmtDate } from './ui.js';
@@ -42,10 +42,6 @@ export function buildProgram({
         stalls: 0,
         stalledThisCycle: false,
         stalledAtLoad: null,
-        // The last session on this slot that came up a rep short on its final
-        // set. One of those is the book's expected cost of pushing (p. 243);
-        // two in a row is the stall. Cleared by any session that goes to plan.
-        lastShortfall: null,
       };
     }
   }
@@ -88,7 +84,15 @@ export function buildProgram({
      * what turns it from a wish into this week's work.
      */
     goalLifts: { squat: null, bench: null, deadlift: null },
-    forcedDeload: false,        // a stall forces week 4 regardless of checklist
+    forcedDeload: false,        // stalls on two lifts force week 4 regardless of checklist
+    /**
+     * The last session on each competition lift that came up short, or null.
+     * One of those is a bad day; the next session on the same lift coming up
+     * short as well is the stall. Cleared by any session on that lift that goes
+     * to plan. See `assessStalls`.
+     */
+    shortfalls: { squat: null, bench: null, deadlift: null },
+    stallRules: STALL_RULES,    // which stall rules the marks above were made under
     events: [],                 // program-level history for the coach log
   };
 }
@@ -285,13 +289,31 @@ export function warmupFor(load, reps, loadOpts = {}) {
  * so a session recorded in pounds must not be compared against a kilo anchor.
  */
 export function slotHistory(state, slotKey) {
+  return historyOf(state, (e) => e.slotKey === slotKey);
+}
+
+/**
+ * Every completed entry for an exercise, in any slot of any program, oldest
+ * first — the same shape as `slotHistory`.
+ *
+ * A slot key belongs to one program, so on the day a lifter switches programs
+ * every slot in the new one has an empty past by key. The exercise is what
+ * carries across: a lat pulldown is the same lat pulldown in the accumulation
+ * block as it was in the four-day program and in the light week between them.
+ */
+export function exerciseHistory(state, exerciseId) {
+  if (!exerciseId) return [];
+  return historyOf(state, (e) => e.exerciseId === exerciseId);
+}
+
+function historyOf(state, match) {
   const to = state.profile?.units;
   const out = [];
   for (const s of state.sessions) {
     if (s.status !== 'done') continue;
     const from = s.units || to;
     for (const e of s.entries) {
-      if (e.slotKey !== slotKey) continue;
+      if (!match(e)) continue;
       // A missed attempt is `done` — it happened, it cost the lifter something,
       // and it belongs in the log. It is not a set, though: there is no rep to
       // estimate from and nothing to compare against a prescription, so it never
@@ -304,6 +326,8 @@ export function slotHistory(state, slotKey) {
       out.push({
         sessionId: s.id,
         date: s.date,
+        slotKey: e.slotKey,
+        templateId: s.templateId || null,
         cycle: s.cycle,
         week: s.week,
         day: s.day,
@@ -365,26 +389,68 @@ export function missedAttempts(state, { lift = null, since = null } = {}) {
   return out.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
 }
 
-/** Where a slot lives — its day and its definition — across the template, the peak and the test day. */
+/**
+ * Every slot the app has ever prescribed, by key: every program, the peak's two
+ * extra days, the test day and the light week after a meet. `program` marks the
+ * ones that belong to a training program rather than to a day outside it.
+ *
+ * The log is written in the keys of whichever program was running, and a lifter
+ * can switch programs whenever they like. Looking a key up only in the current
+ * template turned every older one anonymous after a switch: a technique-day
+ * squat from the four-day stopped counting as easy work, and went back on the
+ * public record board as a 165 kg squat against a tested 160. The four- and
+ * three-day weeks share keys, and a shared key means the same slot in both, so
+ * the first definition found is as good as the second.
+ */
+const SLOT_REGISTRY = (() => {
+  const out = new Map();
+  const add = (day, slot, program) => { if (!out.has(slot.key)) out.set(slot.key, { day, slot, program }); };
+  for (const tpl of Object.values(TEMPLATES)) for (const d of tpl.days) for (const s of d.slots) add(d, s, true);
+  for (const d of Object.values(PEAK_DAYS)) for (const s of d.slots) add(d, s, false);
+  for (const s of TEST_DAY.slots) add(TEST_DAY, s, false);
+  for (const d of POST_MEET.days) for (const s of d.slots) add(d, s, false);
+  return out;
+})();
+
+/** Where a slot lives — its day and its definition — in the current program first, then anywhere the app has put it. */
 function slotContext(state, slotKey) {
   const tpl = templateOf(state.program);
   for (const d of tpl.days) {
     const f = d.slots.find((x) => x.key === slotKey);
     if (f) return { day: d, slot: f };
   }
-  const t = TEST_DAY.slots.find((x) => x.key === slotKey);
-  if (t) return { day: TEST_DAY, slot: t };
-  for (const d of Object.values(PEAK_DAYS)) {
-    const f = d.slots.find((x) => x.key === slotKey);
-    if (f) return { day: d, slot: f };
-  }
-  return null;
+  return SLOT_REGISTRY.get(slotKey) || null;
 }
 
-/** Which competition lift a slot key trains, across the template and the extras. */
+/**
+ * Which competition lift a slot key trains, in any program.
+ *
+ * Only a slot that is the lift itself. The light week loads its RDLs and pause
+ * squats off the lift they vary, but an RDL that does not come up is not a
+ * missed deadlift, and it must not hold the deadlift's working max under it.
+ */
 function liftOfSlot(state, slotKey) {
-  return slotContext(state, slotKey)?.slot.lift || null;
+  const slot = slotContext(state, slotKey)?.slot;
+  return slot?.lift && !slot.exercise ? slot.lift : null;
 }
+
+/**
+ * Every program slot, in every template, that trains `lift` as the lift itself.
+ *
+ * For reading a lift's history across programs: the strength trend, the
+ * milestones and the RPE calibration all used to collect their keys from the
+ * current template alone, so a switch to the accumulation block emptied the
+ * squat chart of everything logged on the four-day.
+ */
+export function liftSlotKeys(lift) {
+  if (!LIFT_KEYS.has(lift)) {
+    const keys = [];
+    for (const [key, c] of SLOT_REGISTRY) if (c.program && c.slot.lift === lift) keys.push(key);
+    LIFT_KEYS.set(lift, keys);
+  }
+  return LIFT_KEYS.get(lift);
+}
+const LIFT_KEYS = new Map();
 
 /** The RPE a slot is actually asked for: a single target, a cap, or the middle of a range. */
 export function slotTargetRPE(slot) {
@@ -563,15 +629,92 @@ export function slotE1RM(state, slotKey, opts) {
  * gone backwards. So: prefer the last loading session at the same rep target,
  * fall back to the last loading session, and only fall back to the deload
  * itself when there is nothing else on record.
+ *
+ * It is found by exercise, not only by slot. A slot key belongs to one program,
+ * so the day a lifter switches programs every slot in the new one has an empty
+ * past — and the first week of a new block is exactly when "what did I do on
+ * this last time" matters most. So the search widens in three steps:
+ *
+ *  1. this slot, with this exercise in it, since this program started;
+ *  2. this exercise in the same kind of slot anywhere — the volume-day bench of
+ *     the last block, the technique squat of the four-day (`slotKind`);
+ *  3. this exercise anywhere at all.
+ *
+ * A competition lift only ever compares against the same kind of work: a light
+ * week's fives, a test-day single and a meet attempt say nothing about what a
+ * strength day should feel like, and an RPE-5 triple is not a strength-day
+ * triple. An accessory takes whatever was most recent — its loads are the
+ * lifter's own choice, on whatever machine the gym had free, and the last one
+ * is the useful one — so it does not prefer an older session at the same reps
+ * over last week's.
+ *
+ * `source` says which step found it: 'slot', 'family' or 'exercise'.
  */
-export function lastComparable(state, slotKey, { reps = null, excludeSessionId = null } = {}) {
-  const hist = slotHistory(state, slotKey).filter((h) => h.sessionId !== excludeSessionId);
+export function lastComparable(state, slotKey, { reps = null, excludeSessionId = null, exerciseId = null } = {}) {
+  const program = state.program;
+  const exId = exerciseId ?? program?.choices?.[slotKey] ?? null;
+  const ctx = slotContext(state, slotKey);
+  const prescribed = isCompetitionSlot(ctx?.slot);
+  const preferReps = prescribed;
+  const notNow = (h) => h.sessionId !== excludeSessionId;
+  const sameEx = (h) => !exId || h.exerciseId === exId;
+
+  // 1. This slot, this program.
+  const since = program?.startDate || null;
+  const own = slotHistory(state, slotKey).filter((h) => notNow(h) && sameEx(h) && (!since || h.date >= since));
+  const mine = pickComparable(own, reps, preferReps);
+  if (mine) return { ...mine, source: 'slot' };
+  if (!exId) return null;
+
+  // 2 and 3. The same exercise somewhere else.
+  const easy = ctx ? isSubmaximalWork(ctx.day, ctx.slot) : false;
+  const kind = ctx ? slotKind(ctx.day, ctx.slot) : null;
+  const elsewhere = exerciseHistory(state, exId).filter((h) => {
+    if (!notNow(h)) return false;
+    const c = SLOT_REGISTRY.get(h.slotKey);
+    if (!prescribed) return true;
+    // Training against training: no test day, no light week, no meet.
+    if (!c?.program || h.phase === 'meetWeek' || h.phase === 'test' || h.phase === 'postMeet') return false;
+    return isSubmaximalWork(c.day, c.slot) === easy;
+  });
+  const family = kind ? elsewhere.filter((h) => {
+    const c = SLOT_REGISTRY.get(h.slotKey);
+    return !!c && slotKind(c.day, c.slot) === kind;
+  }) : [];
+  const near = pickComparable(family, reps, preferReps);
+  if (near) return { ...near, source: 'family' };
+  const any = pickComparable(elsewhere, reps, preferReps);
+  return any ? { ...any, source: 'exercise' } : null;
+}
+
+/** The comparable pick within one set of candidates: the newest loading session, at today's reps if asked. */
+function pickComparable(hist, reps, preferReps = true) {
   if (!hist.length) return null;
   const loading = hist.filter((h) => h.phase !== 'deload');
-  const sameReps = reps == null ? [] : loading.filter((h) => h.targetReps === reps);
+  const sameReps = !preferReps || reps == null ? [] : loading.filter((h) => h.targetReps === reps);
   const pick = sameReps[sameReps.length - 1] || loading[loading.length - 1] || hist[hist.length - 1];
-  if (!pick) return null;
-  return { ...pick, matchedReps: sameReps.length > 0 };
+  return pick ? { ...pick, matchedReps: sameReps.length > 0 } : null;
+}
+
+/**
+ * What a slot is for, in terms that survive a change of program: the movement
+ * it trains and the kind of day it is trained on. Work written to be easy is
+ * one kind wherever it sits, which is what lets the three-day week's folded-in
+ * technique squat match the four-day's technique day.
+ */
+function slotKind(day, slot) {
+  return `${slot.slotType}|${isSubmaximalWork(day, slot) ? 'easy' : day?.role || ''}`;
+}
+
+/**
+ * What to put in the load box of a slot with no prescription: where the lifter
+ * finished last time. The last set rather than the first, because a lifter who
+ * worked up across the sets ended on the weight they would start from now, and
+ * one who had to drop ended on the weight they could actually do.
+ */
+export function lastLoadOf(lastTime) {
+  const sets = lastTime?.sets || [];
+  return sets.length ? sets[sets.length - 1].load : null;
 }
 
 /* ---- max testing ------------------------------------------------------ */
@@ -713,16 +856,13 @@ export function driftPerWeek(state, lift) {
   return incrementOf(slot, state.program, state.profile.units) / Math.max(1, loadingWeeks(state.program));
 }
 
-/** Every completed set on a lift, across every slot that trains it. */
+/** Every completed set on a lift, across every slot in every program that trains it. */
 function completedOn(state, lift) {
-  const tpl = templateOf(state.program);
-  const keys = [...TEST_DAY.slots, ...Object.values(PEAK_DAYS).flatMap((d) => d.slots),
-                ...tpl.days.flatMap((d) => d.slots)]
-    .filter((x) => x.lift === lift).map((x) => x.key);
+  const keys = new Set();
+  for (const [key, c] of SLOT_REGISTRY) if (c.slot.lift === lift && !c.slot.exercise) keys.add(key);
+  for (const d of templateOf(state.program).days) for (const s of d.slots) if (s.lift === lift) keys.add(s.key);
   const out = [];
-  for (const key of new Set(keys)) {
-    for (const h of slotHistory(state, key)) for (const set of h.sets) out.push({ ...set, date: h.date });
-  }
+  for (const h of historyOf(state, (e) => keys.has(e.slotKey))) for (const set of h.sets) out.push({ ...set, date: h.date });
   return out;
 }
 
@@ -2146,10 +2286,29 @@ function advancePostMeet(state) {
   }];
 }
 
-/** Close the light week and put the cursor back on the program's first day. */
+/**
+ * Was the light week actually done? Three of its four sessions — the fourth is
+ * optional, and `postMeetStatus` reads the week as finished at three too.
+ */
+export function lightWeekDone(afterMeet) {
+  return (afterMeet?.sessions || 0) >= POST_MEET.days.length - 1;
+}
+
+/**
+ * Close the light week and put the cursor back on the program's first day.
+ *
+ * A light week that was done also cancels the intro week. The intro thins the
+ * first loading week to two-thirds of its sets for a lifter coming straight off
+ * the taper, and the light week is the same job done better: four sessions of
+ * twenty-odd sets each have brought the volume back already. Running the intro
+ * after it as well gave the lifter a second light-looking week with full
+ * weights on the bar, which reads as neither. Only a lifter who skipped the
+ * light week, or stopped it early, still gets the intro.
+ */
 export function finishPostMeet(state, { today = todayISO() } = {}) {
   const program = state.program;
   if (program.afterMeet && !program.afterMeet.doneAt) program.afterMeet.doneAt = today;
+  if (program.afterMeet && lightWeekDone(program.afterMeet)) program.afterMeet.introPending = false;
   if (program.cursor.phase === 'postMeet') {
     program.cursor.phase = 'load';
     program.cursor.day = templateOf(program).days[0].n;
@@ -2241,7 +2400,7 @@ function resolvePostMeetDay(state, { cycle, week, day, phase }) {
       loadNote,
       rpeCheckLoad: null,
       increment: null,
-      lastTime: lastComparable(state, slot.key, { reps: slot.fixedReps }),
+      lastTime: lastComparable(state, slot.key, { reps: slot.fixedReps, exerciseId: exId }),
     };
   });
 
@@ -2335,25 +2494,60 @@ export function postMeetStatus(state, { today = todayISO() } = {}) {
  * History and maxes live outside the program and are untouched. A meet already
  * lifted stays lifted. The after-meet record carries over too — the training
  * maxes are meant for both blocks, and the intro week belongs to whichever
- * program runs first — but a light week still running is closed, because the
+ * program runs first, unless the light week already did its job (see
+ * `finishPostMeet`) — but a light week still running is closed, because the
  * new program starts at its own day 1.
+ *
+ * The exercise choices carry by what each slot is for (`carriedChoices`), so
+ * moving from accumulation to intensification keeps the pause squat, the dips
+ * and the cable row the lifter picked, rather than resetting every slot whose
+ * key happens to differ to the book's default.
  */
 export function switchProgram(state, templateId, { today = todayISO() } = {}) {
   const old = state.program;
   const next = buildProgram({
-    templateId, emphasis: old.emphasis, startDate: today, meetDate: old.meetDate, choices: old.choices,
+    templateId, emphasis: old.emphasis, startDate: today, meetDate: old.meetDate, choices: carriedChoices(old, templateId),
   });
   // A peak abandoned *by this switch* deliberately does not carry: the meet is
   // still on the calendar, and someone moving to the three-day week three
   // weeks out wants the block to pick them up again on the new program.
   if (old.peakDoneFor) next.peakDoneFor = old.peakDoneFor;
   if (old.peak) next.events.push({ date: today, kind: 'peakEnd', meetDate: old.peak.meetDate, competed: false });
-  if (old.afterMeet) next.afterMeet = { ...old.afterMeet, doneAt: old.afterMeet.doneAt || today };
+  if (old.afterMeet) {
+    next.afterMeet = { ...old.afterMeet, doneAt: old.afterMeet.doneAt || today };
+    if (lightWeekDone(next.afterMeet)) next.afterMeet.introPending = false;
+  }
   next.events.push({ date: today, kind: 'switched', from: old.templateId, to: templateId });
   state.program = next;
   state.profile.trainingAge = TEMPLATES[templateId].trainingAge || state.profile.trainingAge;
   state.profile.daysPerWeek = TEMPLATES[templateId].daysPerWeek || state.profile.daysPerWeek;
   return next;
+}
+
+/**
+ * The exercises a new program starts with, taken from the old one.
+ *
+ * By key where the two share one (the four- and three-day weeks do). Otherwise
+ * by what the slot is for: the old slot of the same type on the same kind of
+ * day, then the old slot of the same type on any day. A slot with no match
+ * gets the book's default from `buildProgram`.
+ */
+function carriedChoices(old, templateId) {
+  const tpl = TEMPLATES[templateId];
+  const from = templateOf(old);
+  const picked = old?.choices || {};
+  const oldSlots = from.days.flatMap((d) => d.slots.map((s) => ({ s, role: d.role })))
+    .filter((x) => picked[x.s.key]);
+  const out = {};
+  for (const d of tpl?.days || []) {
+    for (const s of d.slots) {
+      if (picked[s.key]) { out[s.key] = picked[s.key]; continue; }
+      const same = oldSlots.filter((x) => x.s.slotType === s.slotType);
+      const match = same.find((x) => x.role === d.role) || same[0];
+      if (match) out[s.key] = picked[match.s.key];
+    }
+  }
+  return out;
 }
 
 /* ---- prescription ---------------------------------------------------- */
@@ -2512,6 +2706,14 @@ export function resolveDay(state, { cycle, week, day, phase } = {}) {
     const introThinned = intro && !slotDeload && !isPainWeek && sets > 1;
     if (introThinned) sets = Math.max(1, Math.floor((sets * 2) / 3));
 
+    // Only the competition lifts are given a weight. See `lastTimeSlot`.
+    if (!isCompetitionSlot(slot)) {
+      return lastTimeSlot(state, {
+        slot, i, exId, ex, loadOpts, sets, reps, targetRPE, rpeRange, peakThinned, introThinned, slotDeload,
+        repsRaised, fromReps: repsRaised ? repsForWeek(slot, program, 1) : null,
+      });
+    }
+
     // --- load --------------------------------------------------------
     const submaximal = isSubmaximalWork(dayDef, slot);
     const maxes = maxesOf(slot.lift);
@@ -2630,6 +2832,81 @@ export function resolveDay(state, { cycle, week, day, phase } = {}) {
     why: dayDef.why || null,
     title: dayDef.title || null,
     slots,
+  };
+}
+
+/**
+ * A slot with no prescribed weight: every variation, accessory and isolation
+ * slot. It keeps its sets, its reps and the RPE to aim for, and beside them is
+ * what the lifter did on this exercise last time. The weight is theirs to pick.
+ *
+ * The wave used to prescribe these the way it prescribes a squat, and on this
+ * kind of work a number was worse than no number. Accessories get done on
+ * whichever machine is free, two machines that both say "40" are not the same
+ * 40, and some stacks say "7" and mean nothing in kilos at all. So the
+ * prescription carried from one machine to the next was routinely wrong, the
+ * lifter routinely lifted something else, and each of those sessions read as
+ * "the bar was lighter than prescribed": a stall, and a forced deload, off a
+ * face pull. What a lifter wants to see beside a pulldown is the last pulldown.
+ * The competition lifts keep their weights. There the plates are the same
+ * every time, so the number means something.
+ *
+ * `lastLoad` is where they finished last time, for display. `startLoad` is the
+ * same number pre-filled into the load box, except on a deload or a high-rep
+ * week, where last time's weight is exactly what the week asks you not to lift.
+ */
+function lastTimeSlot(state, { slot, i, exId, ex, loadOpts, sets, reps, targetRPE, rpeRange,
+                               peakThinned, introThinned, slotDeload, repsRaised, fromReps }) {
+  const lastTime = lastComparable(state, slot.key, { reps, exerciseId: exId });
+  const lastLoad = lastLoadOf(lastTime);
+  const rpe = rpeRange ? `${rpeRange[0]}-${rpeRange[1]}` : targetRPE != null ? fmtRPE(targetRPE) : null;
+  const aim = rpe ? `${!reps ? 'it lands' : reps === 1 ? 'the single lands' : `${reps} reps land`} at RPE ${rpe}` : 'it feels right';
+  const last = lastLoad != null ? fmtLoadBare(lastLoad) : null;
+
+  const loadNote = !lastTime
+    ? `First time on this one. Work up until ${aim}, then log it — next time the app shows you what you did here.`
+    : slotDeload
+      ? `Deload: go lighter than last time's ${last}, so ${aim}.`
+      : repsRaised
+        ? `High-rep week: ${reps} reps instead of ${fromReps}, so take weight off last time's ${last} until ${aim}.`
+        : `No set weight here: start from last time's ${last} and adjust so ${aim}. `
+          + 'Log whatever the machine says, even a pin number. Nothing here is checked against a set weight.';
+
+  return {
+    index: i,
+    slot,
+    slotKey: slot.key,
+    exerciseId: exId,
+    exercise: ex,
+    role: slot.role,
+    sets,
+    reps,
+    targetRPE,
+    rpeRange,
+    rpeMax: slot.rpeMax ?? null,
+    // No max to take a percentage of.
+    pct: null,
+    timed: !!slot.timed,
+    prescription: slot.prescription || null,
+    peakThinned,
+    introThinned,
+    slotDeload,
+    plannedLoad: null,
+    lastLoad,
+    startLoad: slotDeload || repsRaised ? null : lastLoad,
+    loadRange: null,
+    gridStep: loadStep(loadOpts),
+    impliedRPE: null,
+    rateBasis: null,
+    checkMax: null,
+    recordedMax: null,
+    recordedFresh: false,
+    loadSource: lastTime ? 'lastTime' : 'discover',
+    loadNote,
+    rpeCheckLoad: null,
+    // Nothing progresses on a schedule here, so there is no increment to explain.
+    increment: null,
+    lastTime,
   };
 }
 
@@ -2928,11 +3205,15 @@ export function startSession(state, position) {
       // against itself is how "did you lift what you were asked for" came out
       // yes on a session where the answer was no, and no on one where the
       // prescription was simply not loadable.
-      prescribedLoad: s.plannedLoad,
-      plannedLoad: s.plannedLoad,
+      //
+      // A slot with no prescription (`lastTimeSlot`) starts its working load
+      // where the lifter finished last time, so the same machine is one tap —
+      // but `prescribedLoad` stays empty, because nothing was prescribed.
+      prescribedLoad: s.plannedLoad ?? null,
+      plannedLoad: s.plannedLoad ?? s.startLoad ?? null,
       pct: s.pct,
       note: '',
-      sets: Array.from({ length: s.sets }, (_, i) => ({ load: s.setLoads?.[i] ?? s.plannedLoad, reps: null, rpe: null, done: false, ts: null })),
+      sets: Array.from({ length: s.sets }, (_, i) => ({ load: s.setLoads?.[i] ?? s.plannedLoad ?? s.startLoad ?? null, reps: null, rpe: null, done: false, ts: null })),
     })),
     sessionRPE: null,
     notes: '',
@@ -3096,7 +3377,14 @@ function recordTestedMaxes(state, session, { platform = false } = {}) {
 }
 
 /**
- * How far short of the prescription an entry came, and whether that is a stall.
+ * How far under its prescription a day's heaviest set can sit and still count
+ * as the weight that was asked for — 5%, or 7 kg on a 140 kg squat. See
+ * `entryShortfall`.
+ */
+export const LIGHT_BAR_SLACK = 0.05;
+
+/**
+ * How far short of the prescription an entry came, and how seriously.
  *
  * The book is explicit that these are not the same question. Missing reps
  * "should only occasionally occur in pursuit of the planned progression on your
@@ -3107,14 +3395,27 @@ function recordTestedMaxes(state, session, { platform = false } = {}) {
  * that looks like: "if you go two weeks in a row and do not get your target
  * repetitions" (p. 241).
  *
- * So one rep off the last set is `soft` — noted, not acted on, and it becomes a
- * stall only if the next session on that slot does it again. Everything that is
- * not that is `hard`: a weight that did not go up, a first set that fell short,
- * more than one set short, two or more reps missing, or a bar lighter than the
- * one asked for by more than a single notch of whatever this exercise loads in.
+ * So one rep off the last set is `soft`. Everything that is not that is `hard`:
+ * a weight that did not go up, a first set that fell short, more than one set
+ * short, two or more reps missing, or a day whose heaviest set never got within
+ * reach of the weight asked for. Neither is a stall on its own: that takes two
+ * short sessions running on the same lift (`assessStalls`).
  *
- * `step` is that notch. Without it a prescription of 74.5 kg on a stack that
- * stops at 72 reads as a stall every single week.
+ * "Within reach" is the larger of one notch of whatever the exercise loads in
+ * (`step`) and `LIGHT_BAR_SLACK` of the prescription. The notch is there so a
+ * prescription of 74.5 kg on a stack that stops at 72 is not a shortfall every
+ * single week; the slack is there because the RPE is the prescription and the
+ * number is a guess at it, and a lifter who takes 2.5 kg off a 130 kg squat
+ * because the warm-ups felt slow is doing what the program asks, not failing
+ * it. And it is the heaviest set that is compared, not every set: working up
+ * to the weight, or taking a little off the last set to keep the reps, is not
+ * a bar that was too heavy.
+ *
+ * Only `prescribedLoad` counts as a prescription. It used to fall back to
+ * `plannedLoad`, which is the working load and ends a session holding the last
+ * weight logged, so a lifter who worked up across the sets — 40, then 45 on a
+ * slot with no weight on it at all — was told the first set was lighter than
+ * prescribed.
  */
 export function entryShortfall(entry, { step = 0 } = {}) {
   const done = (entry?.sets || []).filter((s) => s.done);
@@ -3123,14 +3424,12 @@ export function entryShortfall(entry, { step = 0 } = {}) {
   if (!done.length) return { kind: missingSets ? 'hard' : 'none', reasons: missingSets ? ['nothing logged'] : [] };
 
   const target = entry.targetReps;
-  const prescribed = entry.prescribedLoad ?? entry.plannedLoad ?? null;
-  const tol = Math.max(0, step) + 1e-6;
+  const prescribed = entry.prescribedLoad ?? null;
 
   const reasons = [];
   const shortAt = [];
   let worstReps = 0;
   let failed = false;
-  let lightBar = false;
 
   done.forEach((s, i) => {
     let short = false;
@@ -3139,16 +3438,19 @@ export function entryShortfall(entry, { step = 0 } = {}) {
       worstReps = Math.max(worstReps, target - s.reps);
       short = true;
     }
-    if (prescribed != null && s.load != null && s.load < prescribed - tol) { lightBar = true; short = true; }
     if (short) shortAt.push(i);
   });
 
-  if (!shortAt.length && !missingSets) return { kind: 'none', reasons: [] };
+  const lifted = done.filter((s) => !s.failed && s.load > 0).map((s) => s.load);
+  const slack = prescribed != null ? Math.max(0, step, prescribed * LIGHT_BAR_SLACK) + 1e-6 : 0;
+  const lightBar = prescribed != null && lifted.length > 0 && Math.max(...lifted) < prescribed - slack;
+
+  if (!shortAt.length && !missingSets && !lightBar) return { kind: 'none', reasons: [] };
 
   // Ordered so `reasons[0]` is the most serious thing that happened, because
   // that is the one the note in front of the lifter quotes.
   if (failed) reasons.push('a weight that did not go up');
-  if (lightBar) reasons.push('the bar was lighter than prescribed');
+  if (lightBar) reasons.push(`the bar stayed well under the ${fmtLoadBare(prescribed)} prescribed`);
   if (shortAt.includes(0)) reasons.push('the first set fell short');
   if (shortAt.length > 1) reasons.push(`${shortAt.length} sets fell short`);
   if (worstReps > 1) reasons.push(`${worstReps} reps short on a set`);
@@ -3180,8 +3482,9 @@ export function completeSession(state, sessionId) {
   if (!session) return { state, notes: [] };
 
   const notes = [];
-  const units = state.profile.units;
-  const strengthDays = tpl.days.filter((d) => d.role === 'strength').map((d) => d.n);
+  // A program carrying marks from the old stall rules is brought up to date
+  // before this session is read against them.
+  reviewStalls(state);
 
   session.status = 'done';
   session.endedAt = new Date().toISOString();
@@ -3235,7 +3538,9 @@ export function completeSession(state, sessionId) {
     // for the work that waves. Submaximal work is prescribed off the max every
     // week (see `plannedLoad`), so it has no anchor to set, and writing one
     // anyway would leave a stale number for `startNextCycle` to march upward.
-    if (session.week === 1 && session.phase === 'load' && !isSubmaximalWork(sessionDay, slot)) {
+    // Nor does anything without a prescription (`lastTimeSlot`): its weight is
+    // the lifter's own, and last time is read straight off the log.
+    if (session.week === 1 && session.phase === 'load' && isCompetitionSlot(slot) && !isSubmaximalWork(sessionDay, slot)) {
       // Only overwritten when the lifter actually chose a different weight.
       // The anchor is carried unrounded on purpose (see `startNextCycle`): a
       // halved increment, or a weekly increment smaller than one notch of a
@@ -3247,53 +3552,200 @@ export function completeSession(state, sessionId) {
       const held = st.week1Load != null && Math.abs(roundToLoadable(st.week1Load, grid) - logged) < 1e-6;
       if (!held) st.week1Load = logged;
     }
-
-    if (session.phase === 'load') {
-      // Technique work is meant to stay submaximal forever, so falling short of
-      // it is never a stall. On the 4-day that is a whole day; on the 3-day the
-      // same sets are folded into other days, so the slot flag has to count too.
-      const isTechniqueDay = sessionDay?.role === 'technique';
-      if (!isTechniqueDay && !slot.technique) {
-        const short = entryShortfall(entry, { step: loadStep(grid) });
-        const name = byId(entry.exerciseId)?.short || entry.slotKey;
-        const repeat = short.kind === 'soft' && !!st.lastShortfall;
-
-        if (short.kind === 'hard' || repeat) {
-          st.lastShortfall = null;
-          if (!st.stalledThisCycle) {
-            st.stalledThisCycle = true;
-            st.stalledAtLoad = doneSets[0].load;
-            st.stalls += 1;
-            program.forcedDeload = true;
-            notes.push({
-              kind: 'stall',
-              title: 'Stall recorded',
-              slotKey: entry.slotKey,
-              text: repeat
-                ? `Second session running that ${name} has come up short — ${short.reasons[0]}. One of those is the cost of pushing; two in a row is a stall. Finish this cycle, dropping load as needed so every set and rep gets completed — then take the week-4 deload regardless of how the checklist scores.`
-                : `You came up short on ${name} — ${short.reasons[0]}. Finish this cycle, dropping load as needed so every set and rep gets completed — then take the week-4 deload regardless of how the checklist scores.`,
-            });
-          }
-        } else if (short.kind === 'soft') {
-          st.lastShortfall = { date: session.date, week: session.week, cycle: session.cycle };
-          notes.push({
-            kind: 'shortfall',
-            title: 'Noted, not a stall',
-            slotKey: entry.slotKey,
-            text: `${name} ${short.missingSets ? 'is a set short of what was prescribed' : 'came up a rep short on its last set'}. The book expects that occasionally — it is what pushing the top of a wave looks like, and nothing changes because of it. If the next session on this lift comes up short too, that is a stall and the app will treat it as one.`,
-          });
-        } else {
-          st.lastShortfall = null;
-        }
-      }
-    }
   }
+
+  if (session.phase === 'load') notes.push(...assessStalls(state, session));
 
   const hot = deloadRanHot(session, tpl);
   if (hot) notes.push(hot);
 
   advanceCursor(state);
   return { state, notes };
+}
+
+/* ---- stalls ------------------------------------------------------------ */
+
+/**
+ * Which version of the stall rules a program's marks were made under. A
+ * program from before this one is brought up to date by `reviewStalls`.
+ */
+export const STALL_RULES = 2;
+
+/** How many lifts have to stall in one cycle before the deload stops being the checklist's call. */
+export const FORCED_DELOAD_LIFTS = 2;
+
+const LIFT_NAMES = { squat: 'squat', bench: 'bench', deadlift: 'deadlift' };
+
+/**
+ * Work that can stall: a competition lift, on a day that is trying.
+ *
+ * Not technique or primer work, which is written to stay easy forever, and
+ * not anything without a prescribed weight — the variations, accessories and
+ * isolation work (`lastTimeSlot`). Their weight is the lifter's own choice on
+ * whatever machine was free, so "lighter than last time" says nothing about
+ * the lifter, and a stall recorded off one used to force the whole program's
+ * deload.
+ */
+export function canStall(day, slot) {
+  return isCompetitionSlot(slot) && !slot.technique && day?.role !== 'technique' && !isSubmaximalWork(day, slot);
+}
+
+/** The lifts with a slot marked stalled this cycle, in the current program. */
+export function stalledLifts(program) {
+  const out = new Set();
+  for (const d of templateOf(program).days) {
+    for (const s of d.slots) if (program?.slots?.[s.key]?.stalledThisCycle && canStall(d, s)) out.add(s.lift);
+  }
+  return ['squat', 'bench', 'deadlift'].filter((l) => out.has(l));
+}
+
+/** "squat", "squat and bench", "squat, bench and deadlift". */
+const andList = (xs) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
+
+/**
+ * Read one loading session for stalls, lift by lift, and say what it found.
+ * Mutates the program.
+ *
+ * A stall is two short sessions running on the same lift. One short session —
+ * a missed rep, a first set that came up short, a day the bar stayed well under
+ * the prescription (`entryShortfall`) — is a bad day: it is noted and nothing
+ * else happens. The next session on that lift decides. If it goes to plan the
+ * slate is wiped; if it comes up short too, that is the book's "two weeks in a
+ * row and do not get your target repetitions" (p. 241), and the lift is
+ * stalled.
+ *
+ * By lift rather than by slot, because the question is whether the lift is
+ * moving. The volume-day bench and the strength-day bench are two readings on
+ * one bench, and a bad volume day followed by a bad strength day is two in a
+ * row. A session holding the same lift twice gives one reading.
+ *
+ * A stalled lift gets the book's reset next cycle (p. 244): it restarts about
+ * 7.5% lighter than the weight it stalled at, with halved increments — every
+ * slot of it that came up short in either session. What it no longer gets on
+ * its own is a forced deload. That used to follow any single stall, and a
+ * single stall used to follow any single short session, on any slot, so one
+ * face pull taken on a different machine made the week-4 deload mandatory.
+ * Now the deload is forced when `FORCED_DELOAD_LIFTS` lifts have stalled in the
+ * same cycle — the lifter is stuck, not one lift — and until then the
+ * checklist at the end of the cycle decides, as it does for everyone else.
+ */
+function assessStalls(state, session) {
+  const program = state.program;
+  const tpl = templateOf(program);
+  const day = tpl.days.find((d) => d.n === session.day);
+  if (!program.shortfalls) program.shortfalls = {};
+  const notes = [];
+
+  const byLift = new Map();
+  for (const entry of session.entries || []) {
+    const slot = findSlot(tpl, entry.slotKey);
+    if (!slot || !program.slots[entry.slotKey] || !canStall(day, slot)) continue;
+    const done = (entry.sets || []).filter((s) => s.done && s.load > 0);
+    if (!done.length) continue;
+    const short = entryShortfall(entry, { step: loadStep(loadOptsFor(state, entry.exerciseId)) });
+    const rec = byLift.get(slot.lift) || { lift: slot.lift, short: [] };
+    if (short.kind !== 'none') {
+      rec.short.push({ slotKey: entry.slotKey, load: done[0].load, short, name: byId(entry.exerciseId)?.short || entry.slotKey });
+    }
+    byLift.set(slot.lift, rec);
+  }
+
+  for (const { lift, short } of byLift.values()) {
+    const before = program.shortfalls[lift] || null;
+    if (!short.length) { program.shortfalls[lift] = null; continue; }
+
+    const word = LIFT_NAMES[lift] || lift;
+    const first = short[0];
+    // A lift already stalled this cycle has been told what happens next; saying
+    // it again after every set of the cycle's remaining sessions is noise.
+    const already = stalledLifts(program).includes(lift);
+
+    if (!before) {
+      program.shortfalls[lift] = {
+        date: session.date, cycle: session.cycle, week: session.week, day: session.day,
+        slots: short.map((x) => ({ slotKey: x.slotKey, load: x.load })),
+      };
+      if (!already) {
+        notes.push({
+          kind: 'shortfall',
+          title: 'Noted, not a stall',
+          slotKey: first.slotKey,
+          text: `${first.name} came up short: ${first.short.reasons[0]}. One short session is a bad day, not a stall, and nothing changes because of it. If the next ${word} session comes up short too, that is a stall.`,
+        });
+      }
+      continue;
+    }
+
+    // Two in a row. The newest load first, so a slot short in both sessions is
+    // reset from the weight it stalled at most recently.
+    program.shortfalls[lift] = null;
+    let marked = false;
+    for (const hit of [...short.map((x) => ({ slotKey: x.slotKey, load: x.load })), ...(before.slots || [])]) {
+      const st = program.slots[hit.slotKey];
+      if (!st || st.stalledThisCycle) continue;
+      st.stalledThisCycle = true;
+      st.stalledAtLoad = hit.load;
+      st.stalls = (st.stalls || 0) + 1;
+      marked = true;
+    }
+    if (!marked || already) continue;
+
+    const stuck = stalledLifts(program);
+    const forced = stuck.length >= FORCED_DELOAD_LIFTS;
+    notes.push({
+      kind: 'stall',
+      title: `${word.charAt(0).toUpperCase()}${word.slice(1)} has stalled`,
+      slotKey: first.slotKey,
+      text: `Second ${word} session running that came up short (${fmtDate(before.date)} and today): ${first.short.reasons[0]}. `
+        + `Finish this cycle at weights you can complete for every set and rep. Next cycle the ${word} restarts about 7.5% lighter, with smaller weekly jumps. `
+        + (forced
+          ? `That is ${stuck.length} stalled lifts this cycle (${andList(stuck)}), so the week-4 deload is now part of the plan, whatever the checklist says.`
+          : 'One stalled lift does not force a deload. The checklist at the end of the cycle still decides.'),
+    });
+  }
+
+  program.forcedDeload = stalledLifts(program).length >= FORCED_DELOAD_LIFTS;
+  return notes;
+}
+
+/**
+ * Bring a program's stall marks up to the current rules (`STALL_RULES`).
+ *
+ * The marks made under the old rules are still sitting in programs on phones:
+ * accessories stalled for being lighter than a prescription they should never
+ * have had, single short sessions counted as stalls, and a deload forced off
+ * them. Clearing the flags is not enough on its own, because a real stall may
+ * be among them. So this cycle's marks are undone — the counter given back for
+ * each — and this cycle's loading sessions are read again, in order, under the
+ * new rules. Earlier cycles are left as they are: their resets are already in
+ * the anchors, and there is no honest way to take them back out.
+ *
+ * Idempotent; runs once per program. Mutates `state`.
+ */
+export function reviewStalls(state) {
+  const program = state?.program;
+  if (!program || (program.stallRules || 0) >= STALL_RULES) return false;
+
+  for (const st of Object.values(program.slots || {})) {
+    if (st.stalledThisCycle) st.stalls = Math.max(0, (st.stalls || 0) - 1);
+    st.stalledThisCycle = false;
+    st.stalledAtLoad = null;
+    delete st.lastShortfall;
+  }
+  program.shortfalls = { squat: null, bench: null, deadlift: null };
+
+  const cycle = program.cursor?.cycle;
+  const when = (s) => `${s.date || ''}T${s.startedAt || ''}`;
+  const sessions = (state.sessions || [])
+    .filter((s) => s.status === 'done' && s.phase === 'load' && s.cycle === cycle
+      && (!s.templateId || s.templateId === program.templateId)
+      && (!program.startDate || s.date >= program.startDate))
+    .sort((a, b) => (when(a) < when(b) ? -1 : when(a) > when(b) ? 1 : 0));
+  for (const s of sessions) assessStalls(state, s);
+
+  program.forcedDeload = stalledLifts(program).length >= FORCED_DELOAD_LIFTS;
+  program.stallRules = STALL_RULES;
+  return true;
 }
 
 /** How far above the deload's target RPE still counts as "went to plan". */
@@ -3487,6 +3939,8 @@ export function startPeakNow(state) {
 /** Answer the deload checklist and route accordingly. */
 export function resolveAssessment(state, answers) {
   const program = state.program;
+  // Never force a deload off marks the current rules would not have made.
+  reviewStalls(state);
   const verdict = assessDeload(answers);
   const forced = program.forcedDeload;
   const mandatory = program.cyclesSinceDeload >= 2;   // 3rd cycle with no deload
@@ -3496,7 +3950,11 @@ export function resolveAssessment(state, answers) {
 
   if (forced) {
     action = 'deload';
-    reasons.push('A stall this cycle forces the deload regardless of the checklist.');
+    const stuck = stalledLifts(program);
+    const all = stuck.length === 2 ? ' both' : stuck.length > 2 ? ' all' : '';
+    reasons.push(stuck.length
+      ? `Your ${andList(stuck)}${all} stalled this cycle, which forces the deload regardless of the checklist.`
+      : 'Stalls this cycle force the deload regardless of the checklist.');
   } else if (mandatory && action === 'proceed') {
     action = 'deload';
     reasons.push('Three cycles without a deload — take one anyway.');
@@ -3618,11 +4076,12 @@ export function graduationCheck(state) {
   const tpl = templateOf(program);
   if (tpl.trainingAge !== 'intermediate') return { ready: false };
 
+  // The competition lifts on the strength days: the only slots that can stall.
   const strengthMains = [];
   for (const day of tpl.days) {
     if (day.role !== 'strength') continue;
     for (const slot of day.slots) {
-      if (slot.role === 'main' || slot.role === 'variation') strengthMains.push(slot);
+      if (canStall(day, slot)) strengthMains.push(slot);
     }
   }
   const stuck = strengthMains.filter((s) => {
@@ -3831,6 +4290,13 @@ export function convertUnits(state, to) {
     const grid = loadOptsFor(state, state.program.choices?.[key]);
     if (sl.week1Load) sl.week1Load = roundToLoadable(sl.week1Load * f, grid);
     if (sl.stalledAtLoad) sl.stalledAtLoad = roundToLoadable(sl.stalledAtLoad * f, grid);
+  }
+  // A short session waiting on the next one is carrying the weight it came up
+  // short at, and that becomes the stall load if the next one is short too.
+  for (const short of Object.values(state.program?.shortfalls || {})) {
+    for (const hit of short?.slots || []) {
+      if (hit.load) hit.load = roundToLoadable(hit.load * f, loadOptsFor(state, state.program.choices?.[hit.slotKey]));
+    }
   }
   return state;
 }

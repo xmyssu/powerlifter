@@ -8,7 +8,8 @@ import { templateOf, graduationCheck, slotHistory, slotE1RM, volumeAudit, loadin
          MISS_MEMORY_DAYS, isSubmaximalSlot, gradeSets, RELIABLE_E1RM_REPS,
          missedAttempts, peakStatus, PEAK_MIN_DAYS, goalFor, goalTargetFor,
          isCompetitionSlot, peakKeepsFullSets, maxBasisLabel, RECORD_BINDS_DAYS, easyMaxDetail,
-         attemptsFor, postMeetStatus, TRAINING_MAX_PCT, daysUntil } from './program.js';
+         attemptsFor, postMeetStatus, TRAINING_MAX_PCT, daysUntil, stalledLifts, FORCED_DELOAD_LIFTS,
+         canStall, liftSlotKeys, lightWeekDone } from './program.js';
 import { e1RM, fmtLoad, fmtLoadBare, fmtRPE, rpeFor, convertLoad } from './rpe.js';
 import { byId } from './exercises.js';
 import { relDays, fmtDate } from './ui.js';
@@ -397,6 +398,18 @@ export function restAdvice(state, resolved, { today = todayISO() } = {}) {
 export function sessionBriefing(resolved, state) {
   const notes = [];
   const tpl = resolved.template;
+
+  // Said in the session as well as on the home screen. The home screen called
+  // it the intro week and the session called it week 1 at full weights, and a
+  // lifter told one thing before the tap and shown another after it reasonably
+  // concludes the app is broken.
+  if (resolved.isIntro) {
+    notes.push({
+      kind: 'intro',
+      title: 'Intro week: fewer sets, normal weights',
+      text: 'The first week back after the meet runs two-thirds of the written sets. The weights are the block\'s real ones, so this is not a light week: the volume comes off, not the load. The full block starts next week.',
+    });
+  }
 
   if (resolved.isDeload) {
     notes.push({
@@ -1157,6 +1170,9 @@ export function milestones(state, { perLift = 3, today = todayISO() } = {}) {
     const tpl = templateOf(state.program);
     const keys = [`test_${lift}`];
     for (const d of tpl.days) for (const sl of d.slots) if (sl.lift === lift) keys.push(sl.key);
+    // ...and every program before this one: a weight lifted on the four-day is
+    // still a weight lifted.
+    for (const k of liftSlotKeys(lift)) if (!keys.includes(k)) keys.push(k);
     for (const key of keys) {
       for (const h of slotHistory(state, key)) {
         for (const set of h.sets) {
@@ -1314,11 +1330,13 @@ export function trainingAgeReport(state) {
   ].map((l) => ({ ...l, ...liftRate(state, l.lift) }));
 
   // Per strength-day main lift: how much of the graduation criterion is met.
+  // The same slots `graduationCheck` counts: the competition lifts on the
+  // strength days, which are the only work that can stall.
   const rows = [];
   for (const day of tpl.days) {
     if (day.role !== 'strength') continue;
     for (const slot of day.slots) {
-      if (slot.role !== 'main' && slot.role !== 'variation') continue;
+      if (!canStall(day, slot)) continue;
       const st = program.slots[slot.key] || {};
       rows.push({
         slotKey: slot.key,
@@ -1373,13 +1391,18 @@ export function trainingAgeReport(state) {
    Progress read-out
    ====================================================================== */
 
-/** e1RM series per competition lift, from every logged set of that lift. */
+/**
+ * e1RM series per competition lift, from every logged set of that lift — in
+ * every program, not only the one running now. Reading the current template's
+ * keys alone emptied the chart of everything logged before a switch.
+ */
 export function strengthTrend(state, lift) {
   const program = state.program;
   if (!program) return [];
   const tpl = templateOf(program);
   const keys = [`test_${lift}`];   // a logged single is the truest point on the chart
   for (const d of tpl.days) for (const s of d.slots) if (s.lift === lift) keys.push(s.key);
+  for (const k of liftSlotKeys(lift)) if (!keys.includes(k)) keys.push(k);
 
   // One chart, one axis: a session logged in pounds has to be brought into the
   // unit being displayed before its estimate can sit next to a kilo one.
@@ -1557,6 +1580,8 @@ export function rpeCalibration(state, { today = todayISO(), lifts = ['squat', 'b
     if (!max) continue;
 
     const keys = tpl.days.flatMap((d) => d.slots).filter((x) => x.lift === lift).map((x) => x.key);
+    // Calls made before a program switch are still this lifter's calls.
+    for (const k of liftSlotKeys(lift)) if (!keys.includes(k)) keys.push(k);
     const gaps = [];
     const contradictions = [];
     let badCalls = 0;
@@ -1705,11 +1730,17 @@ export function activeInsights(state) {
     });
   }
 
-  if (program.forcedDeload && !program.pendingAssessment) {
+  // Only for a deload the stalls have made mandatory. A single stalled lift is
+  // said once, in the summary of the session that stalled it; a card on the
+  // home screen every day until the cycle ends was the app nagging about one
+  // lift while the rest of the program was fine.
+  const stuck = program.forcedDeload ? stalledLifts(program) : [];
+  if (stuck.length >= FORCED_DELOAD_LIFTS && !program.pendingAssessment) {
+    const names = stuck.length === 2 ? `${stuck[0]} and ${stuck[1]}` : `${stuck.slice(0, -1).join(', ')} and ${stuck[stuck.length - 1]}`;
     out.push({
       kind: 'stall', priority: 2,
-      title: 'A stall was recorded this cycle',
-      text: 'Finish the cycle, dropping load where you need to so every set and rep gets completed. The week-4 deload is now mandatory regardless of how the checklist scores.',
+      title: `${stuck.length} lifts have stalled this cycle`,
+      text: `Your ${names} each came up short two sessions running. Finish the cycle at weights you can complete for every set and rep. The week-4 deload is now part of the plan, whatever the checklist says.`,
     });
   }
 
@@ -1813,7 +1844,9 @@ function afterMeetInsights(state) {
     parts.push(`Wait until ${whenLabel(late, today)} if your joints still ache, sleep is off, you do not feel like training, or warm-up weights feel heavy.`);
   }
   if (tms) parts.push(`The block's percentages come from training maxes at ${TRAINING_MAX_PCT}% of the meet: ${tms}.`);
-  parts.push('Its first week runs two-thirds of the sets. Expect to be sore anyway — that is the volume coming back, not a problem.');
+  parts.push(lightWeekDone({ sessions: pm.sessions })
+    ? 'The light week has already brought the volume back, so the block starts at its full sets. Expect some soreness in its first week anyway.'
+    : 'Its first week runs two-thirds of the sets. Expect to be sore anyway — that is the volume coming back, not a problem.');
   parts.push('Real pain rather than general achiness: do not start. Use "Something hurts" and get it looked at.');
 
   return [{

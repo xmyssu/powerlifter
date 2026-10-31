@@ -37,7 +37,7 @@ const {
   repsForWeek, pctForWeek, loadingWeeks, slotE1RM, slotE1RMDetail, slotHistory,
   lastComparable, convertUnits, templateOf, entryStalled, entryShortfall, enterPeak, peakPlanFor,
   loadOptsFor, loadOptsForSlot, startNextCycle, warmupFor, attemptsFor,
-  bestMaxFor, isSubmaximalSlot, slotTargetRPE, easyMaxDetail,
+  bestMaxFor, isSubmaximalSlot, slotTargetRPE, easyMaxDetail, exerciseHistory,
   RELIABLE_E1RM_REPS, PAIN_WEEK_REPS, DELOAD_RPE_FLOOR, PEAK_WEEKS,
 } = await import('./program.js');
 const { meetProgress, targetLine, attemptAdvice } = await import('./meet.js');
@@ -595,10 +595,17 @@ for (let seed = 1; seed <= SEEDS; seed++) {
 
     const ses = startSession(st, cur);
     for (const e of ses.entries) {
-      // Every set the app pre-fills must be loadable before it is ever edited.
+      // Every set the app pre-fills from a prescription must be loadable before
+      // it is ever edited. A slot with no prescription pre-fills last time's
+      // weight instead, which is whatever the lifter logged — a dumbbell, a
+      // machine's pin — so it must be exactly that, and never a prescription.
+      const logged = new Set(exerciseHistory(st, e.exerciseId).flatMap((h) => h.sets.map((x) => x.load)));
       for (const set of e.sets) {
-        if (set.load != null) {
+        if (set.load == null) continue;
+        if (e.prescribedLoad != null) {
           eq(roundToLoadable(set.load, gym), set.load, `pre-filled set loads are loadable (${tag})`);
+        } else {
+          ok(logged.has(set.load), `an unprescribed set is pre-filled with a weight logged on it before (${tag})`, `${set.load}`);
         }
       }
       // Log it the way a real session goes: mostly to plan, sometimes short,

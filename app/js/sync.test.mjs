@@ -111,6 +111,23 @@ function techSession(id, date, load) {
   return ses;
 }
 
+/** A local date `n` days before today. */
+const isoLocal = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const ago = (n) => { const d = new Date(); d.setDate(d.getDate() - n); return isoLocal(d); };
+
+/**
+ * A session on day `day` of a program week, finished `daysAgo` days ago to the
+ * hour — so whether a week is fresh does not depend on the time of day the
+ * suite happens to run at.
+ */
+function trainingDay(id, daysAgo, { day, week = 1, cycle = 1, phase = 'load', templateId = 'intermediate-pl', load = 140 } = {}) {
+  const ses = session(id, ago(daysAgo), load);
+  const end = new Date(Date.now() - daysAgo * 864e5 - 60e3);
+  ses.endedAt = end.toISOString();
+  ses.startedAt = new Date(end.getTime() - 65 * 60e3).toISOString();
+  return Object.assign(ses, { day, week, cycle, phase, templateId });
+}
+
 function seed(sessions) {
   const base = store.defaultState();
   store.replaceState({
@@ -690,38 +707,34 @@ hr('14. Discord card');
    15. The weekly rollup
    ====================================================================== */
 hr('15. Weekly rollup');
-{
-  // Two full weeks, ending in the week before the current one.
-  const thisMonday = (() => {
-    const d = new Date(); d.setHours(0, 0, 0, 0);
-    d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
-    return d;
-  })();
-  // Local components, not toISOString: the rollup buckets by local dates, and a
-  // UTC conversion moved every session one day and broke the week boundary.
-  const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-  const day = (offset) => iso(new Date(thisMonday.getTime() + offset * 864e5));
-
-  const built = [];
-  for (const [i, off] of [-14, -12, -10, -8, -7, -5, -3, -1].entries()) {
-    built.push(session(`w_${i}`, day(off), 140 + i * 2.5));
-  }
-  seed(built);
+const ADV_ACC = 'advanced-pl-accumulation';
+const rollupOf = async (sessions) => {
+  seed(sessions);
   sync.enqueueAll();
   await sync.flush({ force: true });
-
-  const w = sent.body.weekly;
-  ok(!!w, 'a rollup is included');
-  eq(w.weekKey, day(-7), 'it covers the week that just finished, not the current one');
+  return sent.body.weekly;
+};
+{
+  // Two weeks of the four-day program. The second closed yesterday, on its day 4.
+  const w = await rollupOf([
+    trainingDay('w1d1', 13, { day: 1 }), trainingDay('w1d2', 12, { day: 2 }),
+    trainingDay('w1d3', 10, { day: 3 }), trainingDay('w1d4', 8, { day: 4 }),
+    trainingDay('w2d1', 6, { day: 1, week: 2, load: 142.5 }), trainingDay('w2d2', 5, { day: 2, week: 2, load: 142.5 }),
+    trainingDay('w2d3', 3, { day: 3, week: 2, load: 145 }), trainingDay('w2d4', 1, { day: 4, week: 2, load: 145 }),
+  ]);
+  ok(!!w, 'a rollup is included once the week\'s last day is logged');
+  eq(w.weekKey, `${ago(6)} · Cycle 1 week 2`, 'keyed on the week\'s first day and its name, which reads after "Week of"');
+  eq(w.weekEnd, ago(1), 'ending on its last session');
+  eq(w.label, `${ago(6)} → ${ago(1)}`, 'and the footer gives the dates the week actually spanned');
   eq(w.sessions, 4, 'counting that week\'s sessions only');
-  ok(w.planned > 0, 'against how many the program prescribes', w.planned);
+  eq(w.planned, 4, 'against the four the program prescribes');
   ok(w.tonnage > 0, 'with the week\'s tonnage in kg');
   ok(w.prevTonnage > 0, 'and the previous week\'s, so the delta is computable');
-  // Up to six weeks, but never a week from before the log existed — an empty
-  // week rendered as the lowest block reads as a very light week, which is a lie.
+  ok(w.tonnage > w.prevTonnage, 'which is the training week before, not a calendar week', `${w.tonnage} vs ${w.prevTonnage}`);
+  // One bar per training week on record, up to six — never a week from before
+  // the log existed, rendered as the lowest block and read as a very light week.
   eq(w.volumeSpark.length, w.volumeWeeks, 'the spark has one block per week reported');
-  eq(w.volumeWeeks, 2, 'and only the two weeks this fixture could have trained in');
-  ok(w.volumeWeeks <= 6, 'capped at six weeks of context');
+  eq(w.volumeWeeks, 2, 'and only the two weeks this fixture trained');
   ok(w.avgRPE > 0 && w.avgTargetRPE > 0, 'actual and prescribed RPE for the week');
   // Only lifts with a trend appear; the fixture never deadlifts.
   eq(w.maxes.length, 2, 'where each competition lift with history stands');
@@ -729,20 +742,68 @@ hr('15. Weekly rollup');
   ok(w.maxes.every((m) => m.value > 0 && m.mark), 'each with a value and a mark');
   ok(!!w.url, 'linking to the dashboard');
   ok(!w.deloadWeek, 'not flagged as a deload');
+}
 
-  // Nothing to report when the previous week was empty.
-  seed([session('only_now', day(1), 140)]);
-  sync.enqueueAll();
-  await sync.flush({ force: true });
-  eq(sent.body.weekly, null, 'a week with no sessions produces no rollup');
+/* ---- the program's week, not the calendar's ---- */
+{
+  // Six days of accumulation over nine calendar days, with two extra rest days,
+  // finished today. It is posted now, whatever day of the week today is — not
+  // on the first sync after some Monday.
+  const six = [8, 7, 5, 4, 2, 0].map((daysAgo, i) => trainingDay(`acc${i + 1}`, daysAgo, { day: i + 1, templateId: ADV_ACC }));
+  let w = await rollupOf(six);
+  ok(!!w, 'the sixth training day closes the week');
+  eq(w.sessions, 6, 'with all six sessions in it');
+  eq(w.planned, 6, 'against the six the block prescribes');
+  eq(w.weekKey, `${ago(8)} · Accumulation week 1`, 'named for the block');
+  eq(w.label, `${ago(8)} → ${ago(0)}`, 'and spanning nine days without complaint');
+
+  w = await rollupOf(six.slice(0, 5));
+  eq(w, null, 'five days of six is not a finished week, so nothing is posted');
+}
+
+/* ---- a week cut short closes on the first session after it ---- */
+{
+  // Three light sessions, then the accumulation block started today.
+  const light = [6, 4, 2].map((daysAgo, i) => trainingDay(`pm${i + 1}`, daysAgo, { day: i + 1, phase: 'postMeet', cycle: 4 }));
+  const w = await rollupOf([...light, trainingDay('acc1', 0, { day: 1, templateId: ADV_ACC })]);
+  ok(!!w, 'switching program closes the week that was running');
+  eq(w.weekKey, `${ago(6)} · Post-meet week`, 'and it is the light week that is summarised');
+  eq(w.sessions, 3, 'three sessions');
+  eq(w.planned, 4, 'of the light week\'s four');
+}
+
+/* ---- old news is not posted ---- */
+{
+  const w = await rollupOf([
+    trainingDay('o1', 9, { day: 1 }), trainingDay('o2', 8, { day: 2 }), trainingDay('o3', 6, { day: 3 }), trainingDay('o4', 4, { day: 4 }),
+    trainingDay('o5', 2, { day: 1, week: 2 }),
+  ]);
+  eq(w, null, 'a week that closed four days ago is not posted by a later sync');
+}
+
+/* ---- a test day counts as training, not as a session of the plan ---- */
+{
+  const test = trainingDay('tst', 3, { day: 0, phase: 'test' });
+  test.entries = [{ slotKey: 'test_squat', exerciseId: SQUAT, targetSets: 3, targetReps: 1, sets: [
+    { load: 140, reps: 1, rpe: 7, done: true }, { load: 150, reps: 1, rpe: 8, done: true }, { load: 160, reps: 1, rpe: 9.5, done: true }] }];
+  const w = await rollupOf([trainingDay('t1', 5, { day: 1 }), trainingDay('t2', 4, { day: 2 }), test,
+                            trainingDay('t3', 2, { day: 3 }), trainingDay('t4', 0, { day: 4 })]);
+  eq(w.sessions, 4, 'the four program days are the sessions');
+  ok(w.sets > 4 * 4, 'while the test day\'s singles are in the volume', `${w.sets}`);
+}
+
+/* ---- a deload week says so once ---- */
+{
+  const w = await rollupOf([1, 2, 3, 4].map((d, i) => trainingDay(`dl${d}`, [6, 4, 2, 1][i], { day: d, week: 4, phase: 'deload' })));
+  ok(w.deloadWeek, 'a deload week is flagged');
+  ok(!/deload/i.test(w.weekKey), 'and the key leaves the word to the script, which adds it to the title', w.weekKey);
 }
 
 /* ---- the rollup must not leak private fields either -------------------- */
 {
-  seed([session('w1', '2026-08-03', 140), session('w2', '2026-08-10', 145)]);
-  sync.enqueueAll();
-  await sync.flush({ force: true });
-  const wire = JSON.stringify(sent.body.weekly);
+  const w = await rollupOf([1, 2, 3, 4].map((d, i) => trainingDay(`p${d}`, [5, 4, 2, 0][i], { day: d })));
+  ok(!!w, 'a fresh week to inspect');
+  const wire = JSON.stringify(w);
   ok(!/Slept badly/.test(wire), 'no session notes in the rollup');
   ok(!/"readiness"/.test(wire), 'no readiness data');
 }
@@ -787,9 +848,10 @@ hr('16. Technique days on the dashboard');
 
   // The weekly rollup's "where each lift stands", for a finished week holding
   // both kinds of day.
-  const monday = (() => { const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return d; })();
-  const day = (offset) => iso(new Date(monday.getTime() + offset * 864e5));
-  seed([session('wk_hard', day(-6), 140), techSession('wk_tech', day(-3), 150)]);
+  const wkTech = techSession('wk_tech', ago(3), 150);
+  Object.assign(wkTech, { templateId: 'intermediate-pl', cycle: 1, week: 1, day: 2,
+                          endedAt: new Date(Date.now() - 3 * 864e5).toISOString() });
+  seed([trainingDay('wk_vol', 4, { day: 1, load: 100 }), wkTech, trainingDay('wk_hard', 2, { day: 3 }), trainingDay('wk_end', 1, { day: 4, load: 100 })]);
   sync.enqueueAll();
   await sync.flush({ force: true });
   const pubSquat = sent.body.public.lifts.find((l) => l.lift === 'squat');

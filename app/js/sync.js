@@ -17,9 +17,10 @@
    ========================================================================== */
 
 import * as store from './store.js';
-import { todayISO } from './store.js';
 import { convertLoad, e1RM, fmtLoadBare, fmtRPE, loadStep } from './rpe.js';
-import { templateOf, slotHistory, entryStalled, loadOptsFor, isSubmaximalSlot, gradeSets, singleSinceFor } from './program.js';
+import { templateOf, slotHistory, entryStalled, loadOptsFor, isSubmaximalSlot, gradeSets, singleSinceFor,
+         canStall } from './program.js';
+import { POST_MEET } from './templates.js';
 import { strengthTrend } from './coach.js';
 import { nameOf } from './exercises.js';
 
@@ -542,19 +543,23 @@ function slotDefsOf(st, ses) {
 }
 
 /**
- * Which slots fell short of what was prescribed.
+ * Which lifts fell short of what was prescribed.
  *
- * Mirrors the exclusions completeSession applies: technique work is meant to
- * stay submaximal, so coming up short of it is never a stall and must not
- * colour the message as though something went wrong.
+ * Mirrors what `completeSession` reads for stalls (`canStall`): only the
+ * competition lifts on work that is trying. Technique work is meant to stay
+ * submaximal, and accessories have no prescription to fall short of — their
+ * weight is whatever the machine that was free says — so neither may colour
+ * the message as though something went wrong.
  */
 function stalledSlots(st, ses) {
   if (ses.phase !== 'load') return [];
+  const tpl = templateOf({ templateId: ses.templateId });
+  const day = (tpl.days || []).find((d) => d.n === ses.day);
   const defs = slotDefsOf(st, ses);
   const out = [];
   for (const e of ses.entries) {
     const def = defs[e.slotKey];
-    if (!def || def.technique || def.dayRole === 'technique') continue;
+    if (!def || !canStall(day, def)) continue;
     // With the slot's own grid step, so a prescription that landed between two
     // notches of a machine's stack is not reported as coming up short.
     if (entryStalled(e, { step: loadStep(loadOptsFor(st, e.exerciseId)) })) out.push(nameOf(e.exerciseId));
@@ -632,13 +637,6 @@ function discordCard(st, ses) {
 
 /* ---- the weekly rollup ------------------------------------------------- */
 
-const MONDAY = (iso) => {
-  const d = new Date(`${iso}T00:00:00`);
-  d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
-  const p = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-};
-
 const addDays = (iso, n) => {
   const d = new Date(`${iso}T00:00:00`);
   d.setDate(d.getDate() + n);
@@ -647,48 +645,118 @@ const addDays = (iso, n) => {
 };
 
 /**
- * A summary of the most recently *completed* week.
- *
- * Deliberately not driven by a Sunday timer: an Apps Script trigger is another
- * moving part that can silently stop, and a missed Sunday means a week that is
- * never summarised. This rides along with whatever the next sync happens to be
- * — in practice the first session of the new week — and the script posts it at
- * most once per week key.
+ * How long after a training week closes its summary is still news: long enough
+ * for a phone that finished the last session in a basement gym to find signal
+ * the next day, short enough that the first sync after an update does not post
+ * a week the lifter finished a fortnight ago.
  */
-function weeklyRollup(st) {
-  const done = st.sessions.filter((x) => x.status === 'done');
-  if (!done.length) return null;
+export const WEEKLY_FRESH_HOURS = 48;
 
-  const thisMonday = MONDAY(todayISO());
-  const weekKey = addDays(thisMonday, -7);          // the week just finished
-  const weekEnd = addDays(weekKey, 6);
-  const prevKey = addDays(weekKey, -7);
+/** When a session happened, for ordering: its date, then the moment it started. */
+const whenOf = (ses) => `${ses.date || ''}T${ses.startedAt || ses.endedAt || ''}`;
+const byWhen = (a, b) => (whenOf(a) < whenOf(b) ? -1 : whenOf(a) > whenOf(b) ? 1 : 0);
 
-  const inWeek = (ses, key) => ses.date >= key && ses.date <= addDays(key, 6);
-  const week = done.filter((x) => inWeek(x, weekKey));
-  if (!week.length) return null;                    // nothing to report
+/** Which week of which program a session belongs to. */
+const weekIdOf = (ses) => `${ses.templateId || ''}|${ses.cycle ?? ''}|${ses.week ?? ''}|${ses.phase || ''}`;
 
-  const prev = done.filter((x) => inWeek(x, prevKey));
-  const sum = (list) => list.reduce((n, ses) => n + stats(st, ses).tonnage, 0);
+/** The days a session's week is made of: its program's, or the light week's. */
+const daysOf = (ses) => (ses.phase === 'postMeet' ? POST_MEET.days : templateOf({ templateId: ses.templateId }).days || []);
 
-  const scored = week.flatMap((ses) =>
+/** Is this session the last day of its week — day 6 of a six-day block, day 4 of the four-day? */
+function closesWeek(ses) {
+  const days = daysOf(ses);
+  return days.length > 0 && ses.day === Math.max(...days.map((d) => d.n));
+}
+
+/**
+ * The log, cut into training weeks, oldest first: `{ id, sessions, closedAt }`.
+ *
+ * A training week is the run of sessions sharing a program, a cycle, a week
+ * and a phase. It closes on its last day — whatever date that falls on, and
+ * however many rest days came between — or, when it was cut short by a switch
+ * of program or an early end to the light week, on the first session of
+ * whatever came next. `closedAt` is null while it is still open. A test day
+ * sits outside the program, so it joins whichever week it fell in.
+ */
+export function trainingWeeks(sessions) {
+  const done = (sessions || []).filter((x) => x.status === 'done').sort(byWhen);
+  const weeks = [];
+  let open = null;
+  const close = (w, ses) => { w.closedAt = ses.endedAt || `${ses.date}T23:59:59`; };
+  for (const ses of done) {
+    if (ses.phase === 'test') {
+      if (!open) { open = { id: null, sessions: [], closedAt: null }; weeks.push(open); }
+      open.sessions.push(ses);
+      continue;
+    }
+    const id = weekIdOf(ses);
+    if (open && open.id != null && open.id !== id) { close(open, ses); open = null; }
+    if (!open) { open = { id, sessions: [], closedAt: null }; weeks.push(open); }
+    open.id = id;
+    open.sessions.push(ses);
+    if (closesWeek(ses)) { close(open, ses); open = null; }
+  }
+  return weeks;
+}
+
+/** What a training week is called: "Accumulation week 1", "Cycle 3 week 2", "Post-meet week". */
+function weekName(ses) {
+  if (ses.phase === 'postMeet') return 'Post-meet week';
+  if (ses.phase === 'meetWeek') return 'Meet week';
+  const tpl = templateOf({ templateId: ses.templateId });
+  const block = tpl.block ? `${tpl.block.charAt(0).toUpperCase()}${tpl.block.slice(1)}` : `Cycle ${ses.cycle}`;
+  // The script adds "· deload" itself, off `deloadWeek`.
+  if (ses.phase === 'deload') return block;
+  if (ses.phase === 'painWeek') return `${block} high-rep week`;
+  return `${block} week ${ses.week}`;
+}
+
+/**
+ * A summary of the training week that has just closed.
+ *
+ * A week here is the program's week, not the calendar's. It used to be the
+ * Monday-to-Sunday before the current one, posted by whichever sync first
+ * happened after a Monday — so it arrived on a day that had nothing to do with
+ * the training, and it cut across the program: four sessions of one week and
+ * two of the next, or a week counted against the wrong program's plan after a
+ * switch. Now the week is summarised the moment its last day is logged, and it
+ * holds that week's sessions and no others, whatever days of the calendar they
+ * fell on.
+ *
+ * It rides along with every push, and the script posts it at most once per
+ * `weekKey`, so a resend or a re-sync never posts it twice. Only a week closed
+ * in the last `WEEKLY_FRESH_HOURS` is sent at all.
+ *
+ * `weekKey` is the week's first date and its name. The script titles the post
+ * "Week of <weekKey>" and remembers the last one it posted, so the key has to
+ * read well after those two words and must never repeat.
+ */
+function weeklyRollup(st, { now = Date.now() } = {}) {
+  const weeks = trainingWeeks(st.sessions).filter((w) => w.closedAt && w.id != null);
+  if (!weeks.length) return null;
+  const idx = weeks.length - 1;
+  const week = weeks[idx];
+  const closed = new Date(week.closedAt).getTime();
+  if (!Number.isFinite(closed) || now - closed > WEEKLY_FRESH_HOURS * 3600e3) return null;
+
+  const list = week.sessions;
+  const inPlan = list.filter((x) => x.phase !== 'test');
+  const head = inPlan[0];
+  const first = list[0].date;
+  const last = list[list.length - 1].date;
+  const sumKg = (ss) => ss.reduce((n, ses) => n + stats(st, ses).tonnageKg, 0);
+
+  const scored = list.flatMap((ses) =>
     ses.entries.flatMap((e) => (e.sets || []).filter((x) => x.done && x.rpe != null).map((x) => ({ x, e }))));
   const targeted = scored.filter((r) => r.e.targetRPE != null);
 
-  const tpl = templateOf(st.program);
-  const planned = (tpl.days || []).filter((d) => !d.off && !d.meet).length || null;
+  const planned = daysOf(head).filter((d) => !d.off && !d.meet).length || null;
 
   // Up to six weeks of volume as bars, so the week lands in context rather than
-  // alone — but only weeks that could have contained training. A week from
-  // before the log started is not a light week, and rendering it as the lowest
-  // block says exactly that.
-  const firstWeek = MONDAY(done.reduce((a, x) => (x.date < a ? x.date : a), done[0].date));
-  const bars = [];
-  for (let i = 5; i >= 0; i--) {
-    const k = addDays(weekKey, -7 * i);
-    if (k < firstWeek) continue;
-    bars.push(sum(done.filter((x) => inWeek(x, k))));
-  }
+  // alone. They are training weeks too, so a light week reads as one, and a
+  // stretch before the log began is simply not there rather than a row of
+  // empty bars.
+  const bars = weeks.slice(Math.max(0, idx - 5), idx + 1).map((w) => sumKg(w.sessions));
 
   const from = st.profile.units;
   const kg = (v) => round3(convertLoad(v, from, 'kg'));
@@ -697,31 +765,31 @@ function weeklyRollup(st) {
     // "Where each lift stands" on the same terms as the dashboard's headline.
     const pts = strengthTrend(st, lift).filter((p) => !p.deload && !p.estimatedFromHighReps && !p.submax);
     const upto = (d) => { const f = pts.filter((p) => p.date <= d); return f.length ? Math.max(...f.map((p) => p.value)) : null; };
-    const now = upto(weekEnd);
-    const before = upto(addDays(weekKey, -1));
-    if (now == null) continue;
+    const nowBest = upto(last);
+    const before = upto(addDays(first, -1));
+    if (nowBest == null) continue;
     maxes.push({
       lift,
       label: { squat: 'Squat', bench: 'Bench', deadlift: 'Deadlift' }[lift],
       mark: LIFT_MARK[lift],
-      value: kg(now),
-      change: before == null ? null : kg(now - before),
+      value: kg(nowBest),
+      change: before == null ? null : kg(nowBest - before),
     });
   }
 
   return {
-    weekKey,
-    weekEnd,
-    label: `${weekKey} → ${weekEnd}`,
-    sessions: week.length,
+    weekKey: `${first} · ${weekName(head)}`,
+    weekEnd: last,
+    label: `${first} → ${last}`,
+    sessions: inPlan.length,
     planned,
-    sets: week.reduce((n, ses) => n + stats(st, ses).sets, 0),
-    reps: week.reduce((n, ses) => n + stats(st, ses).reps, 0),
-    tonnage: Math.round(kg(sum(week))),
-    prevTonnage: prev.length ? Math.round(kg(sum(prev))) : null,
+    sets: list.reduce((n, ses) => n + stats(st, ses).sets, 0),
+    reps: list.reduce((n, ses) => n + stats(st, ses).reps, 0),
+    tonnage: Math.round(sumKg(list)),
+    prevTonnage: idx > 0 ? Math.round(sumKg(weeks[idx - 1].sessions)) : null,
     avgRPE: scored.length ? round3(scored.reduce((n, r) => n + r.x.rpe, 0) / scored.length) : null,
     avgTargetRPE: targeted.length ? round3(targeted.reduce((n, r) => n + r.e.targetRPE, 0) / targeted.length) : null,
-    deloadWeek: week.every((x) => x.phase === 'deload'),
+    deloadWeek: head.phase === 'deload',
     volumeSpark: sparkline(bars),
     volumeWeeks: bars.length,
     maxes,

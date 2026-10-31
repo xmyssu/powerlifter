@@ -6,6 +6,7 @@ import * as store from './store.js';
 import { $, icon, render, toast, esc } from './ui.js';
 import * as timer from './timer.js';
 import * as sync from './sync.js';
+import { reviewStalls } from './program.js';
 
 import onboarding from './views/onboarding.js';
 import today from './views/today.js';
@@ -27,7 +28,7 @@ const TABS = [
   { id: 'settings',  label: 'Settings', ico: 'settings' },
 ];
 
-const APP_VERSION = '1.9.0';
+const APP_VERSION = '1.10.0';
 
 /* ---- routing ---------------------------------------------------------- */
 
@@ -162,6 +163,10 @@ export async function promptInstall() {
 store.update((s) => {
   s.meta.lastOpenedAt = new Date().toISOString();
   s.meta.appVersion = APP_VERSION;
+  // Stall marks made under the old rules — an accessory "stalled" for being
+  // lighter than a prescription it no longer has — are re-read under the
+  // current ones before anything is drawn from them. Once per program.
+  reviewStalls(s);
 }, { silent: true });
 
 timer.setPrefs({

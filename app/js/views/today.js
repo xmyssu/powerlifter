@@ -7,12 +7,11 @@ import { fmtLoadBare, plateBreakdown, fmtRPE } from '../rpe.js';
 import { resolveDay, startSession, templateOf, resolveAssessment, cyclePlan, loadingWeeks, resolveTestDay,
          attemptsFor, discardSession, exitPeak, loadOptsForSlot, resolvePeakPrompt, startPeakNow,
          peakStatus, daysUntil, warmupFor, pctCaption, PEAK_WEEKS, PEAK_MIN_DAYS,
-         startPostMeet, finishPostMeet, switchProgram } from '../program.js';
+         startPostMeet, finishPostMeet, switchProgram, lightWeekDone } from '../program.js';
 import { DELOAD_CHECKLIST, WARMUP, RPE_SCALE, INTERMEDIATE_PL, ADVANCED_ACCUMULATION, ADVANCED_INTENSIFICATION } from '../templates.js';
 import { activeInsights, sessionBriefing, readinessVerdict, READINESS_QUESTIONS, PAIN_PROTOCOL,
          testReadiness, planTestBlock, testPromotion, restAdvice, TEST_PROMPT_QUIET_DAYS, fmtMax } from '../coach.js';
 import { byId } from '../exercises.js';
-import { buildProgram } from '../program.js';
 import { todayISO } from '../store.js';
 
 let readinessDraft = null;
@@ -76,7 +75,7 @@ function view(ctx) {
         ${raw(resolved.why ? `<div class="day-head__why">${esc(resolved.why)}</div>` : '')}
       </div>
 
-      ${raw(resolved.isIntro ? `<div class="banner banner--good"><b>Intro week</b><br>The first week back after the meet runs two-thirds of the written sets at the written loads. Expect to be sore anyway — that is the volume coming back after the taper. The full block starts next week.</div>` : '')}
+      ${raw(resolved.isIntro ? `<div class="banner banner--good"><b>Intro week: fewer sets, normal weights</b><br>The first week back after the meet runs two-thirds of the written sets. The weights are the block's real ones, so this is not a light week: the volume comes off, not the load. The full block starts next week.</div>` : '')}
 
       ${raw(brief.notes.filter((n) => n.kind === 'deload' || n.kind === 'painWeek' || n.kind === 'cycle').map((n) =>
         `<div class="banner ${n.kind === 'deload' ? 'banner--good' : n.kind === 'painWeek' ? 'banner--warn' : ''}"><b>${esc(n.title)}</b><br>${esc(n.text)}</div>`).join(''))}
@@ -424,7 +423,11 @@ function slotRow(s, i, units, st) {
         ${load
           ? `<div class="mono" style="font-size:${showRange ? '1.05' : '1.25'}rem;font-weight:700;letter-spacing:-.02em;white-space:nowrap">${showRange ? `${fmtLoadBare(range.low)}–${fmtLoadBare(range.high)}` : fmtLoadBare(load)}</div>
              <div class="tiny dim">${esc(units)}${!showRange && pb && !pb.ok ? ' ≈' : ''}</div>`
-          : `<span class="pill pill--warn">by feel</span>`}
+          : s.lastLoad != null
+            // No prescription here, only a memory: shown quieter than a target.
+            ? `<div class="mono dim" style="font-size:1.05rem;font-weight:600;white-space:nowrap">${fmtLoadBare(s.lastLoad)}</div>
+               <div class="tiny dim">last time</div>`
+            : `<span class="pill pill--warn">by feel</span>`}
       </div>
     </div>
   </div>`;
@@ -442,12 +445,16 @@ function warmupCard(resolved, st) {
   const lowRep = resolved.slots.some((s) => s.reps != null && s.reps <= 5);
   const scheme = lowRep ? WARMUP.lowRep : WARMUP.highRep;
   const units = st.profile.units;
-  const first = resolved.slots.find((s) => s.plannedLoad > 0 && !s.timed);
-  const ramp = first ? warmupFor(first.plannedLoad, first.reps, loadOptsForSlot(st, first.slotKey)) : null;
+  // The first barbell lift of the day, prescribed or not: a squat variation
+  // that opens the session needs a ramp as much as the bench after it does.
+  const first = resolved.slots.find((s) => !s.timed && (s.plannedLoad > 0
+    || (s.startLoad > 0 && (s.role === 'main' || s.role === 'variation'))));
+  const workLoad = first ? (first.plannedLoad ?? first.startLoad) : null;
+  const ramp = first ? warmupFor(workLoad, first.reps, loadOptsForSlot(st, first.slotKey)) : null;
 
   return `<details class="acc">
     <summary class="acc__head" style="list-style:none;cursor:pointer">
-      ${icon('chevron')}<b>Warm-up</b><span class="tiny dim">${esc(ramp ? `to ${fmtLoadBare(first.plannedLoad)} ${units}` : scheme.label)}</span>
+      ${icon('chevron')}<b>Warm-up</b><span class="tiny dim">${esc(ramp ? `to ${fmtLoadBare(workLoad)} ${units}` : scheme.label)}</span>
     </summary>
     <div class="acc__body">
       <p><b>General</b></p>
@@ -460,7 +467,7 @@ function warmupCard(resolved, st) {
           <td class="r mono">${fmtLoadBare(x.load)}${x.pct == null ? ' <span class="dim" style="font-weight:400">bar</span>' : ''}</td>
         </tr>`).join('')}
         <tr><td class="mono">${ramp.sets.length + 1}</td><td class="mono">${esc(String(first.reps ?? '—'))}</td>
-          <td class="r mono"><b>${fmtLoadBare(first.plannedLoad)}</b></td></tr></tbody>
+          <td class="r mono"><b>${fmtLoadBare(workLoad)}</b></td></tr></tbody>
       </table></div>
       <p class="cite" style="margin-top:10px">Every other lift today gets the same ramp against its own working weight — it is on each exercise card in the session. p. 224.</p>`
       : `<p style="margin-top:12px"><b>Ramp on your first heavy lift</b></p>
@@ -842,11 +849,14 @@ function mount(root, ctx) {
   $$('[data-block]', root).forEach((b) => b.onclick = async () => {
     const id = b.dataset.block;
     const accumulation = id === ADVANCED_ACCUMULATION.id;
+    // The intro week only runs for a lifter who skipped the light week (see `finishPostMeet`).
+    const am = ctx.state.program.afterMeet;
+    const intro = am?.introPending && !lightWeekDone(am);
     const yes = await confirmSheet({
       title: accumulation ? 'Start the accumulation block?' : 'Start the intensification block?',
       message: accumulation
-        ? 'Six days a week, higher reps, more accessory work. The first week runs two-thirds of the sets. Your history and maxes are kept, and you can switch back in Settings.'
-        : 'Fewer reps and heavier loads, with the accessories stripped back. Your history and maxes are kept, and you can switch back in Settings.',
+        ? `Six days a week, higher reps, more accessory work.${intro ? ' The first week runs two-thirds of the sets.' : ''} Your history, maxes and exercise choices are kept, and you can switch back in Settings.`
+        : 'Fewer reps and heavier loads, with the accessories stripped back. Your history, maxes and exercise choices are kept, and you can switch back in Settings.',
       confirmLabel: accumulation ? 'Start accumulation' : 'Start intensification',
     });
     if (!yes) return;
@@ -870,14 +880,11 @@ function mount(root, ctx) {
     });
     if (!yes) return;
     ctx.store.update((s) => {
-      const old = s.program;
-      s.program = buildProgram({
-        templateId: ADVANCED_ACCUMULATION.id,
-        emphasis: old.emphasis,
-        startDate: todayISO(),
-        meetDate: old.meetDate,
-      });
-      s.program.events.push({ date: todayISO(), kind: 'graduated', from: old.templateId });
+      // The same switch as Settings makes, so the exercise choices and the meet
+      // record come along rather than resetting to the book's defaults.
+      const from = s.program.templateId;
+      switchProgram(s, ADVANCED_ACCUMULATION.id);
+      s.program.events.push({ date: todayISO(), kind: 'graduated', from });
       s.profile.trainingAge = 'advanced';
     });
     toast('Advanced accumulation block started.', 'good');

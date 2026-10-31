@@ -360,29 +360,47 @@ const preStallAnchor = st.program.slots.d3_squat.week1Load;
 
 // week 1 of cycle 3: miss reps on the day-3 squat
 trainAsPrescribed();                                        // day 1
+const beforeD2 = store.getState().program.slots.d2_squat.stalls;
 trainAsPrescribed();                                        // day 2
-const stall = trainAsPrescribed({ d3_squat: { reps: 3 } });  // day 3, target was 5
-ok(stall.notes.some((n) => n.kind === 'stall'), 'missing reps on a strength day is flagged as a stall');
+const shortOnce = trainAsPrescribed({ d3_squat: { reps: 3 } });  // day 3, target was 5
+ok(shortOnce.notes.some((n) => n.kind === 'shortfall'), 'one short session on a lift is noted');
+ok(!shortOnce.notes.some((n) => n.kind === 'stall'), 'and is not a stall — one bad day is not a pattern');
+st = store.getState();
+eq(st.program.slots.d3_squat.stalls, 0, 'nothing is counted against the slot');
+ok(!st.program.forcedDeload, 'and no deload is forced');
+eq(st.program.shortfalls.squat?.date, shortOnce.session.date, 'but the squat remembers it came up short');
+
+trainAsPrescribed();                                        // day 4
+// week 2. The volume-day bench comes up short, then on day 3 the squat comes
+// up short again and so does the strength-day bench.
+trainAsPrescribed({ d1_bench: { reps: 6 } });               // day 1, target was 8
+trainAsPrescribed({ d2_squat: { reps: 1 } });               // day 2: technique work, deliberately short
+const stall = trainAsPrescribed({ d3_squat: { reps: 2 }, d3_bench: { reps: 2 } });   // day 3, targets were 4
+ok(stall.notes.some((n) => n.kind === 'stall' && /squat/i.test(n.title)), 'the second short squat session running is the stall');
 st = store.getState();
 ok(st.program.slots.d3_squat.stalledThisCycle, 'slot marked as stalled this cycle');
 eq(st.program.slots.d3_squat.stalls, 1, 'stall counted');
-ok(st.program.forcedDeload, 'a stall forces the week-4 deload');
+ok(stall.notes.some((n) => n.kind === 'stall' && /bench/i.test(n.title)),
+   'a short volume-day bench and then a short strength-day bench are two in a row on the bench');
+ok(st.program.slots.d1_bench.stalledThisCycle && st.program.slots.d3_bench.stalledThisCycle,
+   'and both bench slots that came up short restart lighter');
+ok(st.program.forcedDeload, 'two stalled lifts in one cycle force the week-4 deload');
+ok(/2 stalled lifts this cycle \(squat and bench\)/.test(stall.notes.map((n) => n.text).join(' ')),
+   'and the note says which two');
 
 trainAsPrescribed();                                        // day 4
 // day 2 is meant to stay submaximal — a short day-2 session must NOT count
-const beforeD2 = store.getState().program.slots.d2_squat.stalls;
-for (let w = 0; w < 2; w++) {
-  trainAsPrescribed();                                      // day 1
-  trainAsPrescribed({ d2_squat: { reps: 1 } });             // day 2, deliberately short
-  trainAsPrescribed();                                      // day 3
-  trainAsPrescribed();                                      // day 4
-}
+trainAsPrescribed();                                        // week 3 day 1
+trainAsPrescribed({ d2_squat: { reps: 1 } });               // day 2, deliberately short again
+trainAsPrescribed();                                        // day 3
+trainAsPrescribed();                                        // day 4
 st = store.getState();
 eq(st.program.slots.d2_squat.stalls, beforeD2, 'a short day-2 (technique) session is not a stall');
 
-// even a clean checklist must give us the deload, because we stalled
+// even a clean checklist must give us the deload, because two lifts stalled
 store.update((s) => { res = resolveAssessment(s, {}); });
-eq(res.action, 'deload', 'a stall overrides a clean checklist');
+eq(res.action, 'deload', 'two stalled lifts override a clean checklist');
+ok(res.reasons.some((r) => /squat and bench both stalled/.test(r)), 'and the verdict says why', res.reasons.join(' | '));
 st = store.getState();
 [1, 2, 3, 4].forEach(() => trainAsPrescribed());
 st = store.getState();
@@ -1061,13 +1079,18 @@ hr('15. Three-day schedule');
   eq(store.getState().program.slots.d2_squat.stalls, 0, 'no stall on the technique squat');
   eq(store.getState().program.slots.d2_bench.stalls, 0, 'no stall on the technique bench');
 
-  // But the genuinely heavy work on the same day still stalls normally.
-  const r4 = trainAsPrescribed({ d4_dead: { reps: 1 } });  // week 2 day 1... walk to day 3
+  // But the genuinely heavy work on the same day is read normally: short once
+  // is noted, and short again the week after is the stall.
   let guard = 0;
   while (store.getState().program.cursor.day !== 3 && guard++ < 5) trainAsPrescribed();
   const heavy = trainAsPrescribed({ d4_dead: { reps: 1 } });
-  ok(heavy.notes.some((n) => n.kind === 'stall') || store.getState().program.slots.d4_dead.stalls > 0,
-     'the heavy deadlift on that same day does still stall');
+  ok(heavy.notes.some((n) => n.kind === 'shortfall' && n.slotKey === 'd4_dead'),
+     'the heavy deadlift on that same day is read as coming up short');
+  guard = 0;
+  while (store.getState().program.cursor.day !== 3 && guard++ < 5) trainAsPrescribed();
+  const again = trainAsPrescribed({ d4_dead: { reps: 1 } });
+  ok(again.notes.some((n) => n.kind === 'stall') && store.getState().program.slots.d4_dead.stalls > 0,
+     'and short again the week after, it stalls');
 }
 
 // Switching between the two schedules carries choices, anchors and history.
@@ -1657,9 +1680,12 @@ hr('17. The peaking block');
   }
   // The load is untouched by the volume cut — intensity is the half that stays.
   {
-    const wave = resolveDay(store.getState(), { week: 1, day: 1, phase: 'load' }).slots.find((x) => x.slotKey === 'd1_sqvar');
+    const d1 = resolveDay(store.getState(), { week: 1, day: 1, phase: 'load' });
+    const wave = d1.slots.find((x) => x.slotKey === 'd1_bench');
     eq(wave.reps, 9, 'the thinned slots still run their own wave');
     eq(wave.loadSource, 'wave', 'off their own anchor');
+    eq(d1.slots.find((x) => x.slotKey === 'd1_sqvar').loadSource, 'lastTime',
+       'while the variation beside it shows last time, as it does every week');
   }
 
   /* ---- week 3 deloads everything the block is not made of ---- */
@@ -2236,24 +2262,73 @@ hr('21. Shortfall vs stall');
   ok(!notes.some((n) => n.kind === 'stall'), 'and is not a stall');
   eq(store.getState().program.slots.d3_squat.stalls, 0, 'nothing is counted against the slot');
   eq(store.getState().program.forcedDeload, false, 'and no deload is forced off one rep');
-  ok(store.getState().program.slots.d3_squat.lastShortfall, 'but it is remembered');
+  ok(store.getState().program.shortfalls.squat, 'but the squat remembers it');
 
   trainDay();                                                    // day 4
   trainDay(); trainDay();                                        // week 2 days 1, 2
   notes = trainDay({ d3_squat: { lastRep: 3 } });                // week 2 day 3, short again
   ok(notes.some((n) => n.kind === 'stall'), 'the second one is the stall');
   eq(store.getState().program.slots.d3_squat.stalls, 1, 'counted once');
-  ok(store.getState().program.forcedDeload, 'and it forces the week-4 deload');
+  eq(store.getState().program.forcedDeload, false, 'but one stalled lift does not force the deload');
+  ok(/does not force a deload/.test(notes.find((n) => n.kind === 'stall').text), 'and the note says the checklist still decides');
+  eq(activeInsights(store.getState()).filter((i) => i.kind === 'stall').length, 0,
+    'nor does it put a warning on the home screen every day until the cycle ends');
 
   /* ---- and a clean session clears the memory ---- */
   store.update((s) => {
-    s.program.slots.d3_squat.lastShortfall = { date: '2026-01-01', week: 1 };
+    s.program.shortfalls.squat = { date: '2026-01-01', week: 1, slots: [{ slotKey: 'd3_squat', load: 125 }] };
     s.program.slots.d3_squat.stalledThisCycle = false;
   });
   trainDay();                                                    // day 4, clean
   trainDay(); trainDay(); trainDay();                            // week 3 up to day 3, clean
-  eq(store.getState().program.slots.d3_squat.lastShortfall, null,
+  eq(store.getState().program.shortfalls.squat, null,
     'a session that goes to plan wipes the slate — the rule is two in a row, not two ever');
+
+  /* ---- what is not a shortfall at all ---- */
+  // 2.5 kg under a 130 kg prescription is the lifter reading the warm-ups, which
+  // is what the RPE asks them to do.
+  const under = entry({ prescribedLoad: 130, plannedLoad: 127.5, sets: entry().sets.map((x) => ({ ...x, load: 127.5 })) });
+  eq(kind(under, { step: 1.25 }), 'none', '2.5 kg under the prescription is not coming up short');
+  const wellUnder = entry({ prescribedLoad: 130, plannedLoad: 120, sets: entry().sets.map((x) => ({ ...x, load: 120 })) });
+  eq(kind(wellUnder, { step: 1.25 }), 'hard', 'ten kilos under is');
+  // Working up across the sets: the heaviest set reached the weight.
+  const rampUp = entry({ sets: [{ done: true, load: 90, reps: 5, rpe: 7 }, { done: true, load: 100, reps: 5, rpe: 8 }, { done: true, load: 100, reps: 5, rpe: 9 }] });
+  eq(kind(rampUp), 'none', 'working up to the prescription is not a light bar');
+  // The working load is not a prescription. A slot with none, worked up from 40
+  // to 45, used to read as "the first set was lighter than prescribed".
+  const noRx = entry({ prescribedLoad: null, plannedLoad: 45, sets: [{ done: true, load: 40, reps: 5, rpe: 6 }, { done: true, load: 45, reps: 5, rpe: 7 }, { done: true, load: 45, reps: 5, rpe: 7 }] });
+  eq(kind(noRx), 'none', 'with nothing prescribed, no weight can be lighter than prescribed');
+}
+
+/* ---- accessories never stall; two stalled lifts force the deload ---- */
+{
+  store.update((s) => {
+    Object.assign(s, store.defaultState());
+    s.maxes = { squat: { value: 150 }, bench: { value: 100 }, deadlift: { value: 170 } };
+    s.program = buildProgram({});
+    for (const k of Object.keys(s.program.slots)) s.program.slots[k].week1Load = 60;
+  });
+  const day = (over = {}) => {
+    const st0 = store.getState();
+    const ses = startSession(st0, st0.program.cursor);
+    for (const e of ses.entries) {
+      const o = over[e.slotKey] || {};
+      e.sets = e.sets.map((x) => ({ load: o.load ?? x.load ?? e.plannedLoad ?? 60, reps: o.reps ?? e.targetReps ?? 1,
+                                    rpe: e.targetRPE ?? 8, done: true, ts: new Date().toISOString() }));
+    }
+    store.update((s) => { s.sessions.push(ses); s.activeSessionId = ses.id; });
+    let notes = [];
+    store.update((s) => { notes = completeSession(s, ses.id).notes; s.activeSessionId = null; });
+    return notes;
+  };
+  // Two weeks of every accessory and variation coming up badly short.
+  const wreck = { d1_sqvar: { reps: 2 }, d1_verpull: { reps: 2, load: 7 }, d2_verpush: { reps: 1 }, d3_horpull: { reps: 1 },
+                  d3_legcurl: { reps: 2, load: 3 }, d4_bevar: { reps: 2 }, d4_horpull: { reps: 2 } };
+  let all = [];
+  for (let i = 0; i < 8; i++) all.push(...day(wreck));
+  ok(!all.some((n) => n.kind === 'stall' || n.kind === 'shortfall'), 'no accessory or variation ever stalls, however it goes');
+  ok(Object.values(store.getState().program.slots).every((x) => !x.stalledThisCycle && !x.stalls), 'and none is marked');
+  eq(store.getState().program.forcedDeload, false, 'so nothing forces a deload');
 }
 
 /* ======================================================================
@@ -2277,7 +2352,11 @@ hr('22. Loading grids');
   ok(plateBreakdown(72, { ...gym, loading: stack }).ladder, 'a stack has no plate breakdown');
   eq(plateBreakdown(72, { ...gym, loading: stack }).perSide.length, 0, 'because it has no sides');
 
-  /* ---- the whole point: a machine slot stops printing weights that do not exist ---- */
+  /* ---- a machine accessory is not given a weight at all ---- */
+  // It used to be, rounded onto the stack, and that was the right fix for the
+  // wrong problem: the prescription was on the grid but it was for the last
+  // machine, and lifting what this one said read as a stall. Now it shows what
+  // was done last time, and the grid only rounds the stepper.
   store.update((s) => {
     Object.assign(s, store.defaultState());
     s.maxes = { squat: { value: 150 }, bench: { value: 100 }, deadlift: { value: 170 } };
@@ -2290,69 +2369,87 @@ hr('22. Loading grids');
   });
 
   const pull = () => resolveDay(store.getState(), { week: 1, day: 1 }).slots.find((x) => x.slotKey === 'd1_verpull');
-  eq(pull().plannedLoad, 72, 'week 1 asks for a weight the stack has');
-  {
-    const r = pull().loadRange;
-    eq(roundToLoadable(r.low, loadOptsFor(store.getState(), 'lat-pulldown')), r.low, 'and so are both ends of the range');
-    eq(roundToLoadable(r.high, loadOptsFor(store.getState(), 'lat-pulldown')), r.high, '');
-  }
+  eq(pull().plannedLoad, null, 'a pulldown is not prescribed a weight, even with an anchor on file');
+  eq(pull().loadRange, null, 'nor a window around one');
+  eq(pull().loadSource, 'discover', 'with nothing logged on it, it is worked up by feel');
+  eq(pull().gridStep, 8, 'but it still knows its stack steps in 8s, for the stepper');
   const bench = resolveDay(store.getState(), { week: 1, day: 1 }).slots.find((x) => x.slotKey === 'd1_bench');
   eq(roundToLoadable(bench.plannedLoad, { barWeight: 20, plates: [25, 20, 15, 10, 5, 2.5, 1.25] }), bench.plannedLoad,
-    'while the bench in the same session still rounds onto the bar');
+    'while the bench in the same session is prescribed, on the bar');
 
-  /* ---- and the progression still moves, three cycles at a time ---- */
-  const trainDay = () => {
+  const trainDay = (over = {}) => {
     const st0 = store.getState();
     const ses = startSession(st0, st0.program.cursor);
     for (const e of ses.entries) {
-      e.sets = e.sets.map((x) => ({ load: x.load ?? e.plannedLoad ?? 60, reps: e.targetReps ?? 1,
+      const o = over[e.slotKey] || {};
+      e.sets = e.sets.map((x) => ({ load: o.load ?? x.load ?? e.plannedLoad ?? 60, reps: e.targetReps ?? 1,
                                     rpe: e.targetRPE ?? 8, done: true, ts: new Date().toISOString() }));
     }
     store.update((s) => { s.sessions.push(ses); s.activeSessionId = ses.id; });
     let notes = [];
     store.update((s) => { notes = completeSession(s, ses.id).notes; s.activeSessionId = null; });
-    return notes;
+    return { notes, ses };
   };
 
-  // The regression this locks down. A 2.5 kg weekly increment is a third of one
-  // notch on this stack, so the anchor has to carry the fraction across cycles.
-  // Writing the rounded load back on week 1 — which is what "the anchor is what
-  // you lifted" does — threw it away every cycle and froze the slot forever.
-  store.update((s) => { s.program.slots.d1_verpull.week1Load = 74.5; });
-  eq(pull().plannedLoad, 72, 'an anchor of 74.5 still asks for 72');
-  let notes = trainDay();
-  eq(store.getState().program.slots.d1_verpull.week1Load, 74.5,
-    'and logging that 72 leaves the 74.5 alone, because 72 is what 74.5 rounds to');
-  ok(!notes.some((n) => n.kind === 'stall' || n.kind === 'shortfall'),
-    'lifting exactly what a machine slot asked for is neither a stall nor a shortfall');
-
-  // ...while a weight the lifter actually chose still re-anchors the slot.
-  store.update((s) => { s.program.cursor.week = 1; s.program.cursor.day = 1; s.program.cursor.phase = 'load'; });
+  let { notes, ses: first } = trainDay({ d1_verpull: { load: 72 } });
+  eq(first.entries.find((e) => e.slotKey === 'd1_verpull').prescribedLoad, null, 'nothing was prescribed');
+  ok(!notes.some((n) => n.kind === 'stall' || n.kind === 'shortfall'), 'so nothing can fall short of it');
+  eq(store.getState().program.slots.d1_verpull.week1Load, 72, 'and no anchor is written from it');
   {
-    const st0 = store.getState();
-    const ses = startSession(st0, st0.program.cursor);
-    const e = ses.entries.find((x) => x.slotKey === 'd1_verpull');
-    e.sets = e.sets.map((x) => ({ ...x, load: 80, reps: e.targetReps, rpe: 8, done: true, ts: new Date().toISOString() }));
-    for (const other of ses.entries) {
-      if (other === e) continue;
-      other.sets = other.sets.map((x) => ({ load: x.load ?? other.plannedLoad ?? 60, reps: other.targetReps ?? 1,
-                                            rpe: other.targetRPE ?? 8, done: true, ts: new Date().toISOString() }));
-    }
-    store.update((s) => { s.sessions.push(ses); s.activeSessionId = ses.id; });
-    store.update((s) => { completeSession(s, ses.id); s.activeSessionId = null; });
+    const p = pull();
+    eq(p.loadSource, 'lastTime', 'next time it shows what was done instead');
+    eq(p.lastLoad, 72, 'where the lifter finished');
+    eq(p.startLoad, 72, 'pre-filled, so the same machine is one tap');
+    ok(/last time/i.test(p.loadNote), 'and says the weight is theirs to pick', p.loadNote);
+    const next = startSession(store.getState(), { cycle: 1, week: 1, day: 1, phase: 'load' });
+    const e = next.entries.find((x) => x.slotKey === 'd1_verpull');
+    eq(e.plannedLoad, 72, 'the working load starts there');
+    ok(e.sets.every((x) => x.load === 72), 'and so does every set');
+    eq(e.prescribedLoad, null, 'but it is still not a prescription');
   }
-  eq(store.getState().program.slots.d1_verpull.week1Load, 80,
-    'going up a notch on purpose is taken as the new anchor');
 
-  // Three cycles of the fraction accumulating, and the stack steps.
-  store.update((s) => { s.program.slots.d1_verpull.week1Load = 72; });
+  // A different machine, whose stack is numbered 1 to 8 and not in kilos.
+  store.update((s) => { s.program.cursor.week = 1; s.program.cursor.day = 1; s.program.cursor.phase = 'load'; });
+  ({ notes } = trainDay({ d1_verpull: { load: 7 } }));
+  ok(!notes.some((n) => n.kind === 'stall' || n.kind === 'shortfall'),
+    'logging a pin number on another machine is not a stall, a shortfall, or anything else');
+  eq(store.getState().program.forcedDeload, false, 'and forces no deload');
+  eq(pull().lastLoad, 7, 'next time it simply shows the 7');
+
+  /* ---- the fraction still carries on a prescribed lift ---- */
+  // The regression this locks down. On a gym with no small plates the bar steps
+  // in 10s, so a 2.5 kg weekly increment is a quarter of one notch, and the
+  // anchor has to carry the fraction across cycles. Writing the rounded load
+  // back on week 1 — which is what "the anchor is what you lifted" does — threw
+  // it away every cycle and froze the lift forever.
+  store.update((s) => {
+    s.profile.plates = [20, 10, 5];
+    s.profile.microplates = false;
+    s.program.slots.d3_bench.week1Load = 74.5;
+    s.program.cursor.week = 1; s.program.cursor.day = 3; s.program.cursor.phase = 'load';
+  });
+  const press = () => resolveDay(store.getState(), { week: 1, day: 3 }).slots.find((x) => x.slotKey === 'd3_bench');
+  eq(press().plannedLoad, 70, 'an anchor of 74.5 asks for 70 on a bar that steps in 10s');
+  ({ notes } = trainDay());
+  eq(store.getState().program.slots.d3_bench.week1Load, 74.5,
+    'and logging that 70 leaves the 74.5 alone, because 70 is what 74.5 rounds to');
+  ok(!notes.some((n) => n.kind === 'stall' || n.kind === 'shortfall'),
+    'lifting exactly what a coarse bar asked for is neither a stall nor a shortfall');
+
+  // ...while a weight the lifter actually chose still re-anchors the lift.
+  store.update((s) => { s.program.cursor.week = 1; s.program.cursor.day = 3; s.program.cursor.phase = 'load'; });
+  trainDay({ d3_bench: { load: 80 } });
+  eq(store.getState().program.slots.d3_bench.week1Load, 80, 'going up a notch on purpose is taken as the new anchor');
+
+  // Three cycles of the fraction accumulating, and the bar steps.
+  store.update((s) => { s.program.slots.d3_bench.week1Load = 72; });
   const anchors = [72];
   for (let i = 0; i < 3; i++) {
     store.update((s) => { startNextCycle(s); });
-    anchors.push(store.getState().program.slots.d1_verpull.week1Load);
+    anchors.push(store.getState().program.slots.d3_bench.week1Load);
   }
   eq(anchors.join(' '), '72 74.5 77 79.5', 'the anchor carries 2.5 kg a cycle exactly');
-  eq(pull().plannedLoad, 80, 'and by the third the stack has moved a notch', anchors.join(' -> '));
+  eq(press().plannedLoad, 80, 'and by the third the bar has moved a notch', anchors.join(' -> '));
 }
 
 /* ======================================================================
@@ -3847,22 +3944,27 @@ hr('29. After the meet');
   eq(st.program.cursor.phase, 'load', 'four sessions and the week is over');
   eq(st.program.afterMeet.doneAt, today, 'and it says when');
 
-  /* ---- staying on the program: the first week back is the intro ---- */
-  const intro = resolveDay(st);
-  ok(intro.isIntro, 'the first loading week after the light week is the intro week');
-  const full = templateOf(st.program).days.find((d) => d.n === intro.day);
-  intro.slots.forEach((x, i) => eq(x.sets, Math.max(1, full.slots[i].sets > 1 ? Math.floor(full.slots[i].sets * 2 / 3) : full.slots[i].sets),
-    `${x.slotKey}: two-thirds of the sets, rounded down`));
+  /* ---- staying on the program: the light week was the way back in ---- */
+  // Four sessions of twenty-odd sets each have already brought the volume back.
+  // Thinning the first loading week as well gave the lifter a second
+  // light-looking week with full weights on the bar.
+  eq(st.program.afterMeet.introPending, false, 'a light week that was done cancels the intro week');
+  const back = resolveDay(st);
+  ok(!back.isIntro, 'so the first loading week back is not one');
+  const full = templateOf(st.program).days.find((d) => d.n === back.day);
+  back.slots.forEach((x, i) => eq(x.sets, full.slots[i].sets, `${x.slotKey}: every written set`));
+  ok(!/two-thirds/.test(activeInsights(st).map((i) => i.text).join(' ')), 'and nothing on the home screen promises a thinned week');
 
   /* ---- switching to accumulation keeps the training maxes ---- */
+  store.update((s) => { s.program.choices.d1_verpull = 'lat-pulldown'; s.program.choices.d2_verpush = 'dips'; });
   store.update((s) => { switchProgram(s, ADVANCED_ACCUMULATION.id); });
   st = store.getState();
   eq(st.program.templateId, ADVANCED_ACCUMULATION.id, 'accumulation started');
   eq(st.program.afterMeet?.trainingMaxes?.deadlift, 162.5, 'with the training maxes carried over');
   const a5 = resolveDay(st, { day: 5 });
-  ok(a5.isIntro, 'its first week is the intro week');
+  ok(!a5.isIntro, 'and no intro week there either');
   const a5sq = a5.slots.find((x) => x.slotKey === 'a5_squat');
-  eq(a5sq.sets, 2, '3 written sets become 2');
+  eq(a5sq.sets, 3, 'all three written sets');
   eq(a5sq.plannedLoad, 120, 'strength-day squat is 82.5% of the 145 training max, not of 160');
   ok(/training max/.test(a5sq.loadNote), 'and the note says what it is built from');
   const a6dl = resolveDay(st, { day: 6 }).slots.find((x) => x.slotKey === 'a6_dead');
@@ -3872,12 +3974,34 @@ hr('29. After the meet');
   ok(Math.abs(a5sq.rateBasis.value - 145) > 1, 'while the RPE readout still rates against the real max');
   eq(postMeetStatus(st), null, 'and the post-meet card goes quiet once a block is running');
 
-  /* ---- a week of accumulation ends the intro ---- */
+  /* ---- what was picked, and what was done, carry across the switch ---- */
+  eq(st.program.choices.a1_verpull, 'lat-pulldown', 'the pulldown picked on the four-day is the accumulation pulldown');
+  eq(st.program.choices.a2_verpush, 'dips', 'and the dips carry to the vertical push, though the days differ');
+  eq(st.program.choices.a5_squat, competitionChoice(st, 'squat'), 'the competition squat is the competition squat');
+  {
+    const pulldown = resolveDay(st, { day: 1 }).slots.find((x) => x.slotKey === 'a1_verpull');
+    eq(pulldown.plannedLoad, null, 'the pulldown has no set weight');
+    ok(pulldown.lastTime?.phase === 'postMeet', 'but it shows the light week\'s pulldown: a different slot, a different program, the same exercise');
+    eq(pulldown.lastTime?.source, 'exercise', 'found by the exercise');
+    eq(pulldown.lastLoad, 20, 'with the weight the lifter used');
+    // The only squats on record are the meet's singles and the light week's
+    // fives, and neither is a strength day.
+    eq(lastComparable(st, 'a5_squat', { reps: 5 }), null,
+       'while a strength-day squat is never compared with light-week fives or a meet single');
+  }
+
+  /* ---- a week of accumulation ---- */
   for (let i = 0; i < 6; i++) train(7);
   st = store.getState();
   eq(st.program.cursor.week, 2, 'week 2 of accumulation');
   ok(!resolveDay(st).isIntro, 'runs the block as written');
   eq(resolveDay(st, { day: 5 }).slots.find((x) => x.slotKey === 'a5_squat').sets, 3, 'with all three sets');
+  {
+    const pulldown = resolveDay(st, { day: 1 }).slots.find((x) => x.slotKey === 'a1_verpull');
+    eq(pulldown.lastTime?.source, 'slot', 'a week in, last time is last week, on this day');
+    const squat = resolveDay(st, { day: 5 }).slots.find((x) => x.slotKey === 'a5_squat');
+    eq(squat.lastTime?.slotKey, 'a5_squat', 'and the strength-day squat has its own');
+  }
 
   /* ---- accumulation done: intensification is suggested ---- */
   store.update((s) => { s.program.cursor.cycle = 2; s.program.cursor.week = 1; });
@@ -3912,6 +4036,112 @@ hr('29. After the meet');
   eq(store.getState().program.cursor.phase, 'load', 'ending it early puts the program back on day 1');
   store.update((s) => { delete s.program.afterMeet; s.sessions.push({ status: 'done', date: at(1), phase: 'load', entries: [] }); });
   eq(postMeetStatus(store.getState(), { today: at(2) }), null, 'no offer once normal training has resumed');
+
+  /* ---- a light week cut short still gets the intro week ---- */
+  logMeet();
+  train();                                         // one light session
+  store.update((s) => { finishPostMeet(s); });    // and the rest skipped
+  st = store.getState();
+  ok(st.program.afterMeet.introPending, 'one light session is not the light week, so the intro stays');
+  store.update((s) => { switchProgram(s, ADVANCED_ACCUMULATION.id); });
+  st = store.getState();
+  const cut = resolveDay(st, { day: 5 });
+  ok(cut.isIntro, 'and the block\'s first week is the intro week');
+  eq(cut.slots.find((x) => x.slotKey === 'a5_squat').sets, 2, '3 written sets become 2');
+  const brief = sessionBriefing(cut, st).notes;
+  eq(brief[0]?.kind, 'intro', 'the session says so itself, not only the home screen');
+  ok(/not a light week/.test(brief[0]?.text || ''), 'and that it is fewer sets, not lighter weights');
+}
+
+/* ======================================================================
+   30. A program carrying the old stall marks
+   ----------------------------------------------------------------------
+   The phone that prompted the new rules: accumulation week 1, the face
+   pull and the dips "stalled" under the old ones, a bench 2.5 kg under
+   its prescription counted as a stall too, and the deload forced. The
+   first launch of the new build has to read that cycle again.
+   ====================================================================== */
+hr('30. Old stall marks');
+{
+  const { reviewStalls, stalledLifts, STALL_RULES } = await import('./program.js');
+  store.update((s) => {
+    Object.assign(s, store.defaultState());
+    s.maxes = { squat: { value: 160, date: store.todayISO(), source: 'tested' }, bench: { value: 100, date: store.todayISO(), source: 'entered' },
+                deadlift: { value: 180, date: store.todayISO(), source: 'tested' } };
+    s.program = buildProgram({ templateId: ADVANCED_ACCUMULATION.id });
+  });
+  const day = (over = {}) => {
+    store.update((s) => {
+      const ses = startSession(s, { ...s.program.cursor });
+      for (const e of ses.entries) {
+        const o = over[e.slotKey];
+        e.sets = o ? o.map(([load, reps, rpe]) => ({ load, reps, rpe, done: true }))
+          : e.sets.map((x) => ({ load: x.load ?? e.plannedLoad ?? 20, reps: e.targetReps ?? 10, rpe: 7, done: true }));
+      }
+      s.sessions.push(ses);
+      completeSession(s, ses.id);
+    });
+  };
+  day();
+  day({ a2_verpush: [[22, 6, 10], [22, 6, 10], [22, 6, 10]] });
+  day(); day();
+  const rx = resolveDay(store.getState()).slots.find((x) => x.slotKey === 'a5_bench').plannedLoad;
+  day({ a5_bench: [[rx - 2.5, 5, 8], [rx - 2.5, 5, 8], [rx - 2.5, 5, 8]], a5_facepull: [[40, 12, 6], [45, 12, 7], [45, 12, 7]] });
+
+  // What the old rules left on the program.
+  store.update((s) => {
+    for (const k of ['a2_verpush', 'a5_facepull', 'a5_bench']) Object.assign(s.program.slots[k], { stalledThisCycle: true, stalls: 1, stalledAtLoad: 40 });
+    s.program.slots.a5_squat.lastShortfall = { date: store.todayISO(), week: 1, cycle: 1 };
+    s.program.forcedDeload = true;
+    delete s.program.stallRules;
+    delete s.program.shortfalls;
+  });
+
+  let changed = false;
+  store.update((s) => { changed = reviewStalls(s); });
+  let st = store.getState();
+  ok(changed, 'a program from before the new rules is reviewed');
+  eq(st.program.forcedDeload, false, 'the forced deload goes');
+  eq(stalledLifts(st.program).length, 0, 'no lift is left stalled');
+  ok(Object.values(st.program.slots).every((x) => !x.stalledThisCycle), 'no slot is left marked');
+  eq(st.program.slots.a5_facepull.stalls, 0, 'and the face pull gets its stall back');
+  ok(Object.values(st.program.slots).every((x) => !('lastShortfall' in x)), 'the per-slot memory is gone');
+  eq(st.program.stallRules, STALL_RULES, 'stamped with the rules it now follows');
+  store.update((s) => { changed = reviewStalls(s); });
+  ok(!changed, 'and it runs once');
+
+  // A real stall survives the review: the strength-day squat short two weeks running.
+  store.update((s) => {
+    for (const x of s.sessions) if (x.day === 5) {
+      const sq = x.entries.find((e) => e.slotKey === 'a5_squat');
+      sq.sets = sq.sets.map((set) => ({ ...set, reps: 2 }));
+    }
+  });
+  day();                                       // day 6, the end of week 1
+  for (let i = 0; i < 4; i++) day();           // week 2, days 1-4
+  day({ a5_squat: [[100, 2, 9.5], [100, 2, 10]] });
+  store.update((s) => {
+    s.program.slots.a5_squat.stalledThisCycle = false;
+    s.program.slots.a5_squat.stalls = 0;
+    delete s.program.stallRules;
+  });
+  store.update((s) => { reviewStalls(s); });
+  st = store.getState();
+  ok(st.program.slots.a5_squat.stalledThisCycle, 'while a squat short two sessions running is still a stall after the review');
+  eq(st.program.forcedDeload, false, 'which on its own forces nothing');
+
+  /* ---- and the choices made in this block carry to the next ---- */
+  store.update((s) => {
+    s.program.choices.a1_sqvar = 'pause-squat';
+    s.program.choices.a2_verpush = 'dips';
+    s.program.choices.a3_horpull = 'cable-row';
+    switchProgram(s, ADVANCED_INTENSIFICATION.id);
+  });
+  st = store.getState();
+  eq(st.program.choices.i1_sqvar, 'pause-squat', 'the pause squat carries into intensification');
+  eq(st.program.choices.i2_verpush, 'dips', 'and the dips, to the same day');
+  eq(st.program.choices.i3_horpull, 'cable-row', 'and the cable row');
+  ok(st.program.stallRules === STALL_RULES && !st.program.forcedDeload, 'the new block starts clean');
 }
 
 /* ======================================================================

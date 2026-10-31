@@ -20,7 +20,7 @@ import { todayISO } from './store.js';
 import { pctOf1RM, loadFor, rpeFor, e1RM, roundToLoadable, loadStep, plateBreakdown, normalizeRPE,
          repsLeftWords, RPE_MIN, RPE_MAX } from './rpe.js';
 import { workingMaxDetail, easyMaxDetail, attemptsFor, missedAttempts, goalFor, goalPace, peakStatus,
-         daysUntil, loadOptsFor, competitionChoice, resolveDay, templateOf,
+         daysUntil, loadOptsFor, competitionChoice, resolveDay, templateOf, liftSlotKeys,
          RELIABLE_E1RM_REPS } from './program.js';
 import { strengthTrend, trendSummary, rpeCalibration, REFERENCE, PLATEAU_TREE, FAULTS, PAIN_PROTOCOL,
          STICKING_POINT_PREAMBLE } from './coach.js';
@@ -259,7 +259,9 @@ function maxToUse(state, lift, { max, basis = 'easy', today }) {
 function entryLift(state, entry) {
   const tpl = templateOf(state.program);
   for (const d of tpl.days) for (const s of d.slots) if (s.key === entry.slotKey) return s.lift || null;
-  return entry.slotKey?.startsWith('test_') ? entry.slotKey.slice(5) : null;
+  if (entry.slotKey?.startsWith('test_')) return entry.slotKey.slice(5);
+  // A session logged on an earlier program still trained the lift it trained.
+  return LIFTS.find((lift) => liftSlotKeys(lift).includes(entry.slotKey)) || null;
 }
 
 function sessionOut(state, ses) {
@@ -339,6 +341,12 @@ const IMPL = {
           loadRange: s.loadRange ? { low: r1(s.loadRange.low), high: r1(s.loadRange.high) } : null,
           pctOfMax: r1(s.pct),
           deload: !!s.slotDeload,
+          // Accessories and variations have no prescribed load: the lifter
+          // picks it from what they did last time, which is this.
+          ...(s.plannedLoad == null && s.lastTime ? { noSetWeight: true, lastTime: {
+            date: s.lastTime.date,
+            sets: s.lastTime.sets.map((x) => `${r1(x.load)}x${x.reps}${x.rpe != null ? `@${x.rpe}` : ''}`),
+          } } : {}),
         })),
       },
     };

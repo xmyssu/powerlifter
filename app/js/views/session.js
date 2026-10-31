@@ -8,10 +8,10 @@
    from a timestamp so locking the phone cannot break it.
    ========================================================================== */
 
-import { html, raw, esc, icon, $, $$, toast, sheet, closeSheet, confirmSheet, fmtDuration, haptic } from '../ui.js';
+import { html, raw, esc, icon, $, $$, toast, sheet, closeSheet, confirmSheet, fmtDuration, haptic, fmtDate } from '../ui.js';
 import { fmtLoadBare, plateBreakdown, roundToLoadable, loadStep, e1RM, fmtRPE, normalizeRPE, loadFor, parseNum, convertLoad,
          rpeFor, pctOf1RM, repsLeftWords, RPE_MIN, RPE_MAX } from '../rpe.js';
-import { resolveDay, completeSession, discardSession, slotHistory, lastComparable, templateOf,
+import { resolveDay, completeSession, discardSession, slotHistory, lastComparable, lastLoadOf, templateOf,
          loadOptsFor, warmupFor, isSubmaximalSlot, isCompetitionSlot, easyMaxDetail, RELIABLE_E1RM_REPS,
          pctCaption, heavyCheckMax, readsHeavy, cardDropLoad } from '../program.js';
 import { RPE_SCALE, REST_GUIDE } from '../templates.js';
@@ -76,7 +76,10 @@ function view(ctx) {
     <div class="row-between" style="margin-bottom:14px">
       <button class="btn btn--bare" data-home aria-label="Back">${raw(icon('back'))}</button>
       <div class="center grow">
-        <div class="eyebrow">${esc(resolved.isMeet ? 'Meet day' : resolved.isTest ? 'Test day' : resolved.isPeak ? resolved.label : resolved.isDeload ? 'Deload' : resolved.isPainWeek ? 'High-rep week' : `Cycle ${ses.cycle} · Week ${ses.week} · Day ${ses.day}`)}</div>
+        <div class="eyebrow">${esc(resolved.isMeet ? 'Meet day' : resolved.isTest ? 'Test day' : resolved.isPeak ? resolved.label : resolved.isDeload ? 'Deload' : resolved.isPainWeek ? 'High-rep week'
+          : resolved.isPostMeet ? `Post-meet week · Day ${ses.day}`
+          : resolved.isIntro ? `Cycle ${ses.cycle} · Intro week · Day ${ses.day}`
+          : `Cycle ${ses.cycle} · Week ${ses.week} · Day ${ses.day}`)}</div>
         <div class="tiny dim" style="margin-top:2px">${doneSets} / ${totalSets} sets</div>
       </div>
       <button class="btn btn--bare" data-ask aria-label="Ask the coach">${raw(icon('chat'))}</button>
@@ -248,6 +251,24 @@ function rxStrip(entry, slot, st) {
   const pb = entry.plannedLoad ? plateBreakdown(entry.plannedLoad, grid) : null;
   const range = slot?.loadRange || null;
 
+  // No prescribed weight (`lastTimeSlot` in program.js): the target is the reps
+  // and the RPE, so that is what leads, and the last-time card below supplies
+  // the weight. Plates still help on a barbell variation, so they stay there.
+  if (slot && !slot.timed && slot.plannedLoad == null && entry.prescribedLoad == null && !isCompetitionSlot(slot.slot)) {
+    const rpe = entry.targetRPE != null ? `RPE ${fmtRPE(entry.targetRPE)}`
+      : entry.rpeRange ? `RPE ${entry.rpeRange[0]}–${entry.rpeRange[1]}` : null;
+    // The exercise on the card, which a swap for this session may have changed.
+    const prev = lastComparable(st, entry.slotKey, { reps: entry.targetReps, excludeSessionId: st.activeSessionId, exerciseId: entry.exerciseId });
+    return `<div class="rx">
+      <div class="rx__box rx__box--load">
+        <span class="rx__k">Today</span>
+        <span class="rx__v rx__v--hero">${esc(`${entry.targetSets} × ${entry.targetReps ?? '—'}`)}${rpe ? ` <small>@ ${esc(rpe)}</small>` : ''}</span>
+        <span class="rx__sub">${prev ? 'No set weight: pick it from last time and the RPE' : 'No set weight: work up by feel'}</span>
+      </div>
+    </div>
+    ${pb && slot.role === 'variation' && !pb.ladder && !pb.tooLight ? plateStrip(pb, units) : ''}`;
+  }
+
   // The weight to aim for leads; the RPE it encodes drops to the caption. The
   // RPE is still what gets logged — it is what keeps these ranges honest.
   const hero = range
@@ -344,18 +365,26 @@ function barViz(pb) {
 }
 
 function lastTimeStrip(st, entry, slot) {
+  // By the exercise on the card, which may have been swapped for this session:
+  // last time on the pulldown is no help to a lifter doing pull-ups today.
   const prev = lastComparable(st, entry.slotKey, {
     reps: entry.targetReps,
     excludeSessionId: st.activeSessionId,
+    exerciseId: entry.exerciseId,
   });
   if (!prev) return '';
   const sets = prev.sets.map((s) => `${fmtLoadBare(s.load)}×${s.reps}${s.rpe ? `@${fmtRPE(s.rpe)}` : ''}`).join('  ');
   // Say which comparison this is. "Last time at 5 reps" from three weeks ago is
   // a useful number; the same numbers labelled "last time" right after a deload
-  // are how a lifter concludes they have gone backwards.
-  const label = prev.matchedReps
-    ? `Last time at ${entry.targetReps} reps · wk ${prev.week}`
-    : prev.phase === 'deload' ? `Last time · deload` : `Last time · wk ${prev.week}`;
+  // are how a lifter concludes they have gone backwards. One found outside this
+  // slot — another day, or the program before this one — gets its date, since
+  // its week number belongs to a different plan.
+  const at = prev.matchedReps ? ` at ${entry.targetReps} reps` : '';
+  const label = prev.source !== 'slot'
+    ? `Last time${at} · ${fmtDate(prev.date)}${prev.phase === 'postMeet' ? ' · light week' : prev.phase === 'deload' ? ' · deload' : ''}`
+    : prev.matchedReps
+      ? `Last time at ${entry.targetReps} reps · wk ${prev.week}`
+      : prev.phase === 'deload' ? `Last time · deload` : `Last time · wk ${prev.week}`;
   return `<div class="card card--flat card--pad-sm" style="margin-bottom:12px">
     <div class="row-between" style="gap:8px">
       <span class="tiny dim">${esc(label)}</span>
@@ -1100,9 +1129,19 @@ function openSwap(ctx, slotKey) {
           const id = b.dataset.pick;
           const permanent = !!permEl?.checked;
           ctx.store.update((s) => {
-            const e = entryOf(sessionOf(s), slotKey);
+            const ses = sessionOf(s);
+            const e = entryOf(ses, slotKey);
             e.exerciseId = id;
             if (permanent) s.program.choices[slotKey] = id;
+            // With no prescription the load box holds last time's weight, and
+            // that was the other exercise's. Nothing logged yet, so it follows
+            // the swap: this exercise's last time, or empty if there is none.
+            if (e.prescribedLoad == null && !e.sets.some((x) => x.done)) {
+              const prev = lastComparable(s, slotKey, { reps: e.targetReps, exerciseId: id, excludeSessionId: ses.id });
+              const load = lastLoadOf(prev);
+              e.plannedLoad = load;
+              for (const set of e.sets) set.load = load;
+            }
           });
           close();
           toast(permanent ? 'Changed for the whole program.' : 'Changed for this session.');
@@ -1182,7 +1221,7 @@ async function finish(ctx) {
   if (doneSets < totalSets) {
     const yes = await confirmSheet({
       title: 'Finish with sets left?',
-      message: `${totalSets - doneSets} of ${totalSets} sets are unlogged. Unlogged sets are dropped, and coming up short on a strength day counts as a stall — which is exactly what you want it to do if you genuinely came up short.`,
+      message: `${totalSets - doneSets} of ${totalSets} sets are unlogged. Unlogged sets are dropped. On a heavy squat, bench or deadlift that counts as coming up short, and two short sessions running on the same lift are a stall. Skipped accessory sets are not counted against you.`,
       confirmLabel: 'Finish anyway',
     });
     if (!yes) return;

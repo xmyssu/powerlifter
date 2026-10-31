@@ -179,7 +179,6 @@ function openDetail(ctx, lift) {
 
 function historyTab(st) {
   const done = [...st.sessions.filter((s) => s.status === 'done')].reverse();
-  const tpl = templateOf(st.program);
   const units = st.profile.units;
 
   return `<div class="stack">
@@ -188,7 +187,9 @@ function historyTab(st) {
       // Tonnage is stated in the unit at the end of the row, so a session logged
       // in the other one has to be converted before it is summed.
       const tonnage = sets.reduce((n, x) => n + convertLoad(x.load, s.units || units, units) * x.reps, 0);
-      const day = tpl.days.find((d) => d.n === s.day);
+      // The day as the program it was logged in named it, not as today's names
+      // it: day 2 of the four-day was a technique day, whatever day 2 is now.
+      const day = s.phase === 'postMeet' ? null : templateOf({ templateId: s.templateId || st.program?.templateId }).days.find((d) => d.n === s.day);
       return `<button class="hist" data-session="${esc(s.id)}">
         <div class="hist__date">${esc(fmtDate(s.date))}</div>
         <div class="hist__body">

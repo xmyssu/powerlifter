@@ -7,7 +7,7 @@ import { fmtLoadBare, parseNum } from '../rpe.js';
 import { activeInsights, PLATEAU_TREE, PAIN_PROTOCOL, FAULTS, STICKING_POINT_PREAMBLE, trainingAgeReport,
          fmtMax } from '../coach.js';
 import { graduationCheck, templateOf, slotHistory, slotE1RM, loadingWeeks, attemptsFor,
-         peakStatus, PEAK_MIN_DAYS, goalFor, goalPace, setGoalFor } from '../program.js';
+         peakStatus, PEAK_MIN_DAYS, goalFor, goalPace, setGoalFor, canStall } from '../program.js';
 import { DELOAD_CHECKLIST } from '../templates.js';
 import { byId, optionsForSlot } from '../exercises.js';
 import { todayISO } from '../store.js';
@@ -172,7 +172,9 @@ function stallCard(st, tpl) {
   for (const d of tpl.days) {
     for (const slot of d.slots) {
       const s = st.program.slots[slot.key];
-      if (!s) continue;
+      // Only work that can stall. An accessory may still carry a count from
+      // before it lost its prescription, and it means nothing now.
+      if (!s || !canStall(d, slot)) continue;
       if (s.stalls > 0 || s.smallIncrement || s.extendedRange) {
         rows.push({ slot, s, day: d });
       }
