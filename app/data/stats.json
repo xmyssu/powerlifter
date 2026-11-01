@@ -1,19 +1,19 @@
 {
  "v": 1,
- "generatedAt": "2026-10-31T15:44:11.287Z",
+ "generatedAt": "2026-11-01T18:30:22.268Z",
  "athlete": {
   "firstName": null
  },
  "unit": "kg",
  "displayUnit": "kg",
  "totals": {
-  "sessions": 48,
-  "sets": 451,
+  "sessions": 49,
+  "sets": 455,
   "missed": 3,
-  "reps": 2711,
-  "tonnage": 180848,
+  "reps": 2731,
+  "tonnage": 182278,
   "firstDate": "2026-08-05",
-  "lastDate": "2026-10-31"
+  "lastDate": "2026-11-01"
  },
  "lifts": [
   {
@@ -407,12 +407,12 @@
   {
    "lift": "deadlift",
    "label": "Deadlift",
-   "e1rm": 180,
-   "e1rmDate": "2026-10-16",
+   "e1rm": 183.7,
+   "e1rmDate": "2026-11-01",
    "tested": 180,
    "testedDate": "2026-10-16",
    "maxSource": "tested",
-   "change28": -5,
+   "change28": -1.3,
    "trend": [
     {
      "date": "2026-08-07",
@@ -546,6 +546,13 @@
      "deload": false,
      "soft": false,
      "submax": true
+    },
+    {
+     "date": "2026-11-01",
+     "value": 183.7,
+     "deload": false,
+     "soft": false,
+     "submax": false
     }
    ]
   }
@@ -618,34 +625,29 @@
   }
  ],
  "lastSession": {
-  "date": "2026-10-31",
-  "label": "C1 W1 · Day 5 · Strength",
+  "date": "2026-11-01",
+  "label": "C1 W1 · Day 6 · Strength",
   "cycle": 1,
   "week": 1,
-  "day": 5,
+  "day": 6,
   "phase": "load",
-  "sets": 6,
-  "reps": 44,
-  "tonnage": 3095,
-  "avgRPE": 7.5,
+  "sets": 4,
+  "reps": 20,
+  "tonnage": 1430,
+  "avgRPE": 6,
   "avgTargetRPE": null,
-  "minutes": null,
+  "minutes": 161,
   "unit": "kg",
   "lifts": [
    {
-    "exercise": "Low-Bar Back Squat",
-    "detail": "125×5@7.5, 125×5@8.5",
-    "topKg": 125
+    "exercise": "Deadlift",
+    "detail": "140×5@6, 140×5@6",
+    "topKg": 140
    },
    {
-    "exercise": "Bench Press",
-    "detail": "82.5×5@8, 82.5×5@8",
-    "topKg": 82.5
-   },
-   {
-    "exercise": "Face Pull",
-    "detail": "40×12@6, 45×12@7",
-    "topKg": 45
+    "exercise": "Dips",
+    "detail": "1×5@4, 5×5@8",
+    "topKg": 5
    }
   ],
   "prs": []
@@ -1322,6 +1324,20 @@
    "avgRPE": 7.5,
    "avgTargetRPE": null,
    "minutes": null
+  },
+  {
+   "date": "2026-11-01",
+   "label": "C1 W1 · Day 6 · Strength",
+   "cycle": 1,
+   "week": 1,
+   "day": 6,
+   "phase": "load",
+   "sets": 4,
+   "reps": 20,
+   "tonnage": 1430,
+   "avgRPE": 6,
+   "avgTargetRPE": null,
+   "minutes": 161
   }
  ],
  "bodyweight": [
