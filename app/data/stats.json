@@ -1,19 +1,19 @@
 {
  "v": 1,
- "generatedAt": "2026-11-03T17:21:56.558Z",
+ "generatedAt": "2026-11-04T17:07:48.562Z",
  "athlete": {
   "firstName": null
  },
  "unit": "kg",
  "displayUnit": "kg",
  "totals": {
-  "sessions": 50,
-  "sets": 461,
+  "sessions": 51,
+  "sets": 470,
   "missed": 3,
-  "reps": 2773,
-  "tonnage": 186058,
+  "reps": 2841,
+  "tonnage": 187820,
   "firstDate": "2026-08-05",
-  "lastDate": "2026-11-01"
+  "lastDate": "2026-11-04"
  },
  "lifts": [
   {
@@ -632,32 +632,48 @@
   }
  ],
  "lastSession": {
-  "date": "2026-11-01",
-  "label": "C1 W2 · Day 1 · Volume",
+  "date": "2026-11-04",
+  "label": "C1 W2 · Day 2 · Volume",
   "cycle": 1,
   "week": 2,
-  "day": 1,
+  "day": 2,
   "phase": "load",
-  "sets": 6,
-  "reps": 42,
-  "tonnage": 3780,
-  "avgRPE": 7.3,
+  "sets": 9,
+  "reps": 68,
+  "tonnage": 1762,
+  "avgRPE": 6.2,
   "avgTargetRPE": null,
-  "minutes": null,
+  "minutes": 52,
   "unit": "kg",
   "lifts": [
    {
-    "exercise": "High-Bar Back Squat",
-    "detail": "107.5×7@7, 107.5×7@7, 107.5×7@7",
-    "topKg": 107.5
+    "exercise": "Weighted Back Extension",
+    "detail": "35×7@4, 40×7@4, 40×7@5",
+    "topKg": 40
    },
    {
-    "exercise": "Bench Press",
-    "detail": "72.5×7@7, 72.5×7@7, 72.5×7@8.5",
-    "topKg": 72.5
+    "exercise": "Dips",
+    "detail": "1×7@5, 1×7@5, 1×7@6",
+    "topKg": 1
+   },
+   {
+    "exercise": "Triceps Extension",
+    "detail": "36×9@8, 36×8@9.5, 36×9@9.5",
+    "topKg": 36
    }
   ],
-  "prs": []
+  "prs": [
+   {
+    "exercise": "Weighted Back Extension",
+    "gain": 39.197,
+    "e1rm": 61.256
+   },
+   {
+    "exercise": "Triceps Extension",
+    "gain": 38.668,
+    "e1rm": 50.919
+   }
+  ]
  },
  "sessions": [
   {
@@ -1359,6 +1375,20 @@
    "avgRPE": 7.3,
    "avgTargetRPE": null,
    "minutes": null
+  },
+  {
+   "date": "2026-11-04",
+   "label": "C1 W2 · Day 2 · Volume",
+   "cycle": 1,
+   "week": 2,
+   "day": 2,
+   "phase": "load",
+   "sets": 9,
+   "reps": 68,
+   "tonnage": 1762,
+   "avgRPE": 6.2,
+   "avgTargetRPE": null,
+   "minutes": 52
   }
  ],
  "bodyweight": [
