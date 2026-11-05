@@ -1,19 +1,19 @@
 {
  "v": 1,
- "generatedAt": "2026-11-05T15:25:57.125Z",
+ "generatedAt": "2026-11-05T17:18:46.432Z",
  "athlete": {
   "firstName": null
  },
  "unit": "kg",
  "displayUnit": "kg",
  "totals": {
-  "sessions": 51,
-  "sets": 470,
+  "sessions": 52,
+  "sets": 479,
   "missed": 3,
-  "reps": 2841,
-  "tonnage": 187820,
+  "reps": 2880,
+  "tonnage": 191255,
   "firstDate": "2026-08-05",
-  "lastDate": "2026-11-04"
+  "lastDate": "2026-11-05"
  },
  "lifts": [
   {
@@ -172,6 +172,13 @@
      "deload": false,
      "soft": false,
      "submax": false
+    },
+    {
+     "date": "2026-11-05",
+     "value": 141.8,
+     "deload": false,
+     "soft": false,
+     "submax": true
     }
    ]
   },
@@ -408,6 +415,13 @@
      "deload": false,
      "soft": true,
      "submax": false
+    },
+    {
+     "date": "2026-11-05",
+     "value": 95.6,
+     "deload": false,
+     "soft": false,
+     "submax": true
     }
    ]
   },
@@ -632,48 +646,37 @@
   }
  ],
  "lastSession": {
-  "date": "2026-11-04",
-  "label": "C1 W2 · Day 2 · Volume",
+  "date": "2026-11-05",
+  "label": "C1 W2 · Day 3 · Technique",
   "cycle": 1,
   "week": 2,
-  "day": 2,
+  "day": 3,
   "phase": "load",
   "sets": 9,
-  "reps": 68,
-  "tonnage": 1762,
-  "avgRPE": 6.2,
+  "reps": 39,
+  "tonnage": 3435,
+  "avgRPE": 6.8,
   "avgTargetRPE": null,
-  "minutes": 52,
+  "minutes": 39,
   "unit": "kg",
   "lifts": [
    {
-    "exercise": "Weighted Back Extension",
-    "detail": "35×7@4, 40×7@4, 40×7@5",
-    "topKg": 40
+    "exercise": "Low-Bar Back Squat",
+    "detail": "115×3@6, 115×3@6, 115×3@7",
+    "topKg": 115
    },
    {
-    "exercise": "Dips",
-    "detail": "1×7@5, 1×7@5, 1×7@6",
-    "topKg": 1
+    "exercise": "Bench Press",
+    "detail": "80×3@7, 80×3@7, 80×3@7",
+    "topKg": 80
    },
    {
-    "exercise": "Triceps Extension",
-    "detail": "36×9@8, 36×8@9.5, 36×9@9.5",
-    "topKg": 36
+    "exercise": "Barbell Row",
+    "detail": "80×7@7, 80×7@7, 80×7@7",
+    "topKg": 80
    }
   ],
-  "prs": [
-   {
-    "exercise": "Weighted Back Extension",
-    "gain": 39.197,
-    "e1rm": 61.256
-   },
-   {
-    "exercise": "Triceps Extension",
-    "gain": 38.668,
-    "e1rm": 50.919
-   }
-  ]
+  "prs": []
  },
  "sessions": [
   {
@@ -1389,6 +1392,20 @@
    "avgRPE": 6.2,
    "avgTargetRPE": null,
    "minutes": 52
+  },
+  {
+   "date": "2026-11-05",
+   "label": "C1 W2 · Day 3 · Technique",
+   "cycle": 1,
+   "week": 2,
+   "day": 3,
+   "phase": "load",
+   "sets": 9,
+   "reps": 39,
+   "tonnage": 3435,
+   "avgRPE": 6.8,
+   "avgTargetRPE": null,
+   "minutes": 39
   }
  ],
  "bodyweight": [
