@@ -1,19 +1,19 @@
 {
  "v": 1,
- "generatedAt": "2026-11-05T17:18:46.432Z",
+ "generatedAt": "2026-11-06T17:57:15.867Z",
  "athlete": {
   "firstName": null
  },
  "unit": "kg",
  "displayUnit": "kg",
  "totals": {
-  "sessions": 52,
-  "sets": 479,
+  "sessions": 53,
+  "sets": 488,
   "missed": 3,
-  "reps": 2880,
-  "tonnage": 191255,
+  "reps": 2937,
+  "tonnage": 196372,
   "firstDate": "2026-08-05",
-  "lastDate": "2026-11-05"
+  "lastDate": "2026-11-06"
  },
  "lifts": [
   {
@@ -574,6 +574,13 @@
      "deload": false,
      "soft": false,
      "submax": false
+    },
+    {
+     "date": "2026-11-06",
+     "value": 178.8,
+     "deload": false,
+     "soft": false,
+     "submax": true
     }
    ]
   }
@@ -646,37 +653,48 @@
   }
  ],
  "lastSession": {
-  "date": "2026-11-05",
-  "label": "C1 W2 · Day 3 · Technique",
+  "date": "2026-11-06",
+  "label": "C1 W2 · Day 4 · Technique",
   "cycle": 1,
   "week": 2,
-  "day": 3,
+  "day": 4,
   "phase": "load",
   "sets": 9,
-  "reps": 39,
-  "tonnage": 3435,
-  "avgRPE": 6.8,
+  "reps": 57,
+  "tonnage": 5118,
+  "avgRPE": 6.6,
   "avgTargetRPE": null,
-  "minutes": 39,
+  "minutes": 78,
   "unit": "kg",
   "lifts": [
    {
-    "exercise": "Low-Bar Back Squat",
-    "detail": "115×3@6, 115×3@6, 115×3@7",
-    "topKg": 115
+    "exercise": "Deadlift",
+    "detail": "145×3@6, 145×3@7, 145×3@7",
+    "topKg": 145
    },
    {
-    "exercise": "Bench Press",
-    "detail": "80×3@7, 80×3@7, 80×3@7",
-    "topKg": 80
+    "exercise": "Close-Grip Bench Press",
+    "detail": "65×7@7, 65×7@6, 67.5×7@6",
+    "topKg": 67.5
    },
    {
-    "exercise": "Barbell Row",
-    "detail": "80×7@7, 80×7@7, 80×7@7",
-    "topKg": 80
+    "exercise": "Weighted Ab Exercise",
+    "detail": "90×9@6, 90×9@7, 90×9@7.5",
+    "topKg": 90
    }
   ],
-  "prs": []
+  "prs": [
+   {
+    "exercise": "Deadlift",
+    "gain": 9.644,
+    "e1rm": 178.792
+   },
+   {
+    "exercise": "Weighted Ab Exercise",
+    "gain": 7.608,
+    "e1rm": 137.825
+   }
+  ]
  },
  "sessions": [
   {
@@ -1406,6 +1424,20 @@
    "avgRPE": 6.8,
    "avgTargetRPE": null,
    "minutes": 39
+  },
+  {
+   "date": "2026-11-06",
+   "label": "C1 W2 · Day 4 · Technique",
+   "cycle": 1,
+   "week": 2,
+   "day": 4,
+   "phase": "load",
+   "sets": 9,
+   "reps": 57,
+   "tonnage": 5118,
+   "avgRPE": 6.6,
+   "avgTargetRPE": null,
+   "minutes": 78
   }
  ],
  "bodyweight": [
