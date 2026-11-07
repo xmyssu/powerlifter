@@ -1062,11 +1062,6 @@ export function maxBasisLabel(detail, lift) {
   if (detail.basis === 'miss') {
     return `your ${lift} max, ${v} — held under the ${fmtLoadBare(detail.cappedBy.load)} you loaded and missed on ${fmtDate(detail.cappedBy.date)}`;
   }
-  // From `trainingMaxFor`: the meet result with its peak taken off.
-  if (detail.basis === 'training') {
-    const t = detail.training;
-    return `your ${lift} training max, ${v} — ${TRAINING_MAX_PCT}% of the ${fmtLoadBare(t.result)} you lifted at the meet${t.meetDate ? ` on ${fmtDate(t.meetDate)}` : ''}`;
-  }
   if (detail.basis === 'tested') {
     return `your tested ${lift} max, ${v}${detail.tested?.date ? ` from ${fmtDate(detail.tested.date)}` : ''}`;
   }
@@ -2159,9 +2154,6 @@ export function exitPeak(state, { competed = true, meetStillOn = false } = {}) {
 
 /* ---- after the meet ---------------------------------------------------- */
 
-/** Training maxes after a meet are this share of what was lifted on the platform. */
-export const TRAINING_MAX_PCT = 90;
-
 /**
  * When the next block may start, in days after the meet.
  *
@@ -2171,9 +2163,6 @@ export const TRAINING_MAX_PCT = 90;
  * aching and the bar moving; seventeen is for one who did not.
  */
 export const POST_MEET_START = { earliest: 6, usual: 10, late: 17 };
-
-/** How long the training maxes stand in for the meet result: both blocks, with room. */
-const AFTER_MEET_HOLDS_DAYS = 84;
 
 /** How long after a meet the light week is still worth offering. */
 const POST_MEET_OFFER_DAYS = 14;
@@ -2220,8 +2209,18 @@ function meetResults(session) {
  * Start the light week after a meet.
  *
  * Runs on its own when the meet is logged, and from the Today screen for a meet
- * logged before this existed. It also sets the training maxes the next two
- * blocks are built from: 90% of the meet result, to the platform's 2.5 kg.
+ * logged before this existed.
+ *
+ * It sets no training max. It used to: 90% of the meet result, for the next two
+ * blocks to build from. That is the rule of percentage-only programs, where
+ * nothing else moves the weight, and not the book's. Helms takes the
+ * percentages from the current max as a guide for the first set and lets the
+ * RPE range move the load from there (Pyramid Training v2, pp. 242, 246), and
+ * his percentages are already chosen to land on the day's RPE — so building
+ * them off 90% counted the caution twice. On the technique day it asked for
+ * deadlift triples at 72% of a 180 kg meet pull: RPE 4 by the card's own
+ * readout, on a day written at 5-7. The light week is what eases a lifter back
+ * in; after it, the first set of each lift does.
  *
  * Meets logged before the platform rule in `recordTestedMaxes` wrote the
  * table's estimate as the tested max — 100 x 1 at RPE 9 went in as 104.7. That
@@ -2242,20 +2241,16 @@ export function startPostMeet(state, { meetDate = null, today = todayISO() } = {
     }
   }
 
-  const step = state.profile?.units === 'lb' ? 5 : 2.5;
-  const trainingMaxes = {};
+  // A lift with no made attempt on file is taken at its recorded max, so the
+  // light week still has a number to take its percentages of.
   for (const lift of MEET_LIFTS) {
     const r = results[lift] ?? (Number(state.maxes?.[lift]?.value) || null);
-    if (!(r > 0)) continue;
-    results[lift] = r;
-    trainingMaxes[lift] = +(Math.round((r * TRAINING_MAX_PCT) / 100 / step) * step).toFixed(2);
+    if (r > 0) results[lift] = r;
   }
 
   program.afterMeet = {
     meetDate,
-    recordedOn: ses?.date || meetDate,
     results,
-    trainingMaxes,
     startedAt: today,
     sessions: 0,
     doneAt: null,
@@ -2314,25 +2309,6 @@ export function finishPostMeet(state, { today = todayISO() } = {}) {
     program.cursor.day = templateOf(program).days[0].n;
     program.events.push({ date: today, kind: 'postMeetEnd', meetDate: program.afterMeet?.meetDate || null });
   }
-}
-
-/**
- * The training max for a lift, while there is one.
- *
- * A meet max is peaked, tapered and adrenaline-assisted; volume work built off
- * it is too heavy. So for the blocks after a meet, percentages come from 90% of
- * it instead. It stops counting when the lifter records anything newer for the
- * lift, or once both blocks would have run their course.
- */
-export function trainingMaxFor(state, lift, { today = todayISO() } = {}) {
-  const am = state?.program?.afterMeet;
-  const value = Number(am?.trainingMaxes?.[lift]);
-  if (!(value > 0)) return null;
-  const since = -(daysUntil(am.meetDate, today) ?? -Infinity);
-  if (!(since >= 0) || since > AFTER_MEET_HOLDS_DAYS) return null;
-  const rec = state.maxes?.[lift];
-  if (rec?.date && rec.date > (am.recordedOn || am.meetDate)) return null;
-  return { value, meetDate: am.meetDate, result: am.results?.[lift] ?? null };
 }
 
 /** Is this the thinned first loading week after a meet? */
@@ -2483,7 +2459,6 @@ export function postMeetStatus(state, { today = todayISO() } = {}) {
     dates,
     hot,
     canStart: enough && today >= dates.earliest,
-    trainingMaxes: am.trainingMaxes,
     results: am.results,
   };
 }
@@ -2492,11 +2467,10 @@ export function postMeetStatus(state, { today = todayISO() } = {}) {
  * Start a different program, keeping what should survive the switch.
  *
  * History and maxes live outside the program and are untouched. A meet already
- * lifted stays lifted. The after-meet record carries over too — the training
- * maxes are meant for both blocks, and the intro week belongs to whichever
- * program runs first, unless the light week already did its job (see
- * `finishPostMeet`) — but a light week still running is closed, because the
- * new program starts at its own day 1.
+ * lifted stays lifted. The after-meet record carries over too — the intro week
+ * belongs to whichever program runs first, unless the light week already did
+ * its job (see `finishPostMeet`) — but a light week still running is closed,
+ * because the new program starts at its own day 1.
  *
  * The exercise choices carry by what each slot is for (`carriedChoices`), so
  * moving from accumulation to intensification keeps the pause squat, the dips
@@ -2590,15 +2564,7 @@ export function resolveDay(state, { cycle, week, day, phase } = {}) {
     if (!lift) return null;
     if (!maxMemo.has(lift)) {
       const working = workingMaxDetail(state, lift);
-      const easy = easyFromWorking(state, lift, working);
-      // After a meet, percentages are taken from the training max rather than
-      // from the peaked number — but only the loads. The RPE readouts on the
-      // card still rate a weight against what the lifter can actually do, or
-      // 77.5% of a training max would read as a harder set than it is.
-      const tm = trainingMaxFor(state, lift);
-      const capped = (d) => (!tm || (d?.value && d.value <= tm.value) ? d
-        : { ...(d || {}), value: tm.value, basis: 'training', training: tm });
-      maxMemo.set(lift, { working, easy, plan: { working: capped(working), easy: capped(easy) } });
+      maxMemo.set(lift, { working, easy: easyFromWorking(state, lift, working) });
     }
     return maxMemo.get(lift);
   };
@@ -2718,7 +2684,7 @@ export function resolveDay(state, { cycle, week, day, phase } = {}) {
     const submaximal = isSubmaximalWork(dayDef, slot);
     const maxes = maxesOf(slot.lift);
     const plan = plannedLoad({ state, program, slot, week: waveWeek, isDeload: slotDeload, repsRaised,
-                               inc, pct, reps, targetRPE, rpeRange, submaximal, maxes: maxes?.plan, loadOpts });
+                               inc, pct, reps, targetRPE, rpeRange, submaximal, maxes, loadOpts });
     const planned = plan.load == null ? null : roundToLoadable(plan.load, loadOpts);
     const loadRange = submaximal
       ? easyBandFor(planned, reps, targetRPE, rpeRange, loadOpts)

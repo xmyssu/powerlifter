@@ -29,7 +29,7 @@ const { buildProgram, resolveDay, startSession, completeSession, resolveAssessme
         goalFor, setGoalFor, goalPace, goalTargetFor, driftPerWeek, easyMaxDetail, bestEstimateDetail,
         maxDraftFor, applyMaxUpdate, markSetMissed, CARD_RPE_SLACK, heavyCheckMax, readsHeavy, cardDropLoad,
         pctCaption, competitionChoice, RECORD_BINDS_DAYS, startPostMeet, finishPostMeet, postMeetStatus,
-        trainingMaxFor, switchProgram, isoPlusDays } = await import('./program.js');
+        switchProgram, isoPlusDays } = await import('./program.js');
 const { meetProgress, targetLine, attemptAdvice, MEET_ORDER } = await import('./meet.js');
 const { fmtDate } = await import('./ui.js');
 const { pctOf1RM, e1RM, loadFor, plateBreakdown, roundToLoadable, plateLabel, minIncrement, convertLoad,
@@ -3831,7 +3831,7 @@ hr('28. Easy days from the max you recorded');
 
 
 /* ======================================================================
-   29. After the meet: the light week, training maxes, the intro week
+   29. After the meet: the light week, the next block, the intro week
    ====================================================================== */
 hr('29. After the meet');
 {
@@ -3887,12 +3887,10 @@ hr('29. After the meet');
   eq(st.maxes.deadlift.value, 180, 'deadlift max is 180');
   ok(notes.some((n) => n.kind === 'meetDone' && n.text.includes('light week')), 'the meet note points at the light week');
 
-  /* ---- training maxes: 90%, to the platform's 2.5 ---- */
-  const tm = st.program.afterMeet.trainingMaxes;
-  eq(tm.squat, 145, 'squat TM: 90% of 160 is 144, rounds to 145');
-  eq(tm.bench, 90, 'bench TM: 90% of 100');
-  eq(tm.deadlift, 162.5, 'deadlift TM: 90% of 180 is 162, rounds to 162.5');
-  eq(trainingMaxFor(st, 'squat')?.value, 145, 'and it is in force');
+  /* ---- no training max: the book builds from the max itself ---- */
+  // 90% of the meet used to stand in for the max for both blocks after it, on
+  // top of percentages already chosen to land on the day's RPE.
+  ok(!('trainingMaxes' in st.program.afterMeet), 'logging the meet sets no training max');
 
   /* ---- the light week ---- */
   eq(st.program.cursor.phase, 'postMeet', 'logging the meet starts the light week');
@@ -3955,23 +3953,33 @@ hr('29. After the meet');
   back.slots.forEach((x, i) => eq(x.sets, full.slots[i].sets, `${x.slotKey}: every written set`));
   ok(!/two-thirds/.test(activeInsights(st).map((i) => i.text).join(' ')), 'and nothing on the home screen promises a thinned week');
 
-  /* ---- switching to accumulation keeps the training maxes ---- */
+  /* ---- switching to accumulation: built from the maxes themselves ---- */
   store.update((s) => { s.program.choices.d1_verpull = 'lat-pulldown'; s.program.choices.d2_verpush = 'dips'; });
   store.update((s) => { switchProgram(s, ADVANCED_ACCUMULATION.id); });
   st = store.getState();
   eq(st.program.templateId, ADVANCED_ACCUMULATION.id, 'accumulation started');
-  eq(st.program.afterMeet?.trainingMaxes?.deadlift, 162.5, 'with the training maxes carried over');
   const a5 = resolveDay(st, { day: 5 });
   ok(!a5.isIntro, 'and no intro week there either');
   const a5sq = a5.slots.find((x) => x.slotKey === 'a5_squat');
   eq(a5sq.sets, 3, 'all three written sets');
-  eq(a5sq.plannedLoad, 120, 'strength-day squat is 82.5% of the 145 training max, not of 160');
-  ok(/training max/.test(a5sq.loadNote), 'and the note says what it is built from');
+  eq(a5sq.plannedLoad, 132.5, 'strength-day squat is 82.5% of the 160 squatted at the meet');
+  ok(/160/.test(a5sq.loadNote) && !/training max/.test(a5sq.loadNote), 'and the note says what it is built from', a5sq.loadNote);
+  eq(a5sq.rateBasis.value, 160, 'and the card rates its weight against the same max');
   const a6dl = resolveDay(st, { day: 6 }).slots.find((x) => x.slotKey === 'a6_dead');
-  eq(a6dl.plannedLoad, 135, 'deadlift is 82.5% of 162.5');
-  const a3sq = resolveDay(st, { day: 3 }).slots.find((x) => x.slotKey === 'a3_squat');
-  ok(a3sq.plannedLoad <= 112.5, 'technique-day squat is built from the training max too', `${a3sq.plannedLoad}`);
-  ok(Math.abs(a5sq.rateBasis.value - 145) > 1, 'while the RPE readout still rates against the real max');
+  eq(a6dl.plannedLoad, 147.5, 'deadlift is 82.5% of 180');
+  const a4dl = resolveDay(st, { day: 4 }).slots.find((x) => x.slotKey === 'a4_dead');
+  eq(a4dl.plannedLoad, 140, 'technique-day deadlift is 77.5% of 180, not of 90% of it');
+  // The reason there is no training max. Off 90% of the meet, every one of
+  // these cards prescribed a weight its own readout put two to four points
+  // under the RPE written on it: deadlift triples at RPE 4 on a day written at
+  // 5-7, against the 145 the calculator gave for the same sets.
+  for (const day of ADVANCED_ACCUMULATION.days) {
+    for (const x of resolveDay(st, { day: day.n }).slots) {
+      if (x.impliedRPE == null || !x.rpeRange) continue;
+      ok(x.impliedRPE >= x.rpeRange[0] && x.impliedRPE <= x.rpeRange[1],
+        `day ${day.n} ${x.slotKey}: ${x.plannedLoad} x ${x.reps} reads RPE ${x.impliedRPE}, inside the card's ${x.rpeRange.join('-')}`);
+    }
+  }
   eq(postMeetStatus(st), null, 'and the post-meet card goes quiet once a block is running');
 
   /* ---- what was picked, and what was done, carry across the switch ---- */
@@ -4008,13 +4016,8 @@ hr('29. After the meet');
   ok(activeInsights(store.getState()).some((i) => i.action === 'startIntensification'),
     'a finished accumulation block suggests intensification');
   store.update((s) => { switchProgram(s, ADVANCED_INTENSIFICATION.id); });
-  eq(store.getState().program.afterMeet?.trainingMaxes?.squat, 145, 'and the training maxes reach that block too');
-  eq(resolveDay(store.getState(), { day: 5 }).slots.find((x) => x.slotKey === 'i5_squat').plannedLoad, 122.5,
-    'intensification squat is 85% of 145');
-
-  /* ---- a newer record retires the training max ---- */
-  store.update((s) => { s.maxes.squat = { value: 165, date: at(1), source: 'tested' }; });
-  eq(trainingMaxFor(store.getState(), 'squat', { today: at(1) }), null, 'a newer squat record ends the squat TM');
+  eq(resolveDay(store.getState(), { day: 5 }).slots.find((x) => x.slotKey === 'i5_squat').plannedLoad, 135,
+    'intensification squat is 85% of 160, with no training max in between');
 
   /* ---- a meet logged before all this: offered, and repaired ---- */
   logMeet();
@@ -4030,7 +4033,7 @@ hr('29. After the meet');
   store.update((s) => { startPostMeet(s); });
   st = store.getState();
   eq(st.maxes.bench.value, 100, 'starting it brings the 104.7 down to the bar that was lifted');
-  eq(st.program.afterMeet.trainingMaxes.bench, 90, 'and the training max is built from that');
+  eq(resolveDay(st).slots.find((x) => x.slotKey === 'pm1_bench')?.plannedLoad, 50, 'and the light week is built from that: 50% of 100, not of 104.7');
   eq(st.program.cursor.phase, 'postMeet', 'and the light week is on');
   store.update((s) => { finishPostMeet(s); });
   eq(store.getState().program.cursor.phase, 'load', 'ending it early puts the program back on day 1');

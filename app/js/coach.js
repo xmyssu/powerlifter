@@ -8,7 +8,7 @@ import { templateOf, graduationCheck, slotHistory, slotE1RM, volumeAudit, loadin
          MISS_MEMORY_DAYS, isSubmaximalSlot, gradeSets, RELIABLE_E1RM_REPS,
          missedAttempts, peakStatus, PEAK_MIN_DAYS, goalFor, goalTargetFor,
          isCompetitionSlot, peakKeepsFullSets, maxBasisLabel, RECORD_BINDS_DAYS, easyMaxDetail,
-         attemptsFor, postMeetStatus, TRAINING_MAX_PCT, daysUntil, stalledLifts, FORCED_DELOAD_LIFTS,
+         attemptsFor, postMeetStatus, daysUntil, stalledLifts, FORCED_DELOAD_LIFTS,
          canStall, liftSlotKeys, lightWeekDone } from './program.js';
 import { e1RM, fmtLoad, fmtLoadBare, fmtRPE, rpeFor, convertLoad } from './rpe.js';
 import { byId } from './exercises.js';
@@ -1781,14 +1781,6 @@ function whenLabel(iso, today = todayISO()) {
   return `${day} ${fmtDate(iso)}`;
 }
 
-const LIFT_WORDS = { squat: 'squat', bench: 'bench', deadlift: 'deadlift' };
-
-/** "squat 145, bench 90, deadlift 162.5". */
-function liftList(values) {
-  return ['squat', 'bench', 'deadlift'].filter((l) => values?.[l] > 0)
-    .map((l) => `${LIFT_WORDS[l]} ${fmtLoadBare(values[l])}`).join(', ');
-}
-
 /**
  * Between the meet and the next block: offer the light week, track it, and say
  * when to start accumulation.
@@ -1808,7 +1800,7 @@ function afterMeetInsights(state) {
     return [{
       kind: 'meet', priority: 0,
       title: `You competed ${pm.since === 1 ? 'yesterday' : `${pm.since} days ago`} — start the light week?`,
-      text: 'Four short sessions at 50-65% of what you lifted at the meet, with the deadlift kept lightest, plus the rows, arms, single-leg and core work peaking left out. No singles, no top sets. It also sets training maxes for your next blocks at 90% of the meet result, so the volume work is not built on a peaked number.',
+      text: 'Four short sessions at 50-65% of what you lifted at the meet, with the deadlift kept lightest, plus the rows, arms, single-leg and core work peaking left out. No singles, no top sets.',
       action: 'postMeetStart',
     }];
   }
@@ -1819,7 +1811,6 @@ function afterMeetInsights(state) {
   const poorDay = levels.includes('poor');
   const { earliest, usual, late } = pm.dates;
   const suggested = poorDay ? late : usual;
-  const tms = liftList(pm.trainingMaxes);
 
   if (pm.kind === 'transition') {
     return [{
@@ -1843,7 +1834,9 @@ function afterMeetInsights(state) {
   if (!poorDay) {
     parts.push(`Wait until ${whenLabel(late, today)} if your joints still ache, sleep is off, you do not feel like training, or warm-up weights feel heavy.`);
   }
-  if (tms) parts.push(`The block's percentages come from training maxes at ${TRAINING_MAX_PCT}% of the meet: ${tms}.`);
+  // No training max (see `startPostMeet`): the book's answer to a peaked number
+  // is the first set, so say so here, where the block starts.
+  parts.push('The block\'s weights start from your meet numbers, which were peaked, so let the first set of each lift decide: if it lands outside the RPE range, move the weight for the rest (p. 246).');
   parts.push(lightWeekDone({ sessions: pm.sessions })
     ? 'The light week has already brought the volume back, so the block starts at its full sets. Expect some soreness in its first week anyway.'
     : 'Its first week runs two-thirds of the sets. Expect to be sore anyway — that is the volume coming back, not a problem.');
@@ -1882,7 +1875,7 @@ function blockInsights(state) {
       title: cur.phase === 'deload' ? 'Intensification after this deload' : 'Accumulation done — intensification next',
       text: cur.phase === 'deload'
         ? 'Finish this deload week, then switch to the intensification block: fewer reps, heavier, and accessories stripped back.'
-        : `The accumulation block is done. The plan is accumulation then intensification: fewer reps, heavier, and accessories stripped back.${program.afterMeet ? ' Your training maxes carry over.' : ''}`,
+        : 'The accumulation block is done. The plan is accumulation then intensification: fewer reps, heavier, and accessories stripped back.',
       action: cur.phase === 'deload' ? null : 'startIntensification',
     }];
   }
