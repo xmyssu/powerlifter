@@ -1,19 +1,19 @@
 {
  "v": 1,
- "generatedAt": "2026-11-06T17:57:15.867Z",
+ "generatedAt": "2026-11-07T11:22:05.629Z",
  "athlete": {
   "firstName": null
  },
  "unit": "kg",
  "displayUnit": "kg",
  "totals": {
-  "sessions": 53,
-  "sets": 488,
+  "sessions": 54,
+  "sets": 497,
   "missed": 3,
-  "reps": 2937,
-  "tonnage": 196372,
+  "reps": 2994,
+  "tonnage": 200437,
   "firstDate": "2026-08-05",
-  "lastDate": "2026-11-06"
+  "lastDate": "2026-11-07"
  },
  "lifts": [
   {
@@ -179,6 +179,13 @@
      "deload": false,
      "soft": false,
      "submax": true
+    },
+    {
+     "date": "2026-11-07",
+     "value": 152.9,
+     "deload": false,
+     "soft": false,
+     "submax": false
     }
    ]
   },
@@ -422,6 +429,13 @@
      "deload": false,
      "soft": false,
      "submax": true
+    },
+    {
+     "date": "2026-11-07",
+     "value": 101.6,
+     "deload": false,
+     "soft": false,
+     "submax": false
     }
    ]
   },
@@ -653,48 +667,37 @@
   }
  ],
  "lastSession": {
-  "date": "2026-11-06",
-  "label": "C1 W2 · Day 4 · Technique",
+  "date": "2026-11-07",
+  "label": "C1 W2 · Day 5 · Strength",
   "cycle": 1,
   "week": 2,
-  "day": 4,
+  "day": 5,
   "phase": "load",
   "sets": 9,
   "reps": 57,
-  "tonnage": 5118,
-  "avgRPE": 6.6,
+  "tonnage": 4065,
+  "avgRPE": 7.9,
   "avgTargetRPE": null,
-  "minutes": 78,
+  "minutes": 53,
   "unit": "kg",
   "lifts": [
    {
-    "exercise": "Deadlift",
-    "detail": "145×3@6, 145×3@7, 145×3@7",
-    "topKg": 145
+    "exercise": "Low-Bar Back Squat",
+    "detail": "130×4@8.5, 130×4@8.5, 130×4@8.5",
+    "topKg": 130
    },
    {
-    "exercise": "Close-Grip Bench Press",
-    "detail": "65×7@7, 65×7@6, 67.5×7@6",
-    "topKg": 67.5
+    "exercise": "Bench Press",
+    "detail": "85×4@8, 85×4@8, 85×4@8",
+    "topKg": 85
    },
    {
-    "exercise": "Weighted Ab Exercise",
-    "detail": "90×9@6, 90×9@7, 90×9@7.5",
-    "topKg": 90
+    "exercise": "Face Pull",
+    "detail": "45×11@7, 45×11@7, 45×11@7.5",
+    "topKg": 45
    }
   ],
-  "prs": [
-   {
-    "exercise": "Deadlift",
-    "gain": 9.644,
-    "e1rm": 178.792
-   },
-   {
-    "exercise": "Weighted Ab Exercise",
-    "gain": 7.608,
-    "e1rm": 137.825
-   }
-  ]
+  "prs": []
  },
  "sessions": [
   {
@@ -1438,6 +1441,20 @@
    "avgRPE": 6.6,
    "avgTargetRPE": null,
    "minutes": 78
+  },
+  {
+   "date": "2026-11-07",
+   "label": "C1 W2 · Day 5 · Strength",
+   "cycle": 1,
+   "week": 2,
+   "day": 5,
+   "phase": "load",
+   "sets": 9,
+   "reps": 57,
+   "tonnage": 4065,
+   "avgRPE": 7.9,
+   "avgTargetRPE": null,
+   "minutes": 53
   }
  ],
  "bodyweight": [
