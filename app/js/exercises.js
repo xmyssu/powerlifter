@@ -1762,6 +1762,20 @@ export const SLOT_DEFAULTS = {
   biceps: 'bicep-curl',
 };
 
+/**
+ * Slots that can be traded for a different kind of work, not only for another
+ * exercise of the same kind.
+ *
+ * Grip work is the book's fix for one weak link: pulling more with straps than
+ * with chalk (pp. 155-156). A lifter whose grip is not what fails can spend
+ * those three sets elsewhere, and the book encourages giving yourself choice in
+ * accessories for enjoyment and adherence (p. 217). The traded slot runs on the
+ * program's own numbers for the new work (`slotFor` in program.js).
+ */
+export const SLOT_TRADES = {
+  grip: ['weightedAb'],
+};
+
 /** Human labels + the book's selection rule for each choosable slot. */
 export const SLOT_INFO = {
   squat:           { label: 'Competition squat',   rule: 'Your competition squat. Train it regardless of whether it suits your leverages — it is the lift you are judged on.' },

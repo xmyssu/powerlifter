@@ -4147,6 +4147,72 @@ hr('30. Old stall marks');
   ok(st.program.stallRules === STALL_RULES && !st.program.forcedDeload, 'the new block starts clean');
 }
 
+hr('31. Trading grip work for ab work');
+{
+  const { slotFor, tradeOptions } = await import('./program.js');
+  store.update((s) => {
+    Object.assign(s, store.defaultState());
+    s.maxes = { squat: { value: 160, date: store.todayISO(), source: 'tested' }, bench: { value: 100, date: store.todayISO(), source: 'entered' },
+                deadlift: { value: 180, date: store.todayISO(), source: 'tested' } };
+    s.program = buildProgram({ templateId: ADVANCED_ACCUMULATION.id });
+  });
+  const AB = 'weighted-ab-exercise';
+  const acc = ADVANCED_ACCUMULATION;
+  const grip = acc.days.find((d) => d.n === 6).slots.find((x) => x.key === 'a6_grip');
+  const card = (st, pos, key) => resolveDay(st, pos).slots.find((x) => x.slotKey === key);
+
+  /* ---- what the trade is ---- */
+  eq(slotFor(acc, grip, 'rack-partial-hold'), grip, 'a grip exercise leaves the grip slot as it is');
+  eq(slotFor(acc, grip, 'single-arm-bodyweight-hang-for-time'), grip, 'and so does the hang');
+  eq(slotFor(acc, grip, 'face-pull'), grip, 'an exercise the slot cannot be traded for changes nothing');
+  const traded = slotFor(acc, grip, AB);
+  eq(traded.slotType, 'weightedAb', 'ab work makes it an ab slot');
+  eq(traded.key, 'a6_grip', 'under the same key, so the log keeps it on Day 6');
+  eq(traded.tradedFrom, 'grip', 'and it says what it replaced');
+  const offers = tradeOptions(acc, grip);
+  ok(offers.length === 1 && offers[0].exercise.id === AB && offers[0].day === 4,
+     'accumulation offers ab work, on the Day 4 numbers', JSON.stringify(offers.map((t) => [t.exercise.id, t.day])));
+  eq(tradeOptions(ADVANCED_INTENSIFICATION, grip).length, 0, 'a program with no ab slot of its own has nothing to borrow from');
+  eq(tradeOptions(acc, acc.days[0].slots[0]).length, 0, 'and a slot with no trades offers none');
+
+  /* ---- for one session ---- */
+  let st = store.getState();
+  const w2d6 = { week: 2, day: 6 };
+  const holds = card(st, w2d6, 'a6_grip');
+  ok(holds.timed && holds.reps == null, 'untraded, Day 6 still has the timed holds');
+  const ab = card(st, { ...w2d6, exercises: { a6_grip: AB } }, 'a6_grip');
+  const day4 = card(st, { week: 2, day: 4 }, 'a4_ab');
+  eq(ab.exerciseId, AB, 'traded for today, the card is ab work');
+  ok(!ab.timed && !ab.prescription, 'with no hold prescription left on it');
+  eq(ab.sets, day4.sets, 'Day 4\'s sets');
+  eq(ab.reps, 9, 'week 2\'s reps: Wt Ab runs 10, 9, 8 across the block');
+  eq(ab.reps, day4.reps, 'the same as Day 4 this week');
+  eq(String(ab.rpeRange), '6,8', 'at RPE 6-8');
+  eq(ab.plannedLoad, null, 'with no set weight, like every accessory');
+  eq(st.program.choices.a6_grip, 'rack-partial-hold', 'and the program choice is untouched');
+
+  /* ---- for good ---- */
+  store.update((s) => { s.program.choices.a6_grip = AB; });
+  st = store.getState();
+  eq(card(st, w2d6, 'a6_grip').reps, 9, 'chosen in the program, it resolves as ab work without being asked');
+  ok(card(st, { ...w2d6, exercises: { a6_grip: 'rack-partial-hold' } }, 'a6_grip').timed, 'and a session can still trade back to the holds');
+  const planned = cyclePlan(st).weeks.find((w) => w.week === 2).days.find((d) => d.day === 6).slots.find((x) => x.key === 'a6_grip');
+  eq(planned.name, 'Weighted Ab Exercise', 'the block overview names it');
+  eq(planned.reps, 9, 'with ab reps, not a blank');
+  const ses = startSession(st, { cycle: 1, week: 1, day: 6, phase: 'load' });
+  const entry = ses.entries.find((e) => e.slotKey === 'a6_grip');
+  eq(entry.targetReps, 10, 'a session started on it asks for week 1\'s ten reps');
+  eq(String(entry.rpeRange), '6,8', 'at RPE 6-8');
+
+  /* ---- logged on Day 6, found on Day 4 ---- */
+  entry.sets = entry.sets.map(() => ({ load: 30, reps: 10, rpe: 7, done: true }));
+  for (const e of ses.entries) if (e !== entry) e.sets = e.sets.map((x) => ({ load: x.load ?? 20, reps: e.targetReps ?? 10, rpe: 7, done: true }));
+  store.update((s) => { s.sessions.push(ses); completeSession(s, ses.id); });
+  const next = card(store.getState(), { week: 2, day: 4 }, 'a4_ab');
+  eq(next.lastLoad, 30, 'Day 4\'s ab card shows the ab work done on Day 6');
+  eq(next.lastTime?.source, 'exercise', 'found by the exercise');
+}
+
 /* ======================================================================
    done
    ====================================================================== */

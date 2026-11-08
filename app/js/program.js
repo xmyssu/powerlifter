@@ -12,7 +12,7 @@
 
 import { TEMPLATES, INTERMEDIATE_PL, INTERMEDIATE_PEAK, PEAK_DAYS, EMPHASIS,
          incrementFor, assessDeload, TEST_DAY, WARMUP, POST_MEET } from './templates.js';
-import { SLOT_DEFAULTS, byId } from './exercises.js';
+import { SLOT_DEFAULTS, SLOT_TRADES, byId, optionsForSlot } from './exercises.js';
 import { e1RM, loadFor, roundToLoadable, pctOf1RM, normalizeRPE, convertLoad, loadBand, minIncrement,
          loadStep, gridFloor, isLadder, rpeFor, fmtLoadBare, fmtRPE, RPE_TOLERANCE, PLATE_PRESETS,
          KG_PER_LB, parseNum, RPE_MIN, RPE_MAX } from './rpe.js';
@@ -2526,11 +2526,50 @@ function carriedChoices(old, templateId) {
 
 /* ---- prescription ---------------------------------------------------- */
 
+/** The program's own slot of a kind, and its day: what a traded slot borrows its numbers from. */
+function donorSlot(tpl, slotType) {
+  for (const d of tpl.days) {
+    const s = d.slots.find((x) => x.slotType === slotType);
+    if (s) return { slot: s, day: d.n };
+  }
+  return null;
+}
+
+/**
+ * The slot a template slot becomes with this exercise in it.
+ *
+ * Usually itself. A slot traded for a different kind of work (`SLOT_TRADES`),
+ * the grip holds for ab work, takes the sets, reps and RPE of the program's own
+ * slot of that kind, so it runs on the book's numbers for that work (Wt Ab,
+ * 3 x 10/9/8 @ RPE 6-8, pp. 265-266) and not on three timed holds at 90-110%.
+ * The key stays, so in the log it is still this day's slot.
+ */
+export function slotFor(tpl, slot, exId) {
+  const ex = byId(exId);
+  if (!ex || ex.slots.includes(slot.slotType)) return slot;
+  for (const type of SLOT_TRADES[slot.slotType] || []) {
+    const donor = ex.slots.includes(type) ? donorSlot(tpl, type) : null;
+    if (donor) return { ...donor.slot, key: slot.key, tradedFrom: slot.slotType };
+  }
+  return slot;
+}
+
+/** What a slot can be traded for in this program: only work the program has a slot of its own for. */
+export function tradeOptions(tpl, slot) {
+  return (SLOT_TRADES[slot.slotType] || []).flatMap((type) => {
+    const donor = donorSlot(tpl, type);
+    return donor ? optionsForSlot(type).map((exercise) => ({ exercise, slotType: type, day: donor.day })) : [];
+  });
+}
+
 /**
  * Resolve one training day into concrete prescriptions.
  * Returns { template, day, week, cycle, phase, slots: [...] }
+ *
+ * `exercises` puts a different exercise in a slot than the program's choice,
+ * by key: a session that traded a slot for today only (see `slotFor`).
  */
-export function resolveDay(state, { cycle, week, day, phase } = {}) {
+export function resolveDay(state, { cycle, week, day, phase, exercises = null } = {}) {
   const program = state.program;
   const tpl = templateOf(program);
   const cur = program.cursor;
@@ -2570,9 +2609,10 @@ export function resolveDay(state, { cycle, week, day, phase } = {}) {
   };
   const intro = introWeekActive(program, { week, phase });
 
-  const slots = dayDef.slots.map((slot, i) => {
+  const slots = dayDef.slots.map((tplSlot, i) => {
+    const exId = exercises?.[tplSlot.key] ?? program.choices[tplSlot.key];
+    const slot = slotFor(tpl, tplSlot, exId);
     const st = program.slots[slot.key] || {};
-    const exId = program.choices[slot.key];
     const ex = byId(exId);
     // Every load below is rounded onto *this exercise's* grid, not the lifter's
     // barbell. A machine slot and a squat slot round differently.
@@ -4075,17 +4115,21 @@ export function cyclePlan(state) {
   const weeks = loadingWeeks(program);
   const peaking = !!program.peak;
 
-  const planSlot = (slot, w, peakKind = null) => ({
-    key: slot.key,
-    name: byId(program.choices[slot.key] || SLOT_DEFAULTS[slot.slotType])?.short || slot.slotType,
-    sets: peakKind === 'week3' && !peakKeepsFullSets(slot, program)
-      ? Math.max(1, Math.floor((slot.sets * 2) / 3))
-      : peakSetsFor(slot, program, peakKind),
-    reps: repsForWeek(slot, program, w),
-    pct: pctForWeek(slot, program, w),
-    rpe: slot.rpe ?? null,
-    rpeRange: slot.rpeRange || null,
-  });
+  const planSlot = (tplSlot, w, peakKind = null) => {
+    // A traded slot is planned as the work it was traded for (`slotFor`).
+    const slot = slotFor(tpl, tplSlot, program.choices[tplSlot.key]);
+    return {
+      key: slot.key,
+      name: byId(program.choices[slot.key] || SLOT_DEFAULTS[slot.slotType])?.short || slot.slotType,
+      sets: peakKind === 'week3' && !peakKeepsFullSets(slot, program)
+        ? Math.max(1, Math.floor((slot.sets * 2) / 3))
+        : peakSetsFor(slot, program, peakKind),
+      reps: repsForWeek(slot, program, w),
+      pct: pctForWeek(slot, program, w),
+      rpe: slot.rpe ?? null,
+      rpeRange: slot.rpeRange || null,
+    };
+  };
 
   // A compressed block starts partway in, and the weeks it skipped are not part
   // of anyone's plan. Showing them would have the schedule promise two loading

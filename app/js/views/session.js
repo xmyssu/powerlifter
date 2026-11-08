@@ -13,7 +13,7 @@ import { fmtLoadBare, plateBreakdown, roundToLoadable, loadStep, e1RM, fmtRPE, n
          rpeFor, pctOf1RM, repsLeftWords, RPE_MIN, RPE_MAX } from '../rpe.js';
 import { resolveDay, completeSession, discardSession, slotHistory, lastComparable, lastLoadOf, templateOf,
          loadOptsFor, warmupFor, isSubmaximalSlot, isCompetitionSlot, easyMaxDetail, RELIABLE_E1RM_REPS,
-         pctCaption, heavyCheckMax, readsHeavy, cardDropLoad } from '../program.js';
+         pctCaption, heavyCheckMax, readsHeavy, cardDropLoad, slotFor, tradeOptions } from '../program.js';
 import { RPE_SCALE, REST_GUIDE } from '../templates.js';
 // `fmtMax` is the shared formatter for a max, a rate or a gap: to a tenth, never
 // snapped to the plate grid — the same one the goal line and the meet sheet use.
@@ -48,6 +48,30 @@ function firstUnfinished(ses) {
 
 function entryOf(ses, slotKey) { return ses.entries.find((e) => e.slotKey === slotKey); }
 
+function templateSlot(tpl, slotKey) {
+  for (const d of tpl.days) { const f = d.slots.find((x) => x.key === slotKey); if (f) return f; }
+  return null;
+}
+
+/**
+ * The running session's day. A slot traded for other work today only (or
+ * traded back) resolves as what is on its card, not as the program's choice:
+ * otherwise an ab card is still described as timed grip holds. A same-kind
+ * swap keeps its slot's numbers, so only trades are passed.
+ */
+function resolveSession(st, ses, exercises = {}) {
+  const tpl = templateOf(st.program);
+  const traded = { ...exercises };
+  for (const e of ses.entries) {
+    const def = templateSlot(tpl, e.slotKey);
+    if (!def || e.slotKey in traded) continue;
+    if (slotFor(tpl, def, e.exerciseId) !== def || slotFor(tpl, def, st.program.choices[e.slotKey]) !== def) {
+      traded[e.slotKey] = e.exerciseId;
+    }
+  }
+  return resolveDay(st, { cycle: ses.cycle, week: ses.week, day: ses.day, phase: ses.phase, exercises: traded });
+}
+
 /* ---- render ----------------------------------------------------------- */
 
 function view(ctx) {
@@ -58,7 +82,7 @@ function view(ctx) {
       <button class="btn btn--primary" data-home>Back to today</button></div>`;
   }
 
-  const resolved = resolveDay(st, { cycle: ses.cycle, week: ses.week, day: ses.day, phase: ses.phase });
+  const resolved = resolveSession(st, ses);
   const brief = sessionBriefing(resolved, st);
   // One pass for the whole day rather than one per card: every note runs the
   // same working-max reconciliation, and the day has at most three of them.
@@ -1080,7 +1104,7 @@ function afterSet(ctx, slotKey, si, rpe, restFor, { resolved = null, slot = null
 function resolvedSlot(ctx, slotKey) {
   const st = ctx.state;
   const ses = sessionOf(st);
-  const resolved = resolveDay(st, { cycle: ses.cycle, week: ses.week, day: ses.day, phase: ses.phase });
+  const resolved = resolveSession(st, ses);
   return { resolved, slot: resolved.slots.find((s) => s.slotKey === slotKey) || null };
 }
 
@@ -1096,12 +1120,24 @@ function openSwap(ctx, slotKey) {
   const ses = sessionOf(st);
   const entry = entryOf(ses, slotKey);
   const tpl = templateOf(st.program);
-  let slotDef = null;
-  for (const d of tpl.days) { const f = d.slots.find((x) => x.key === slotKey); if (f) slotDef = f; }
+  const slotDef = templateSlot(tpl, slotKey);
   if (!slotDef) return;
 
   const info = SLOT_INFO[slotDef.slotType] || {};
   const opts = optionsForSlot(slotDef.slotType, { preferFreeWeight: slotDef.slotType === 'horizontalPull' });
+  // What each trade would put on today's card, from the same resolution the card will use.
+  const trades = tradeOptions(tpl, slotDef).map((t) => ({
+    ...t, card: resolveSession(st, ses, { [slotKey]: t.exercise.id }).slots.find((s) => s.slotKey === slotKey),
+  }));
+  const pickButton = (e, sub) => `<button class="pick" data-pick="${esc(e.id)}" aria-pressed="${e.id === entry.exerciseId}">
+    <span class="pick__mark">${icon('check')}</span>
+    <div class="pick__body">
+      <div class="pick__title">${esc(e.short)}</div>
+      ${sub ? `<div class="pick__sub">${esc(sub)}</div>` : ''}
+    </div>
+  </button>`;
+  const cardTarget = (c) => !c ? '' : `${c.sets} × ${c.reps ?? '—'}`
+    + (c.targetRPE != null ? ` @ RPE ${fmtRPE(c.targetRPE)}` : c.rpeRange ? ` @ RPE ${c.rpeRange[0]}-${c.rpeRange[1]}` : '');
 
   sheet({
     title: `Swap — ${info.label || slotDef.slotType}`,
@@ -1113,14 +1149,13 @@ function openSwap(ctx, slotKey) {
         <div class="pick__body"><div class="pick__title">Change it for every future session too</div></div>
       </label>
       <div class="stack-sm">
-        ${opts.map((e) => `<button class="pick" data-pick="${esc(e.id)}" aria-pressed="${e.id === entry.exerciseId}">
-          <span class="pick__mark">${icon('check')}</span>
-          <div class="pick__body">
-            <div class="pick__title">${esc(e.short)}</div>
-            ${e.notes ? `<div class="pick__sub">${esc(e.notes.length > 140 ? e.notes.slice(0, 140) + '…' : e.notes)}</div>` : ''}
-          </div>
-        </button>`).join('')}
+        ${opts.map((e) => pickButton(e, e.notes && (e.notes.length > 140 ? e.notes.slice(0, 140) + '…' : e.notes))).join('')}
       </div>
+      ${trades.length ? `<div class="stack-sm">
+        <div class="eyebrow">Or do something else instead</div>
+        ${trades.map((t) => pickButton(t.exercise,
+          `${SLOT_INFO[t.slotType]?.label || t.slotType}: ${cardTarget(t.card)}, the same as your Day ${t.day} slot.`)).join('')}
+      </div>` : ''}
     </div>`,
     onMount(root, close) {
       const permEl = $('[data-permanent]', root);
@@ -1131,8 +1166,11 @@ function openSwap(ctx, slotKey) {
           ctx.store.update((s) => {
             const ses = sessionOf(s);
             const e = entryOf(ses, slotKey);
+            // Traded for other work, or back: the card's targets were the old work's.
+            const retarget = slotFor(tpl, slotDef, id).slotType !== slotFor(tpl, slotDef, e.exerciseId).slotType;
             e.exerciseId = id;
             if (permanent) s.program.choices[slotKey] = id;
+            if (retarget) retargetEntry(s, ses, e);
             // With no prescription the load box holds last time's weight, and
             // that was the other exercise's. Nothing logged yet, so it follows
             // the swap: this exercise's last time, or empty if there is none.
@@ -1149,6 +1187,22 @@ function openSwap(ctx, slotKey) {
       }
     },
   });
+}
+
+/**
+ * Give an entry the targets of the work now on its card. A trade (`slotFor`)
+ * changes the sets, reps and RPE, not only the name. Sets already logged stay.
+ */
+function retargetEntry(st, ses, e) {
+  const card = resolveSession(st, ses).slots.find((x) => x.slotKey === e.slotKey);
+  if (!card) return;
+  e.targetSets = card.sets;
+  e.targetReps = card.reps;
+  e.targetRPE = card.targetRPE;
+  e.rpeRange = card.rpeRange;
+  if (!e.sets.some((x) => x.done)) {
+    e.sets = Array.from({ length: card.sets }, () => ({ load: null, reps: null, rpe: null, done: false, ts: null }));
+  }
 }
 
 function openNote(ctx, slotKey) {

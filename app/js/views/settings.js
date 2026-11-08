@@ -4,7 +4,8 @@
 
 import { html, raw, esc, icon, $, $$, sheet, toast, confirmSheet, fmtDate, restoreSheet } from '../ui.js';
 import { PLATE_PRESETS, fmtLoadBare, plateLabel, minIncrement, isLadder, e1RM, normalizeRPE, parseNum } from '../rpe.js';
-import { templateOf, switchProgram, volumeAudit, convertUnits, workingMaxDetail, maxDraftFor, applyMaxUpdate } from '../program.js';
+import { templateOf, switchProgram, volumeAudit, convertUnits, workingMaxDetail, maxDraftFor, applyMaxUpdate,
+         slotFor, tradeOptions } from '../program.js';
 import { EMPHASIS, TEMPLATES, INTERMEDIATE_PL, INTERMEDIATE_PL_3DAY, ADVANCED_ACCUMULATION, ADVANCED_INTENSIFICATION } from '../templates.js';
 import { optionsForSlot, SLOT_INFO, byId } from '../exercises.js';
 import { todayISO } from '../store.js';
@@ -418,11 +419,13 @@ function openExercises(ctx) {
         <div class="eyebrow">Day ${d.n} · ${esc(d.label)}</div>
         ${d.slots.map((slot) => {
           const ex = byId(st.program.choices[slot.key]);
-          const many = optionsForSlot(slot.slotType).length > 1;
+          const many = optionsForSlot(slot.slotType).length + tradeOptions(tpl, slot).length > 1;
+          const label = SLOT_INFO[slot.slotType]?.label || slot.slotType;
+          const traded = slotFor(tpl, slot, st.program.choices[slot.key]).tradedFrom;
           return `<button class="pick" ${many ? `data-slot="${esc(slot.key)}"` : 'disabled style="opacity:.55"'}>
             <div class="pick__body">
               <div class="pick__title">${esc(ex?.short || slot.slotType)}</div>
-              <div class="pick__sub">${esc(SLOT_INFO[slot.slotType]?.label || slot.slotType)}</div>
+              <div class="pick__sub">${esc(traded ? `Instead of ${label.toLowerCase()}` : label)}</div>
             </div>
             ${many ? icon('chevron', 'dim') : ''}
           </button>`;
@@ -446,19 +449,26 @@ function openSlotPicker(ctx, slotKey) {
   if (!slotDef) return;
   const info = SLOT_INFO[slotDef.slotType] || {};
   const opts = optionsForSlot(slotDef.slotType, { preferFreeWeight: slotDef.slotType === 'horizontalPull' });
+  const trades = tradeOptions(tpl, slotDef);
   const cur = st.program.choices[slotKey];
+  const pickButton = (e, sub) => `<button class="pick" data-pick="${esc(e.id)}" aria-pressed="${e.id === cur}">
+    <span class="pick__mark">${icon('check')}</span>
+    <div class="pick__body"><div class="pick__title">${esc(e.short)}</div>
+    ${sub ? `<div class="pick__sub">${esc(sub)}</div>` : ''}</div>
+  </button>`;
 
   sheet({
     title: info.label || slotDef.slotType,
     body: `<div class="stack">
       <p class="small muted">${esc(info.rule || '')}</p>
       <div class="stack-sm">
-        ${opts.map((e) => `<button class="pick" data-pick="${esc(e.id)}" aria-pressed="${e.id === cur}">
-          <span class="pick__mark">${icon('check')}</span>
-          <div class="pick__body"><div class="pick__title">${esc(e.short)}</div>
-          ${e.notes ? `<div class="pick__sub">${esc(e.notes.length > 150 ? e.notes.slice(0, 150) + '…' : e.notes)}</div>` : ''}</div>
-        </button>`).join('')}
+        ${opts.map((e) => pickButton(e, e.notes && (e.notes.length > 150 ? e.notes.slice(0, 150) + '…' : e.notes))).join('')}
       </div>
+      ${trades.length ? `<div class="stack-sm">
+        <div class="eyebrow">Or do something else instead</div>
+        ${trades.map((t) => pickButton(t.exercise,
+          `${SLOT_INFO[t.slotType]?.label || t.slotType}, on the same sets, reps and RPE as your Day ${t.day} slot.`)).join('')}
+      </div>` : ''}
     </div>`,
     onMount(root, close) {
       for (const b of $$('[data-pick]', root)) {

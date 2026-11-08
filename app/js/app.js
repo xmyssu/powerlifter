@@ -28,7 +28,7 @@ const TABS = [
   { id: 'settings',  label: 'Settings', ico: 'settings' },
 ];
 
-const APP_VERSION = '1.10.1';
+const APP_VERSION = '1.11.0';
 
 /* ---- routing ---------------------------------------------------------- */
 
