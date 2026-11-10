@@ -1,19 +1,19 @@
 {
  "v": 1,
- "generatedAt": "2026-11-07T11:22:05.629Z",
+ "generatedAt": "2026-11-10T14:47:32.434Z",
  "athlete": {
   "firstName": null
  },
  "unit": "kg",
  "displayUnit": "kg",
  "totals": {
-  "sessions": 54,
-  "sets": 497,
+  "sessions": 55,
+  "sets": 506,
   "missed": 3,
-  "reps": 2994,
-  "tonnage": 200437,
+  "reps": 3045,
+  "tonnage": 204651,
   "firstDate": "2026-08-05",
-  "lastDate": "2026-11-07"
+  "lastDate": "2026-11-08"
  },
  "lifts": [
   {
@@ -595,6 +595,13 @@
      "deload": false,
      "soft": false,
      "submax": true
+    },
+    {
+     "date": "2026-11-08",
+     "value": 173.2,
+     "deload": false,
+     "soft": false,
+     "submax": false
     }
    ]
   }
@@ -667,34 +674,34 @@
   }
  ],
  "lastSession": {
-  "date": "2026-11-07",
-  "label": "C1 W2 · Day 5 · Strength",
+  "date": "2026-11-08",
+  "label": "C1 W2 · Day 6 · Strength",
   "cycle": 1,
   "week": 2,
-  "day": 5,
+  "day": 6,
   "phase": "load",
   "sets": 9,
-  "reps": 57,
-  "tonnage": 4065,
-  "avgRPE": 7.9,
+  "reps": 51,
+  "tonnage": 4214,
+  "avgRPE": 7.8,
   "avgTargetRPE": null,
-  "minutes": 53,
+  "minutes": null,
   "unit": "kg",
   "lifts": [
    {
-    "exercise": "Low-Bar Back Squat",
-    "detail": "130×4@8.5, 130×4@8.5, 130×4@8.5",
-    "topKg": 130
+    "exercise": "Deadlift",
+    "detail": "145×4@8, 145×4@8, 145×4@8",
+    "topKg": 145
    },
    {
-    "exercise": "Bench Press",
-    "detail": "85×4@8, 85×4@8, 85×4@8",
-    "topKg": 85
+    "exercise": "Dips",
+    "detail": "1×4@7, 5×4@9, 5×4@7",
+    "topKg": 5
    },
    {
-    "exercise": "Face Pull",
-    "detail": "45×11@7, 45×11@7, 45×11@7.5",
-    "topKg": 45
+    "exercise": "Weighted Ab Exercise",
+    "detail": "90×9@7, 90×9@7.5, 90×9@8.5",
+    "topKg": 90
    }
   ],
   "prs": []
@@ -1455,6 +1462,20 @@
    "avgRPE": 7.9,
    "avgTargetRPE": null,
    "minutes": 53
+  },
+  {
+   "date": "2026-11-08",
+   "label": "C1 W2 · Day 6 · Strength",
+   "cycle": 1,
+   "week": 2,
+   "day": 6,
+   "phase": "load",
+   "sets": 9,
+   "reps": 51,
+   "tonnage": 4214,
+   "avgRPE": 7.8,
+   "avgTargetRPE": null,
+   "minutes": null
   }
  ],
  "bodyweight": [
