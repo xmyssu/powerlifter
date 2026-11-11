@@ -1,19 +1,19 @@
 {
  "v": 1,
- "generatedAt": "2026-11-10T17:38:33.268Z",
+ "generatedAt": "2026-11-11T19:01:39.397Z",
  "athlete": {
   "firstName": null
  },
  "unit": "kg",
  "displayUnit": "kg",
  "totals": {
-  "sessions": 56,
-  "sets": 515,
+  "sessions": 57,
+  "sets": 525,
   "missed": 3,
-  "reps": 3105,
-  "tonnage": 210426,
+  "reps": 3171,
+  "tonnage": 212526,
   "firstDate": "2026-08-05",
-  "lastDate": "2026-11-10"
+  "lastDate": "2026-11-11"
  },
  "lifts": [
   {
@@ -680,52 +680,62 @@
    "rpe": 8
   },
   {
+   "exercise": "Weighted Back Extension",
+   "e1rm": 59.1,
+   "date": "2026-11-11",
+   "load": 45,
+   "reps": 6,
+   "rpe": 7
+  },
+  {
    "exercise": "Dips",
    "e1rm": 26.3,
    "date": "2026-10-27",
    "load": 22,
    "reps": 6,
    "rpe": 10
+  },
+  {
+   "exercise": "Dumbbell Overhead Press",
+   "e1rm": 26.2,
+   "date": "2026-11-11",
+   "load": 20,
+   "reps": 6,
+   "rpe": 7
   }
  ],
  "lastSession": {
-  "date": "2026-11-10",
-  "label": "C1 W3 · Day 1 · Volume",
+  "date": "2026-11-11",
+  "label": "C1 W3 · Day 2 · Volume",
   "cycle": 1,
   "week": 3,
-  "day": 1,
+  "day": 2,
   "phase": "load",
-  "sets": 9,
-  "reps": 60,
-  "tonnage": 5775,
-  "avgRPE": 7.3,
+  "sets": 10,
+  "reps": 66,
+  "tonnage": 2100,
+  "avgRPE": 6.7,
   "avgTargetRPE": null,
-  "minutes": 166,
+  "minutes": 31,
   "unit": "kg",
   "lifts": [
    {
-    "exercise": "High-Bar Back Squat",
-    "detail": "110×6@7, 110×6@7, 110×6@7",
-    "topKg": 110
+    "exercise": "Weighted Back Extension",
+    "detail": "40×6@6, 45×6@7, 45×6@7",
+    "topKg": 45
    },
    {
-    "exercise": "Bench Press",
-    "detail": "77.5×6@7, 77.5×6@7, 77.5×6@7",
-    "topKg": 77.5
+    "exercise": "Dumbbell Overhead Press",
+    "detail": "18×6@6, 18×6@6, 20×6@7, 20×6@7",
+    "topKg": 20
    },
    {
-    "exercise": "Lat Pulldown",
-    "detail": "100×8@7, 100×8@8, 100×8@9",
-    "topKg": 100
+    "exercise": "Triceps Extension",
+    "detail": "36×8@7, 36×8@7, 36×8@7",
+    "topKg": 36
    }
   ],
-  "prs": [
-   {
-    "exercise": "Lat Pulldown",
-    "gain": 31.182,
-    "e1rm": 141.443
-   }
-  ]
+  "prs": []
  },
  "sessions": [
   {
@@ -1511,6 +1521,20 @@
    "avgRPE": 7.3,
    "avgTargetRPE": null,
    "minutes": 166
+  },
+  {
+   "date": "2026-11-11",
+   "label": "C1 W3 · Day 2 · Volume",
+   "cycle": 1,
+   "week": 3,
+   "day": 2,
+   "phase": "load",
+   "sets": 10,
+   "reps": 66,
+   "tonnage": 2100,
+   "avgRPE": 6.7,
+   "avgTargetRPE": null,
+   "minutes": 31
   }
  ],
  "bodyweight": [
