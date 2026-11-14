@@ -1,19 +1,19 @@
 {
  "v": 1,
- "generatedAt": "2026-11-12T18:35:31.494Z",
+ "generatedAt": "2026-11-14T11:43:52.677Z",
  "athlete": {
   "firstName": null
  },
  "unit": "kg",
  "displayUnit": "kg",
  "totals": {
-  "sessions": 58,
-  "sets": 535,
+  "sessions": 59,
+  "sets": 544,
   "missed": 3,
-  "reps": 3203,
-  "tonnage": 215466,
+  "reps": 3251,
+  "tonnage": 217900,
   "firstDate": "2026-08-05",
-  "lastDate": "2026-11-12"
+  "lastDate": "2026-11-13"
  },
  "lifts": [
   {
@@ -24,7 +24,7 @@
    "tested": 160,
    "testedDate": "2026-10-16",
    "maxSource": "tested",
-   "change28": 3.6,
+   "change28": -3.6,
    "trend": [
     {
      "date": "2026-08-07",
@@ -204,7 +204,7 @@
    "tested": 100,
    "testedDate": "2026-10-17",
    "maxSource": "entered",
-   "change28": 4.4,
+   "change28": -3,
    "trend": [
     {
      "date": "2026-08-05",
@@ -623,6 +623,13 @@
      "deload": false,
      "soft": false,
      "submax": false
+    },
+    {
+     "date": "2026-11-13",
+     "value": 168,
+     "deload": false,
+     "soft": false,
+     "submax": true
     }
    ]
   }
@@ -719,43 +726,37 @@
   }
  ],
  "lastSession": {
-  "date": "2026-11-12",
-  "label": "C1 W3 · Day 3 · Technique",
+  "date": "2026-11-13",
+  "label": "C1 W3 · Day 4 · Technique",
   "cycle": 1,
   "week": 3,
-  "day": 3,
+  "day": 4,
   "phase": "load",
-  "sets": 10,
-  "reps": 32,
-  "tonnage": 2940,
-  "avgRPE": 6.7,
+  "sets": 9,
+  "reps": 48,
+  "tonnage": 2434,
+  "avgRPE": 6.9,
   "avgTargetRPE": null,
-  "minutes": 105,
+  "minutes": null,
   "unit": "kg",
   "lifts": [
    {
-    "exercise": "Low-Bar Back Squat",
-    "detail": "130×2@8, 125×2@7, 125×2@7, 125×2@7",
-    "topKg": 130
+    "exercise": "Deadlift",
+    "detail": "145×2@7, 145×2@7, 145×2@7",
+    "topKg": 145
    },
    {
-    "exercise": "Bench Press",
-    "detail": "82.5×2@7, 82.5×2@7, 80×2@6",
-    "topKg": 82.5
+    "exercise": "Close-Grip Bench Press",
+    "detail": "70×6@7, 70×6@6, 70×6@6",
+    "topKg": 70
    },
    {
-    "exercise": "Barbell Row",
-    "detail": "80×6@6, 80×6@6, 80×6@6",
-    "topKg": 80
+    "exercise": "Weighted Ab Exercise",
+    "detail": "14×8@8, 12×8@7, 12×8@7",
+    "topKg": 14
    }
   ],
-  "prs": [
-   {
-    "exercise": "Low-Bar Back Squat",
-    "gain": 1.383,
-    "e1rm": 145.74
-   }
-  ]
+  "prs": []
  },
  "sessions": [
   {
@@ -1569,6 +1570,20 @@
    "avgRPE": 6.7,
    "avgTargetRPE": null,
    "minutes": 105
+  },
+  {
+   "date": "2026-11-13",
+   "label": "C1 W3 · Day 4 · Technique",
+   "cycle": 1,
+   "week": 3,
+   "day": 4,
+   "phase": "load",
+   "sets": 9,
+   "reps": 48,
+   "tonnage": 2434,
+   "avgRPE": 6.9,
+   "avgTargetRPE": null,
+   "minutes": null
   }
  ],
  "bodyweight": [
