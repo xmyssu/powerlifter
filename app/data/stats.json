@@ -1,19 +1,19 @@
 {
  "v": 1,
- "generatedAt": "2026-11-14T15:56:23.149Z",
+ "generatedAt": "2026-11-16T17:43:07.316Z",
  "athlete": {
   "firstName": null
  },
  "unit": "kg",
  "displayUnit": "kg",
  "totals": {
-  "sessions": 60,
-  "sets": 553,
+  "sessions": 61,
+  "sets": 563,
   "missed": 3,
-  "reps": 3299,
-  "tonnage": 221353,
+  "reps": 3349,
+  "tonnage": 223440,
   "firstDate": "2026-08-05",
-  "lastDate": "2026-11-14"
+  "lastDate": "2026-11-16"
  },
  "lifts": [
   {
@@ -644,6 +644,13 @@
      "deload": false,
      "soft": false,
      "submax": true
+    },
+    {
+     "date": "2026-11-16",
+     "value": 179.6,
+     "deload": false,
+     "soft": false,
+     "submax": false
     }
    ]
   }
@@ -724,11 +731,11 @@
   },
   {
    "exercise": "Dips",
-   "e1rm": 26.3,
-   "date": "2026-10-27",
-   "load": 22,
-   "reps": 6,
-   "rpe": 10
+   "e1rm": 34.2,
+   "date": "2026-11-16",
+   "load": 30,
+   "reps": 3,
+   "rpe": 8.5
   },
   {
    "exercise": "Dumbbell Overhead Press",
@@ -740,37 +747,43 @@
   }
  ],
  "lastSession": {
-  "date": "2026-11-14",
-  "label": "C1 W3 · Day 5 · Strength",
+  "date": "2026-11-16",
+  "label": "C1 W3 · Day 6 · Strength",
   "cycle": 1,
   "week": 3,
-  "day": 5,
+  "day": 6,
   "phase": "load",
-  "sets": 9,
-  "reps": 48,
-  "tonnage": 3453,
-  "avgRPE": 8.1,
+  "sets": 10,
+  "reps": 50,
+  "tonnage": 2087,
+  "avgRPE": 8.2,
   "avgTargetRPE": null,
-  "minutes": 252,
+  "minutes": 105,
   "unit": "kg",
   "lifts": [
    {
-    "exercise": "Low-Bar Back Squat",
-    "detail": "135×3@8, 135×3@8.5, 135×3@8.5",
-    "topKg": 135
+    "exercise": "Deadlift",
+    "detail": "155×3@8, 155×3@8.5, 155×3@9",
+    "topKg": 155
    },
    {
-    "exercise": "Bench Press",
-    "detail": "87.5×3@8, 87.5×3@8, 87.5×3@8",
-    "topKg": 87.5
+    "exercise": "Dips",
+    "detail": "20×3@7, 26×3@8, 30×3@8.5",
+    "topKg": 30
    },
    {
-    "exercise": "Face Pull",
-    "detail": "45×10@7, 50×10@8, 50×10@8.5",
-    "topKg": 50
+    "exercise": "Weighted Ab Exercise",
+    "detail": "14×8@7, 16×8@9.5, 14×8@8, 14×8@8.5",
+    "topKg": 16
    }
   ],
-  "prs": []
+  "prs": [
+   {
+    "exercise": "Dips",
+    "gain": 28.003,
+    "e1rm": 34.169
+   }
+  ]
  },
  "sessions": [
   {
@@ -1612,6 +1625,20 @@
    "avgRPE": 8.1,
    "avgTargetRPE": null,
    "minutes": 252
+  },
+  {
+   "date": "2026-11-16",
+   "label": "C1 W3 · Day 6 · Strength",
+   "cycle": 1,
+   "week": 3,
+   "day": 6,
+   "phase": "load",
+   "sets": 10,
+   "reps": 50,
+   "tonnage": 2087,
+   "avgRPE": 8.2,
+   "avgTargetRPE": null,
+   "minutes": 105
   }
  ],
  "bodyweight": [
