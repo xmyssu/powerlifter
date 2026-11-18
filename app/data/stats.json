@@ -1,19 +1,19 @@
 {
  "v": 1,
- "generatedAt": "2026-11-17T17:20:16.903Z",
+ "generatedAt": "2026-11-18T16:45:14.255Z",
  "athlete": {
   "firstName": null
  },
  "unit": "kg",
  "displayUnit": "kg",
  "totals": {
-  "sessions": 62,
-  "sets": 572,
+  "sessions": 63,
+  "sets": 578,
   "missed": 3,
-  "reps": 3421,
-  "tonnage": 229750,
+  "reps": 3463,
+  "tonnage": 231150,
   "firstDate": "2026-08-05",
-  "lastDate": "2026-11-17"
+  "lastDate": "2026-11-18"
  },
  "lifts": [
   {
@@ -754,34 +754,29 @@
   }
  ],
  "lastSession": {
-  "date": "2026-11-17",
-  "label": "C1 W1 · Day 1 · Volume",
+  "date": "2026-11-18",
+  "label": "C1 W1 · Day 2 · Volume",
   "cycle": 1,
   "week": 1,
-  "day": 1,
+  "day": 2,
   "phase": "load",
-  "sets": 9,
-  "reps": 72,
-  "tonnage": 6310,
-  "avgRPE": 7.3,
+  "sets": 6,
+  "reps": 42,
+  "tonnage": 1400,
+  "avgRPE": 8,
   "avgTargetRPE": null,
-  "minutes": 100,
+  "minutes": 51,
   "unit": "kg",
   "lifts": [
    {
-    "exercise": "High-Bar Back Squat",
-    "detail": "115×7@7, 115×7@7, 115×7@8",
-    "topKg": 115
+    "exercise": "Weighted Back Extension",
+    "detail": "45×7@7, 45×7@7, 50×7@7.5",
+    "topKg": 50
    },
    {
-    "exercise": "Bench Press",
-    "detail": "75×7@7, 75×7@7, 75×7@7",
-    "topKg": 75
-   },
-   {
-    "exercise": "Lat Pulldown",
-    "detail": "72×10@6, 80×10@8, 80×10@8.5",
-    "topKg": 80
+    "exercise": "Dips",
+    "detail": "20×7@8, 20×7@8.5, 20×7@10",
+    "topKg": 20
    }
   ],
   "prs": []
@@ -1654,6 +1649,20 @@
    "avgRPE": 7.3,
    "avgTargetRPE": null,
    "minutes": 100
+  },
+  {
+   "date": "2026-11-18",
+   "label": "C1 W1 · Day 2 · Volume",
+   "cycle": 1,
+   "week": 1,
+   "day": 2,
+   "phase": "load",
+   "sets": 6,
+   "reps": 42,
+   "tonnage": 1400,
+   "avgRPE": 8,
+   "avgTargetRPE": null,
+   "minutes": 51
   }
  ],
  "bodyweight": [
