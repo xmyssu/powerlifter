@@ -1,19 +1,19 @@
 {
  "v": 1,
- "generatedAt": "2026-11-18T16:45:14.255Z",
+ "generatedAt": "2026-11-19T18:02:32.100Z",
  "athlete": {
   "firstName": null
  },
  "unit": "kg",
  "displayUnit": "kg",
  "totals": {
-  "sessions": 63,
-  "sets": 578,
+  "sessions": 64,
+  "sets": 588,
   "missed": 3,
-  "reps": 3463,
-  "tonnage": 231150,
+  "reps": 3508,
+  "tonnage": 235190,
   "firstDate": "2026-08-05",
-  "lastDate": "2026-11-18"
+  "lastDate": "2026-11-19"
  },
  "lifts": [
   {
@@ -200,6 +200,13 @@
      "deload": false,
      "soft": false,
      "submax": false
+    },
+    {
+     "date": "2026-11-19",
+     "value": 143.4,
+     "deload": false,
+     "soft": false,
+     "submax": true
     }
    ]
   },
@@ -478,6 +485,13 @@
      "deload": false,
      "soft": true,
      "submax": false
+    },
+    {
+     "date": "2026-11-19",
+     "value": 95.6,
+     "deload": false,
+     "soft": false,
+     "submax": true
     }
    ]
   },
@@ -754,29 +768,34 @@
   }
  ],
  "lastSession": {
-  "date": "2026-11-18",
-  "label": "C1 W1 · Day 2 · Volume",
+  "date": "2026-11-19",
+  "label": "C1 W1 · Day 3 · Technique",
   "cycle": 1,
   "week": 1,
-  "day": 2,
+  "day": 3,
   "phase": "load",
-  "sets": 6,
-  "reps": 42,
-  "tonnage": 1400,
-  "avgRPE": 8,
+  "sets": 10,
+  "reps": 45,
+  "tonnage": 4040,
+  "avgRPE": 6.9,
   "avgTargetRPE": null,
-  "minutes": 51,
+  "minutes": 56,
   "unit": "kg",
   "lifts": [
    {
-    "exercise": "Weighted Back Extension",
-    "detail": "45×7@7, 45×7@7, 50×7@7.5",
-    "topKg": 50
+    "exercise": "Low-Bar Back Squat",
+    "detail": "120×3@7, 120×3@7, 120×3@7",
+    "topKg": 120
    },
    {
-    "exercise": "Dips",
-    "detail": "20×7@8, 20×7@8.5, 20×7@10",
-    "topKg": 20
+    "exercise": "Bench Press",
+    "detail": "80×3@7, 80×3@7, 80×3@7, 80×3@7",
+    "topKg": 80
+   },
+   {
+    "exercise": "Barbell Row",
+    "detail": "80×8@6, 85×8@7, 85×8@7",
+    "topKg": 85
    }
   ],
   "prs": []
@@ -1663,6 +1682,20 @@
    "avgRPE": 8,
    "avgTargetRPE": null,
    "minutes": 51
+  },
+  {
+   "date": "2026-11-19",
+   "label": "C1 W1 · Day 3 · Technique",
+   "cycle": 1,
+   "week": 1,
+   "day": 3,
+   "phase": "load",
+   "sets": 10,
+   "reps": 45,
+   "tonnage": 4040,
+   "avgRPE": 6.9,
+   "avgTargetRPE": null,
+   "minutes": 56
   }
  ],
  "bodyweight": [
