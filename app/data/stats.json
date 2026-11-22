@@ -1,19 +1,19 @@
 {
  "v": 1,
- "generatedAt": "2026-11-20T16:40:24.885Z",
+ "generatedAt": "2026-11-22T12:52:50.595Z",
  "athlete": {
   "firstName": null
  },
  "unit": "kg",
  "displayUnit": "kg",
  "totals": {
-  "sessions": 65,
-  "sets": 596,
+  "sessions": 66,
+  "sets": 605,
   "missed": 3,
-  "reps": 3548,
-  "tonnage": 238830,
+  "reps": 3584,
+  "tonnage": 243330,
   "firstDate": "2026-08-05",
-  "lastDate": "2026-11-20"
+  "lastDate": "2026-11-22"
  },
  "lifts": [
   {
@@ -24,7 +24,7 @@
    "tested": 160,
    "testedDate": "2026-10-16",
    "maxSource": "tested",
-   "change28": -3.6,
+   "change28": -2.2,
    "trend": [
     {
      "date": "2026-08-07",
@@ -207,18 +207,25 @@
      "deload": false,
      "soft": false,
      "submax": true
+    },
+    {
+     "date": "2026-11-22",
+     "value": 157.8,
+     "deload": false,
+     "soft": false,
+     "submax": false
     }
    ]
   },
   {
    "lift": "bench",
    "label": "Bench press",
-   "e1rm": 104.7,
-   "e1rmDate": "2026-10-16",
+   "e1rm": 105.9,
+   "e1rmDate": "2026-11-22",
    "tested": 100,
    "testedDate": "2026-10-17",
    "maxSource": "entered",
-   "change28": -3,
+   "change28": 1.2,
    "trend": [
     {
      "date": "2026-08-05",
@@ -492,6 +499,13 @@
      "deload": false,
      "soft": false,
      "submax": true
+    },
+    {
+     "date": "2026-11-22",
+     "value": 105.9,
+     "deload": false,
+     "soft": false,
+     "submax": false
     }
    ]
   },
@@ -679,6 +693,13 @@
      "deload": false,
      "soft": false,
      "submax": true
+    },
+    {
+     "date": "2026-11-22",
+     "value": 182.4,
+     "deload": false,
+     "soft": false,
+     "submax": false
     }
    ]
   }
@@ -735,11 +756,11 @@
   },
   {
    "exercise": "Bench Press",
-   "e1rm": 104.7,
-   "date": "2026-10-16",
-   "load": 100,
-   "reps": 1,
-   "rpe": 9
+   "e1rm": 105.9,
+   "date": "2026-11-22",
+   "load": 90,
+   "reps": 4,
+   "rpe": 8.5
   },
   {
    "exercise": "Close-Grip Bench Press",
@@ -775,29 +796,34 @@
   }
  ],
  "lastSession": {
-  "date": "2026-11-20",
-  "label": "C1 W1 · Day 4 · Technique",
+  "date": "2026-11-22",
+  "label": "C1 W1 · Day 5 · Strength",
   "cycle": 1,
   "week": 1,
-  "day": 4,
+  "day": 5,
   "phase": "load",
-  "sets": 8,
-  "reps": 40,
-  "tonnage": 3640,
-  "avgRPE": 6.6,
+  "sets": 9,
+  "reps": 36,
+  "tonnage": 4500,
+  "avgRPE": 8.2,
   "avgTargetRPE": null,
-  "minutes": 84,
+  "minutes": 180,
   "unit": "kg",
   "lifts": [
    {
-    "exercise": "Deadlift",
-    "detail": "140×3@6, 140×3@6, 140×3@6, 140×3@7",
-    "topKg": 140
+    "exercise": "Low-Bar Back Squat",
+    "detail": "130×4@7.5, 130×4@7.5, 130×4@7.5",
+    "topKg": 130
    },
    {
-    "exercise": "Close-Grip Bench Press",
-    "detail": "70×7@7, 70×7@7, 70×7@7, 70×7@7",
-    "topKg": 70
+    "exercise": "Bench Press",
+    "detail": "90×4@8.5, 90×4@8.5, 90×4@8.5",
+    "topKg": 90
+   },
+   {
+    "exercise": "Deadlift",
+    "detail": "155×4@8.5, 155×4@8.5, 155×4@8.5",
+    "topKg": 155
    }
   ],
   "prs": []
@@ -1712,6 +1738,20 @@
    "avgRPE": 6.6,
    "avgTargetRPE": null,
    "minutes": 84
+  },
+  {
+   "date": "2026-11-22",
+   "label": "C1 W1 · Day 5 · Strength",
+   "cycle": 1,
+   "week": 1,
+   "day": 5,
+   "phase": "load",
+   "sets": 9,
+   "reps": 36,
+   "tonnage": 4500,
+   "avgRPE": 8.2,
+   "avgTargetRPE": null,
+   "minutes": 180
   }
  ],
  "bodyweight": [
