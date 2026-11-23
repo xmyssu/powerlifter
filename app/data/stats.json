@@ -1,19 +1,19 @@
 {
  "v": 1,
- "generatedAt": "2026-11-22T12:52:50.595Z",
+ "generatedAt": "2026-11-23T11:13:26.353Z",
  "athlete": {
   "firstName": null
  },
  "unit": "kg",
  "displayUnit": "kg",
  "totals": {
-  "sessions": 66,
-  "sets": 605,
+  "sessions": 67,
+  "sets": 611,
   "missed": 3,
-  "reps": 3584,
-  "tonnage": 243330,
+  "reps": 3590,
+  "tonnage": 243930,
   "firstDate": "2026-08-05",
-  "lastDate": "2026-11-22"
+  "lastDate": "2026-11-23"
  },
  "lifts": [
   {
@@ -214,6 +214,13 @@
      "deload": false,
      "soft": false,
      "submax": false
+    },
+    {
+     "date": "2026-11-23",
+     "value": 143.4,
+     "deload": false,
+     "soft": false,
+     "submax": true
     }
    ]
   },
@@ -506,6 +513,13 @@
      "deload": false,
      "soft": false,
      "submax": false
+    },
+    {
+     "date": "2026-11-23",
+     "value": 95.6,
+     "deload": false,
+     "soft": false,
+     "submax": true
     }
    ]
   },
@@ -796,34 +810,29 @@
   }
  ],
  "lastSession": {
-  "date": "2026-11-22",
-  "label": "C1 W1 · Day 5 · Strength",
+  "date": "2026-11-23",
+  "label": "C1 W1 · Day 6 · Primer",
   "cycle": 1,
   "week": 1,
-  "day": 5,
+  "day": 6,
   "phase": "load",
-  "sets": 9,
-  "reps": 36,
-  "tonnage": 4500,
-  "avgRPE": 8.2,
+  "sets": 6,
+  "reps": 6,
+  "tonnage": 600,
+  "avgRPE": 5,
   "avgTargetRPE": null,
-  "minutes": 180,
+  "minutes": 35,
   "unit": "kg",
   "lifts": [
    {
     "exercise": "Low-Bar Back Squat",
-    "detail": "130×4@7.5, 130×4@7.5, 130×4@7.5",
-    "topKg": 130
+    "detail": "120×1@5, 120×1@5, 120×1@5",
+    "topKg": 120
    },
    {
     "exercise": "Bench Press",
-    "detail": "90×4@8.5, 90×4@8.5, 90×4@8.5",
-    "topKg": 90
-   },
-   {
-    "exercise": "Deadlift",
-    "detail": "155×4@8.5, 155×4@8.5, 155×4@8.5",
-    "topKg": 155
+    "detail": "80×1@5, 80×1@5, 80×1@5",
+    "topKg": 80
    }
   ],
   "prs": []
@@ -1752,6 +1761,20 @@
    "avgRPE": 8.2,
    "avgTargetRPE": null,
    "minutes": 180
+  },
+  {
+   "date": "2026-11-23",
+   "label": "C1 W1 · Day 6 · Primer",
+   "cycle": 1,
+   "week": 1,
+   "day": 6,
+   "phase": "load",
+   "sets": 6,
+   "reps": 6,
+   "tonnage": 600,
+   "avgRPE": 5,
+   "avgTargetRPE": null,
+   "minutes": 35
   }
  ],
  "bodyweight": [
