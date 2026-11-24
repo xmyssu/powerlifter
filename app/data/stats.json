@@ -1,19 +1,19 @@
 {
  "v": 1,
- "generatedAt": "2026-11-23T11:13:26.353Z",
+ "generatedAt": "2026-11-24T11:15:49.443Z",
  "athlete": {
   "firstName": null
  },
  "unit": "kg",
  "displayUnit": "kg",
  "totals": {
-  "sessions": 67,
-  "sets": 611,
+  "sessions": 68,
+  "sets": 620,
   "missed": 3,
-  "reps": 3590,
-  "tonnage": 243930,
+  "reps": 3653,
+  "tonnage": 249546,
   "firstDate": "2026-08-05",
-  "lastDate": "2026-11-23"
+  "lastDate": "2026-11-24"
  },
  "lifts": [
   {
@@ -520,6 +520,13 @@
      "deload": false,
      "soft": false,
      "submax": true
+    },
+    {
+     "date": "2026-11-24",
+     "value": 103.4,
+     "deload": false,
+     "soft": false,
+     "submax": false
     }
    ]
   },
@@ -737,11 +744,11 @@
   },
   {
    "exercise": "High-Bar Back Squat",
-   "e1rm": 144.4,
-   "date": "2026-11-10",
-   "load": 110,
+   "e1rm": 150.2,
+   "date": "2026-11-24",
+   "load": 120,
    "reps": 6,
-   "rpe": 7
+   "rpe": 8.5
   },
   {
    "exercise": "Barbell Row",
@@ -810,32 +817,43 @@
   }
  ],
  "lastSession": {
-  "date": "2026-11-23",
-  "label": "C1 W1 · Day 6 · Primer",
+  "date": "2026-11-24",
+  "label": "C1 W2 · Day 1 · Volume",
   "cycle": 1,
-  "week": 1,
-  "day": 6,
+  "week": 2,
+  "day": 1,
   "phase": "load",
-  "sets": 6,
-  "reps": 6,
-  "tonnage": 600,
-  "avgRPE": 5,
+  "sets": 9,
+  "reps": 63,
+  "tonnage": 5616,
+  "avgRPE": 8.3,
   "avgTargetRPE": null,
-  "minutes": 35,
+  "minutes": 97,
   "unit": "kg",
   "lifts": [
    {
-    "exercise": "Low-Bar Back Squat",
-    "detail": "120×1@5, 120×1@5, 120×1@5",
+    "exercise": "High-Bar Back Squat",
+    "detail": "120×6@8.5, 120×6@8.5, 120×6@8.5",
     "topKg": 120
    },
    {
     "exercise": "Bench Press",
-    "detail": "80×1@5, 80×1@5, 80×1@5",
+    "detail": "80×6@7.5, 80×6@8, 80×6@8",
+    "topKg": 80
+   },
+   {
+    "exercise": "Lat Pulldown",
+    "detail": "80×9@9, 72×9@7, 72×9@10",
     "topKg": 80
    }
   ],
-  "prs": []
+  "prs": [
+   {
+    "exercise": "Bench Press",
+    "gain": 1.871,
+    "e1rm": 103.359
+   }
+  ]
  },
  "sessions": [
   {
@@ -1775,6 +1793,20 @@
    "avgRPE": 5,
    "avgTargetRPE": null,
    "minutes": 35
+  },
+  {
+   "date": "2026-11-24",
+   "label": "C1 W2 · Day 1 · Volume",
+   "cycle": 1,
+   "week": 2,
+   "day": 1,
+   "phase": "load",
+   "sets": 9,
+   "reps": 63,
+   "tonnage": 5616,
+   "avgRPE": 8.3,
+   "avgTargetRPE": null,
+   "minutes": 97
   }
  ],
  "bodyweight": [
