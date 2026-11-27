@@ -1,19 +1,19 @@
 {
  "v": 1,
- "generatedAt": "2026-11-26T13:26:07.383Z",
+ "generatedAt": "2026-11-27T19:46:24.231Z",
  "athlete": {
   "firstName": null
  },
  "unit": "kg",
  "displayUnit": "kg",
  "totals": {
-  "sessions": 69,
-  "sets": 626,
+  "sessions": 70,
+  "sets": 636,
   "missed": 3,
-  "reps": 3689,
-  "tonnage": 250890,
+  "reps": 3724,
+  "tonnage": 254119,
   "firstDate": "2026-08-05",
-  "lastDate": "2026-11-26"
+  "lastDate": "2026-11-27"
  },
  "lifts": [
   {
@@ -218,6 +218,13 @@
     {
      "date": "2026-11-23",
      "value": 143.4,
+     "deload": false,
+     "soft": false,
+     "submax": true
+    },
+    {
+     "date": "2026-11-27",
+     "value": 150.6,
      "deload": false,
      "soft": false,
      "submax": true
@@ -527,6 +534,13 @@
      "deload": false,
      "soft": false,
      "submax": false
+    },
+    {
+     "date": "2026-11-27",
+     "value": 99.2,
+     "deload": false,
+     "soft": false,
+     "submax": true
     }
    ]
   },
@@ -817,41 +831,46 @@
   }
  ],
  "lastSession": {
-  "date": "2026-11-26",
-  "label": "C1 W2 · Day 2 · Volume",
+  "date": "2026-11-27",
+  "label": "C1 W2 · Day 3 · Technique",
   "cycle": 1,
   "week": 2,
-  "day": 2,
+  "day": 3,
   "phase": "load",
-  "sets": 6,
-  "reps": 36,
-  "tonnage": 1344,
-  "avgRPE": 6.8,
+  "sets": 10,
+  "reps": 35,
+  "tonnage": 3229,
+  "avgRPE": 6.7,
   "avgTargetRPE": null,
-  "minutes": 17,
+  "minutes": 248,
   "unit": "kg",
   "lifts": [
    {
-    "exercise": "Weighted Back Extension",
-    "detail": "50×6@6, 55×6@7, 55×6@7.5",
-    "topKg": 55
+    "exercise": "Low-Bar Back Squat",
+    "detail": "130×2@7, 130×2@7, 130×2@7",
+    "topKg": 130
    },
    {
-    "exercise": "Dumbbell Overhead Press",
-    "detail": "20×6@6, 22×6@7, 22×6@7.5",
-    "topKg": 22
+    "exercise": "Bench Press",
+    "detail": "83×2@6, 83×2@6, 83×2@6, 83×2@6",
+    "topKg": 83
+   },
+   {
+    "exercise": "Barbell Row",
+    "detail": "85×7@7, 85×7@7.5, 85×7@7",
+    "topKg": 85
    }
   ],
   "prs": [
    {
-    "exercise": "Weighted Back Extension",
-    "gain": 5.601,
-    "e1rm": 72.178
+    "exercise": "Low-Bar Back Squat",
+    "gain": 7.268,
+    "e1rm": 150.637
    },
    {
-    "exercise": "Dumbbell Overhead Press",
-    "gain": 2.625,
-    "e1rm": 28.871
+    "exercise": "Bench Press",
+    "gain": 3.584,
+    "e1rm": 99.164
    }
   ]
  },
@@ -1821,6 +1840,20 @@
    "avgRPE": 6.8,
    "avgTargetRPE": null,
    "minutes": 17
+  },
+  {
+   "date": "2026-11-27",
+   "label": "C1 W2 · Day 3 · Technique",
+   "cycle": 1,
+   "week": 2,
+   "day": 3,
+   "phase": "load",
+   "sets": 10,
+   "reps": 35,
+   "tonnage": 3229,
+   "avgRPE": 6.7,
+   "avgTargetRPE": null,
+   "minutes": 248
   }
  ],
  "bodyweight": [
